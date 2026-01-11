@@ -1,0 +1,216 @@
+{
+    "name": "Story Machine Pipeline",
+    "description": "Adaptive story creation pipeline with memory and multi-model collaboration",
+    "version": "1.0",
+    "intentions": {
+        "NewStory": {
+            "description": "Create a new story from scratch"
+        },
+        "ReviewStory": {
+            "description": "Review and improve an existing story"
+        },
+        "Questions": {
+            "description": "Answer questions about the story"
+        },
+        "Other": {
+            "description": "Handle out-of-scope requests"
+        }
+    },
+    "pipeline": [
+        {
+            "name": "IntentionAnalyzer",
+            "type": "IntentionAnalyzerStep",
+            "inputType": "StepResult",
+            "outputType": "LlmStepResult<Intention<UserIntention>>",
+            "config": {
+                "provider": "Google",
+                "model": "gemini-2.5-flash",
+                "temperature": 0.5,
+                "maxTokens": 16000
+            }
+        },
+        {
+            "name": "Router",
+            "type": "IntentionRouterStep",
+            "inputType": "LlmStepResult<Intention<UserIntention>>",
+            "routes": {
+                "NewStory": {
+                    "name": "NewStoryPhase",
+                    "type": "GroupStep",
+                    "steps": [
+                        {
+                            "name": "Outliner",
+                            "type": "StatelessTemplateLlmStep",
+                            "config": {
+                                "provider": "OpenRouter",
+                                "model": "openai/gpt-oss-120b:free",
+                                "temperature": 0.7
+                            }
+                        },
+                        {
+                            "name": "ParallelWriters",
+                            "type": "ParallelStep",
+                            "steps": [
+                                {
+                                    "name": "Writer1",
+                                    "type": "StatelessTemplateLlmStep",
+                                    "config": {
+                                        "provider": "NVidea",
+                                        "model": "meta/llama-3.1-8b-instruct",
+                                        "temperature": 0.5
+                                    }
+                                },
+                                {
+                                    "name": "Writer2",
+                                    "type": "StatelessTemplateLlmStep",
+                                    "config": {
+                                        "provider": "NVidea",
+                                        "model": "meta/llama-3.1-8b-instruct",
+                                        "temperature": 0.5
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Critic",
+                            "type": "StatelessTemplateLlmStep",
+                            "config": {
+                                "provider": "Groq",
+                                "model": "openai/gpt-oss-20b",
+                                "temperature": 0.7
+                            }
+                        },
+                        {
+                            "name": "Rewriter",
+                            "type": "StatelessRewriterStep",
+                            "config": {
+                                "provider": "AILM",
+                                "model": "qwen3-32b",
+                                "temperature": 0.5
+                            }
+                        },
+                        {
+                            "name": "Publisher",
+                            "type": "StatelessTemplateLlmStep",
+                            "config": {
+                                "provider": "Groq",
+                                "model": "openai/gpt-oss-20b",
+                                "temperature": 1.0
+                            }
+                        },
+                        {
+                            "name": "SaveToMemory",
+                            "type": "DelegatedStep",
+                            "config": {
+                                "description": "Persists story to conversation state"
+                            }
+                        }
+                    ]
+                },
+                "ReviewStory": {
+                    "name": "ReviewPhase",
+                    "type": "GroupStep",
+                    "steps": [
+                        {
+                            "name": "StoryReviewer",
+                            "type": "StatelessTemplateLlmStep",
+                            "config": {
+                                "provider": "Groq",
+                                "model": "openai/gpt-oss-20b",
+                                "temperature": 0.5
+                            }
+                        },
+                        {
+                            "name": "SaveRevisedStory",
+                            "type": "DelegatedStep"
+                        }
+                    ]
+                },
+                "Questions": {
+                    "name": "QuestionsPhase",
+                    "type": "GroupStep",
+                    "steps": [
+                        {
+                            "name": "QuestionsAssistant",
+                            "type": "StatelessTemplateLlmStep",
+                            "config": {
+                                "provider": "AILM",
+                                "model": "qwen3-32b",
+                                "temperature": 0.5
+                            }
+                        }
+                    ]
+                },
+                "Other": {
+                    "name": "OtherPhase",
+                    "type": "GroupStep",
+                    "steps": [
+                        {
+                            "name": "OutOfScopeHandler",
+                            "type": "DelegatedStep"
+                        }
+                    ]
+                }
+            },
+            "defaultRoute": "Questions"
+        }
+    ],
+    "stepTypes": {
+        "IntentionAnalyzerStep": {
+            "category": "llm",
+            "description": "Analyzes user input to determine the intent.",
+            "icon": "BrainCircuit",
+            "color": "bg-purple-500"
+        },
+        "IntentionRouterStep": {
+            "category": "control-flow",
+            "description": "Routes execution based on analyzed intention.",
+            "icon": "GitFork",
+            "color": "bg-orange-500"
+        },
+        "StatelessTemplateLlmStep": {
+            "category": "llm",
+            "description": "Executes LLM prompt based on a template.",
+            "icon": "MessageSquare",
+            "color": "bg-blue-500"
+        },
+        "StatelessRewriterStep": {
+            "category": "llm",
+            "description": "Specialized step for rewriting content.",
+            "icon": "PenTool",
+            "color": "bg-indigo-500"
+        },
+        "ParallelStep": {
+            "category": "control-flow",
+            "description": "Executes multiple steps in parallel.",
+            "icon": "Columns",
+            "color": "bg-cyan-500"
+        },
+        "GroupStep": {
+            "category": "container",
+            "description": "Logical grouping of sequential steps.",
+            "icon": "Box",
+            "color": "bg-slate-500"
+        },
+        "DelegatedStep": {
+            "category": "utility",
+            "description": "Executes C# code logic.",
+            "icon": "Code",
+            "color": "bg-gray-500"
+        }
+    },
+    "profiles": {
+        "IntentionAnalyzer": {
+            "description": "Fast classification model (Gemini)"
+        },
+        "Outliner": {
+            "description": "High-reasoning model (Llama/GPT-OSS)"
+        },
+        "Writers": {
+            "description": "Creative writing models"
+        },
+        "Critic": {
+            "description": "Analytical model for feedback"
+        }
+    }
+}

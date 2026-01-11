@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Chatscope overrides for dark theme compatibility */
+.cs-main-container {
+  border: none !important;
+}
+
+.cs-message-input {
+  border-radius: 0.75rem !important;
+}
+
+.cs-message-input__content-editor-wrapper {
+  border-radius: 0.75rem !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* React Flow overrides */
+.react-flow__panel {
+  margin: 10px !important;
+}

@@ -1,0 +1,186 @@
+{
+    "name": "StoryMachine",
+    "description": "Adaptive story creation pipeline with memory and multi-model collaboration",
+    "version": "1.0",
+    "pipeline": [
+        {
+            "name": "IntentionAnalyzer",
+            "type": "IntentionAnalyzerStep`2",
+            "inputType": "StepResult",
+            "outputType": "LlmStepResult<Intention<UserIntention>>"
+        },
+        {
+            "name": "Router",
+            "type": "IntentionRouterStep`1",
+            "inputType": "IStepResult<Intention<UserIntention>>",
+            "outputType": "IStepResult",
+            "routes": {
+                "NewStory": {
+                    "name": "NewStoryPhase",
+                    "type": "GroupStep`1",
+                    "inputType": "UserIntentionResponse",
+                    "outputType": "LlmStringStepResult",
+                    "steps": [
+                        {
+                            "name": "Outliner",
+                            "type": "StatelessTemplateLlmStep`2",
+                            "inputType": "UserIntentionResponse",
+                            "outputType": "LlmStringStepResult"
+                        },
+                        {
+                            "name": "ParallelWriters",
+                            "type": "ParallelStep`1",
+                            "inputType": "StepResult",
+                            "outputType": "ParallelResult",
+                            "steps": [
+                                {
+                                    "name": "Writer1",
+                                    "type": "StatelessTemplateLlmStep`2",
+                                    "inputType": "LlmStringStepResult",
+                                    "outputType": "LlmStringStepResult"
+                                },
+                                {
+                                    "name": "Writer2",
+                                    "type": "StatelessTemplateLlmStep`2",
+                                    "inputType": "LlmStringStepResult",
+                                    "outputType": "LlmStringStepResult"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Critic",
+                            "type": "StatelessTemplateLlmStep`2",
+                            "inputType": "ParallelResult",
+                            "outputType": "CriticResult"
+                        },
+                        {
+                            "name": "Rewriter",
+                            "type": "StatelessRewriterStep",
+                            "inputType": "CriticResult",
+                            "outputType": "LlmStringStepResult"
+                        },
+                        {
+                            "name": "Publisher",
+                            "type": "StatelessTemplateLlmStep`2",
+                            "inputType": "LlmStringStepResult",
+                            "outputType": "LlmStringStepResult"
+                        },
+                        {
+                            "name": "SaveToMemory",
+                            "type": "DelegatedStep`2",
+                            "inputType": "LlmStringStepResult",
+                            "outputType": "LlmStringStepResult"
+                        }
+                    ]
+                },
+                "ReviewStory": {
+                    "name": "ReviewPhase",
+                    "type": "GroupStep`1",
+                    "inputType": "UserIntentionResponse",
+                    "outputType": "LlmStringStepResult",
+                    "steps": [
+                        {
+                            "name": "StoryReviewer",
+                            "type": "StatelessTemplateLlmStep`2",
+                            "inputType": "UserIntentionResponse",
+                            "outputType": "LlmStringStepResult"
+                        },
+                        {
+                            "name": "SaveRevisedStory",
+                            "type": "DelegatedStep`2",
+                            "inputType": "LlmStringStepResult",
+                            "outputType": "LlmStringStepResult"
+                        }
+                    ]
+                },
+                "Questions": {
+                    "name": "QuestionsPhase",
+                    "type": "GroupStep`1",
+                    "inputType": "UserIntentionResponse",
+                    "outputType": "LlmStringStepResult",
+                    "steps": [
+                        {
+                            "name": "QuestionsAssistant",
+                            "type": "StatelessTemplateLlmStep`2",
+                            "inputType": "UserIntentionResponse",
+                            "outputType": "LlmStringStepResult"
+                        }
+                    ]
+                },
+                "Other": {
+                    "name": "OtherPhase",
+                    "type": "GroupStep`1",
+                    "inputType": "UserIntentionResponse",
+                    "outputType": "StepResult<String>",
+                    "steps": [
+                        {
+                            "name": "OutOfScopeHandler",
+                            "type": "DelegatedStep`2",
+                            "inputType": "UserIntentionResponse",
+                            "outputType": "StepResult<String>"
+                        }
+                    ]
+                }
+            },
+            "defaultRoute": "QuestionsPhase"
+        }
+    ],
+    "stepTypes": {
+        "IntentionAnalyzerStep": {
+            "category": "",
+            "description": "",
+            "icon": "BrainCircuit",
+            "color": "#8B5CF6",
+            "borderColor": "#A78BFA",
+            "backgroundColor": "#F5F3FF"
+        },
+        "IntentionRouterStep": {
+            "category": "",
+            "description": "",
+            "icon": "GitFork",
+            "color": "#F59E0B",
+            "borderColor": "#FBBF24",
+            "backgroundColor": "#FEF3C7"
+        },
+        "GroupStep": {
+            "category": "",
+            "description": "",
+            "icon": "Box",
+            "color": "#64748B",
+            "borderColor": "#94A3B8",
+            "backgroundColor": "#F8FAFC"
+        },
+        "StatelessTemplateLlmStep": {
+            "category": "",
+            "description": "",
+            "icon": "MessageSquare",
+            "color": "#3B82F6",
+            "borderColor": "#60A5FA",
+            "backgroundColor": "#EFF6FF"
+        },
+        "ParallelStep": {
+            "category": "",
+            "description": "",
+            "icon": "Columns",
+            "color": "#10B981",
+            "borderColor": "#34D399",
+            "backgroundColor": "#ECFDF5"
+        },
+        "StatelessRewriterStep": {
+            "category": "",
+            "description": "",
+            "icon": "PenTool",
+            "color": "#EC4899",
+            "borderColor": "#F472B6",
+            "backgroundColor": "#FDF2F8"
+        },
+        "DelegatedStep": {
+            "category": "",
+            "description": "",
+            "icon": "Code",
+            "color": "#6B7280",
+            "borderColor": "#9CA3AF",
+            "backgroundColor": "#F9FAFB"
+        }
+    }
+}
