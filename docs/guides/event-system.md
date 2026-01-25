@@ -59,6 +59,8 @@ await context.SendEventAsync(new MyEvent
 | `LlmResponseEvent` | `llm.response` | BaseLlmStep | LLM response (streaming/final) |
 | `ToolStartedEvent` | `tool.started` | BaseLlmStep | Tool execution begins |
 | `ToolCompletedEvent` | `tool.completed` | BaseLlmStep | Tool execution ends |
+| `TagStartedEvent` | `tag.started` | StreamingTagParser | Artifact generation begins (side-effect) |
+| `TagCompletedEvent` | `tag.completed` | StreamingTagParser | Artifact generation ends |
 
 ### Event Details
 

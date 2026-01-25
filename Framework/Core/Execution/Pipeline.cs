@@ -23,13 +23,13 @@ public static class Pipeline
     /// <summary>
     /// Default timeout for the entire pipeline execution.
     /// </summary>
-    public static TimeSpan DefaultPipelineTimeout { get; set; } = TimeSpan.FromMinutes(10);
+    public static TimeSpan DefaultPipelineTimeout { get; set; } = TimeSpan.FromMinutes(60);
 
     /// <summary>
     /// Default timeout for individual steps.
     /// Individual steps can override this via IStep.Timeout.
     /// </summary>
-    public static TimeSpan DefaultStepTimeout { get; set; } = TimeSpan.FromMinutes(1);
+    public static TimeSpan DefaultStepTimeout { get; set; } = TimeSpan.FromMinutes(30);
 
     public static ILoggerFactory LoggerFactory { get => _loggerFactory; set => _loggerFactory = value ?? NullLoggerFactory.Instance; }
 
@@ -47,7 +47,6 @@ public static class Pipeline
         IReadOnlyList<IStep> steps,
         T input,
         PipelineContext? context = null,
-        IEnumerable<IPipelineMiddleware>? userMiddlewares = null,
         TimeSpan? pipelineTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(steps);
@@ -70,8 +69,7 @@ public static class Pipeline
 
         var logger = LoggerFactory.CreateLogger(typeof(Pipeline));
 
-        // Build middleware list once
-        var middlewares = new List<IPipelineMiddleware>([.. userMiddlewares ?? [], .. CreateInternalMiddlewares(LoggerFactory)]);
+        var middlewares = new List<IPipelineMiddleware>([.. PipelineMiddlewareRegistry.GetMiddlewares(), .. CreateInternalMiddlewares(LoggerFactory)]);
 
         // Build middleware chain ONCE - the terminal executes the step
         var middlewareChain = BuildMiddlewareChain(middlewares);
@@ -154,7 +152,7 @@ public static class Pipeline
         string pipelineName,
         CancellationToken cancellationToken)
     {
-        var middlewares = CreateInternalMiddlewares(LoggerFactory);
+        var middlewares = new List<IPipelineMiddleware>([.. PipelineMiddlewareRegistry.GetMiddlewares(), .. CreateInternalMiddlewares(LoggerFactory)]);
         var chain = BuildMiddlewareChain(middlewares);
         var logger = LoggerFactory.CreateLogger(typeof(Pipeline));
         return ExecuteStepsWithNextStepsAsync(steps, currentResult, context, chain, pipelineName, logger, null, cancellationToken);
@@ -295,4 +293,3 @@ public static class Pipeline
         new RetryMiddleware(loggerFactory.CreateLogger<RetryMiddleware>())
     ];
 }
-

@@ -9,6 +9,7 @@ using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.LLM.Models;
 using AITaskAgent.LLM.Results;
+using AITaskAgent.LLM.Streaming;
 using AITaskAgent.LLM.Support;
 using AITaskAgent.LLM.Tools.Abstractions;
 using AITaskAgent.Observability.Events;
@@ -18,6 +19,7 @@ using Newtonsoft.Json;
 using NJsonSchema;
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace AITaskAgent.LLM.Steps;
 
@@ -34,22 +36,34 @@ public class BaseLlmStep<TIn, TOut>(
     Func<TIn, PipelineContext, Task<string>> messageBuilder,
     Func<TIn, PipelineContext, Task<string>>? systemMessageBuilder = null,
     List<ITool>? tools = null,
-    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null
+    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null,
+    int maxToolIterations = 5,
+    List<IStreamingTagHandler>? streamingHandlers = null
     ) : TypedStep<TIn, TOut>(name)
     where TIn : IStepResult
     where TOut : ILlmStepResult
 {
     private readonly ILlmService _llmService = llmService ?? throw new ArgumentNullException(nameof(llmService));
     private readonly Func<TOut, Task<(bool IsValid, string? Error)>>? _resultValidator = resultValidator;
+    private readonly List<IStreamingTagHandler>? _streamingHandlers = streamingHandlers;
     private ConversationContext? _conversation = null;
     private string? _initialBookmark = null;
     private string? _message = null;
     private LlmRequest? _request = null;
 
+    // Loop detection state
+    private int _consecutiveIdenticalToolCalls = 0;
+    private HashSet<string>? _lastToolCallHashes = null;
+
+    /// <summary>
+    /// Tools that are safe to call multiple times consecutively (read-only operations).
+    /// </summary>
+    private static readonly HashSet<string> ReadOnlyTools = ["view_file", "grep_search", "list_dir", "find_by_name", "view_file_outline", "view_code_item"];
+
     /// <summary>
     /// Maximum tool execution iterations to prevent infinite loops.
     /// </summary>
-    protected int MaxToolIterations { get; init; } = 5;
+    protected int MaxToolIterations { get; init; } = maxToolIterations;
 
     protected override Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {
@@ -134,14 +148,14 @@ public class BaseLlmStep<TIn, TOut>(
 
         // Exception handling is done in StepBase. Exception breaks retry loop in StepBase
         // Recursive tool execution - handles all tool calls internally
-        var response = await InvokeLlmWithToolsAsync(_request!, context, 0, null, cancellationToken);
+        var response = await InvokeLlmWithToolsAsync(_request!, context, 0, cancellationToken);
 
         Logger.LogDebug("LLM step {StepName} received response, tokens: {Tokens}, finish reason: {Reason}",
             Name, response.TokensUsed, response.FinishReason);
         Logger.LogTrace("LLM step {StepName} response content: {Content}", Name, response.Content);
 
         // Parse the final response
-        (var result, var parseError) = await ParseLlmResponseAsync(response, context);
+        var (result, parseError) = await ParseLlmResponseAsync(response, context);
 
         // If parsing failed, return error result
         if (result == null || parseError != null)
@@ -164,7 +178,6 @@ public class BaseLlmStep<TIn, TOut>(
         LlmRequest request,
         PipelineContext context,
         int toolIteration,
-        HashSet<string>? previousToolHashes,
         CancellationToken cancellationToken)
     {
         if (toolIteration >= MaxToolIterations)
@@ -210,26 +223,57 @@ public class BaseLlmStep<TIn, TOut>(
         // Create normalized hashes for current tool calls to detect loops
         HashSet<string> currentToolHashes = [.. response.ToolCalls.Select(LlmHelpers.NormalizeToolCallKey)];
 
-        // Detect potential loop: same exact tool calls as previous iteration
-        if (previousToolHashes != null && currentToolHashes.SetEquals(previousToolHashes))
+        // Smart loop detection: track consecutive identical calls
+        if (_lastToolCallHashes != null && currentToolHashes.SetEquals(_lastToolCallHashes))
         {
-            Logger.LogWarning(
-                "Detected potential tool loop: LLM requested same tools as previous iteration. " +
-                "Forcing final response without tools.");
+            _consecutiveIdenticalToolCalls++;
 
-            // Return current response as final (ignore tool calls)
-            return new LlmResponse
+            // Determine threshold based on tool type
+            var toolName = response.ToolCalls.FirstOrDefault()?.Name ?? string.Empty;
+            var isReadOnly = ReadOnlyTools.Contains(toolName);
+            var threshold = isReadOnly ? 3 : 1;  // Read-only: 3 times, Write: 1 time
+
+            if (_consecutiveIdenticalToolCalls > threshold)
             {
-                Content = response.Content,
-                TokensUsed = response.TokensUsed,
-                PromptTokens = response.PromptTokens,
-                CompletionTokens = response.CompletionTokens,
-                CostUsd = response.CostUsd,
-                FinishReason = response.FinishReason,
-                Model = response.Model,
-                NativeResponse = response.NativeResponse,
-                ToolCalls = null  // Force no tools
-            };
+                Logger.LogWarning(
+                    "Tool loop detected: {ToolName} called {Count} times consecutively (threshold: {Threshold})",
+                    toolName, _consecutiveIdenticalToolCalls + 1, threshold + 1);
+
+                // Ensure Content is not empty when stripping ToolCalls to avoid validation failure
+                var fallbackContent = !string.IsNullOrWhiteSpace(response.Content)
+                    ? response.Content
+                    : $"Error: Execution stopped because '{toolName}' was called {_consecutiveIdenticalToolCalls + 1} times consecutively without progress.";
+
+                // Return current response as final (ignore tool calls)
+                return new LlmResponse
+                {
+                    Content = fallbackContent,
+                    TokensUsed = response.TokensUsed,
+                    PromptTokens = response.PromptTokens,
+                    CompletionTokens = response.CompletionTokens,
+                    CostUsd = response.CostUsd,
+                    FinishReason = FinishReason.Stop,
+                    Model = response.Model,
+                    NativeResponse = response.NativeResponse,
+                    ToolCalls = null
+                };
+            }
+
+            Logger.LogDebug(
+                "Same tool called again: {ToolName} (consecutive: {Count}/{Threshold})",
+                toolName, _consecutiveIdenticalToolCalls + 1, threshold + 1);
+        }
+        else
+        {
+            // Different tools - reset counter
+            if (_consecutiveIdenticalToolCalls > 0)
+            {
+                Logger.LogDebug(
+                    "Tool changed, resetting loop counter (was: {Count})",
+                    _consecutiveIdenticalToolCalls);
+            }
+            _consecutiveIdenticalToolCalls = 0;
+            _lastToolCallHashes = currentToolHashes;
         }
 
         // Deduplicate tool calls within this batch
@@ -245,8 +289,8 @@ public class BaseLlmStep<TIn, TOut>(
         // Execute unique tools and add their results
         await ExecuteToolCallsAsync(Name, uniqueToolCalls, response.ToolCalls, tools, context, cancellationToken);
 
-        // Recursive call with current hashes for loop detection
-        return await InvokeLlmWithToolsAsync(request, context, toolIteration + 1, currentToolHashes, cancellationToken);
+        // Recursive call
+        return await InvokeLlmWithToolsAsync(request, context, toolIteration + 1, cancellationToken);
     }
 
     /// <summary>
@@ -372,7 +416,7 @@ public class BaseLlmStep<TIn, TOut>(
         )
     {
         // LOG input prompts at Debug level
-        if (Logger.IsEnabled(LogLevel.Debug))
+        if (Logger.IsEnabled(LogLevel.Trace))
         {
             var prompts = request.Conversation.GetMessagesForRequest(
                 maxTokens: request.SlidingWindowMaxTokens,
@@ -383,7 +427,7 @@ public class BaseLlmStep<TIn, TOut>(
             {
                 promptLog = $"[System]: {request.SystemPrompt}\n---\n{promptLog}";
             }
-            Logger.LogDebug("[LLM] Step {StepName} Request:\n{Prompts}", stepName, promptLog);
+            Logger.LogTrace("[LLM] Step {StepName} Request:\n{Prompts}", stepName, promptLog);
         }
 
         // If streaming is not requested, invoke directly
@@ -391,15 +435,23 @@ public class BaseLlmStep<TIn, TOut>(
         {
             var response = await _llmService.InvokeAsync(request, cancellationToken);
 
+            // Process tags in non-streaming mode
+            if (_streamingHandlers?.Count > 0 && !string.IsNullOrEmpty(response.Content))
+            {
+                response = await ProcessTagsNonStreamingAsync(response, context, cancellationToken);
+            }
+
             // Send complete response to observers
             if (!string.IsNullOrEmpty(response.Content))
             {
                 // LOG full response content at Debug level for traceability
-                Logger.LogDebug("[LLM] Step {StepName} Final Response:\n{Content}\n[Finish: {FinishReason}, Tokens: {Tokens}]",
+                Logger.LogTrace("[LLM] Step {StepName} Final Response:\n{Content}\n[Finish: {FinishReason}, Tokens: {Tokens}]",
                     stepName, response.Content, response.FinishReason, response.TokensUsed);
 
-                // Parse finish reason to enum
-                var (reason, rawReason) = FinishReasonExtensions.Parse(response.FinishReason);
+                // Use properties directly
+                var reason = response.FinishReason ?? FinishReason.Other;
+                var rawReason = response.RawFinishReason;
+
                 if (reason == FinishReason.Other)
                 {
                     Logger.LogWarning("Unknown LLM finish reason: {RawReason}", rawReason);
@@ -432,23 +484,48 @@ public class BaseLlmStep<TIn, TOut>(
         // Streaming mode: accumulate content and send to observers
         var contentBuilder = new StringBuilder();
         Dictionary<int, (string? Id, string? Name, StringBuilder Args)> toolCallBuilders = [];
-        string? finishReason = null;
+        FinishReason? finishReason = null;
+        string? rawFinishReason = null;
         var totalTokens = 0;
+
+        // Initialize tag parser if handlers are registered
+        StreamingTagParser? tagParser = _streamingHandlers?.Count > 0
+            ? new StreamingTagParser(_streamingHandlers)
+            : null;
 
         await foreach (var chunk in _llmService.InvokeStreamingAsync(request, cancellationToken))
         {
             if (!string.IsNullOrEmpty(chunk.Delta))
             {
-                contentBuilder.Append(chunk.Delta);
+                string processedDelta = chunk.Delta;
 
-                // Send streaming chunk to EventChannel (FinishReason.Streaming = chunk)
-                await context.SendEventAsync(new LlmResponseEvent
+                // Process through tag parser if available
+                if (tagParser != null)
                 {
-                    StepName = stepName,
-                    Content = chunk.Delta,
-                    FinishReason = FinishReason.Streaming,
-                    CorrelationId = context.CorrelationId
-                }, cancellationToken);
+                    processedDelta = await tagParser.ProcessChunkAsync(
+                        chunk.Delta,
+                        context,
+                        cancellationToken);
+                }
+
+                // Only include non-thinking content in final response
+                if (!chunk.IsThinking && !string.IsNullOrEmpty(processedDelta))
+                {
+                    contentBuilder.Append(processedDelta);
+                }
+
+                // Send streaming chunk to EventChannel (send processed delta with placeholders)
+                if (!string.IsNullOrEmpty(processedDelta))
+                {
+                    await context.SendEventAsync(new LlmResponseEvent
+                    {
+                        StepName = stepName,
+                        Content = processedDelta,
+                        FinishReason = FinishReason.Streaming,
+                        IsThinking = chunk.IsThinking,
+                        CorrelationId = context.CorrelationId
+                    }, cancellationToken);
+                }
             }
 
             if (chunk.ToolCallUpdates != null)
@@ -481,6 +558,7 @@ public class BaseLlmStep<TIn, TOut>(
             if (chunk.IsComplete)
             {
                 finishReason = chunk.FinishReason;
+                rawFinishReason = chunk.RawFinishReason;
                 // Capture tokens from final chunk if available
                 if (chunk.TokensUsed.HasValue)
                 {
@@ -490,10 +568,10 @@ public class BaseLlmStep<TIn, TOut>(
         }
 
         // Send final event with FinishReason to signal stream end
-        var (finalReason, finalRawReason) = FinishReasonExtensions.Parse(finishReason);
+        var finalReason = finishReason ?? FinishReason.Stop; // Default to Stop if not provided
         if (finalReason == FinishReason.Other)
         {
-            Logger.LogWarning("Unknown LLM finish reason in streaming: {RawReason}", finalRawReason);
+            Logger.LogWarning("Unknown LLM finish reason in streaming: {RawReason}", rawFinishReason);
         }
 
         await context.SendEventAsync(new LlmResponseEvent
@@ -501,7 +579,7 @@ public class BaseLlmStep<TIn, TOut>(
             StepName = stepName,
             Content = string.Empty, // Final event has empty content, just signals completion
             FinishReason = finalReason,
-            RawFinishReason = finalRawReason,
+            RawFinishReason = rawFinishReason,
             TokensUsed = totalTokens,
             Model = profile.Model,
             Provider = profile.Provider,
@@ -527,10 +605,148 @@ public class BaseLlmStep<TIn, TOut>(
         {
             Content = contentBuilder.ToString(),
             ToolCalls = toolCalls,
-            FinishReason = finishReason ?? "stop",
+            FinishReason = finishReason ?? FinishReason.Stop,
+            RawFinishReason = rawFinishReason,
             Model = request.Profile.Model,
             TokensUsed = totalTokens  // Use tokens from final chunk
         };
+    }
+
+    private async Task<LlmResponse> ProcessTagsNonStreamingAsync(
+        LlmResponse response,
+        PipelineContext context,
+        CancellationToken cancellationToken)
+    {
+        if (_streamingHandlers == null || _streamingHandlers.Count == 0 || string.IsNullOrEmpty(response.Content))
+            return response;
+
+        var content = response.Content;
+        var handlerDict = _streamingHandlers.ToDictionary(h => h.TagName);
+
+        // Regex to find all tags: <tagname attr="val">content</tagname>
+        var tagRegex = new Regex(
+            @"<(\w+)([^>]*)>(.*?)</\1>",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+        // Manual async replacement
+        var sb = new StringBuilder();
+        var lastIndex = 0;
+
+        foreach (Match match in tagRegex.Matches(content))
+        {
+            sb.Append(content.Substring(lastIndex, match.Index - lastIndex));
+
+            var tagName = match.Groups[1].Value;
+            var attrString = match.Groups[2].Value;
+            var tagContent = match.Groups[3].Value;
+
+            if (handlerDict.TryGetValue(tagName, out var handler))
+            {
+                var attributes = ParseAttributes(attrString);
+                string placeholder;
+
+                try
+                {
+                    var result = await handler.OnCompleteTagAsync(
+                        attributes,
+                        tagContent,
+                        context,
+                        cancellationToken);
+
+                    placeholder = result ?? string.Empty;
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error processing tag {TagName}", tagName);
+                    placeholder = $"[Error processing tag {tagName}: {ex.Message}]";
+                }
+
+                sb.Append(placeholder);
+            }
+            else
+            {
+                sb.Append(match.Value);
+            }
+
+            lastIndex = match.Index + match.Length;
+        }
+
+        if (lastIndex < content.Length)
+        {
+            sb.Append(content.Substring(lastIndex));
+        }
+
+        var processedContent = sb.ToString();
+
+        return new LlmResponse
+        {
+            Content = processedContent,
+            TokensUsed = response.TokensUsed,
+            PromptTokens = response.PromptTokens,
+            CompletionTokens = response.CompletionTokens,
+            CostUsd = response.CostUsd,
+            FinishReason = response.FinishReason,
+            RawFinishReason = response.RawFinishReason,
+            ToolCalls = response.ToolCalls,
+            Choices = response.Choices,
+            Model = response.Model,
+            NativeResponse = response.NativeResponse
+        };
+    }
+
+    private static string EnrichSystemPromptWithStreamingTags(
+        string? basePrompt,
+        List<IStreamingTagHandler> handlers)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(basePrompt))
+        {
+            sb.AppendLine(basePrompt);
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("## IN-TEXT STREAMING ACTIONS (NOT TOOLS)");
+        sb.AppendLine("You can execute actions directly by typing XML tags in your response. These are NOT functions or tools. DO NOT invoke them via the tool_call mechanism.");
+        sb.AppendLine("Simply type the XML tag directly in your text response to execute it.");
+        sb.AppendLine();
+        sb.AppendLine("**IMPORTANT BEHAVIOR:**");
+        sb.AppendLine("- The content inside XML tags (e.g., file content) is INVISIBLE to the user - they only see a brief placeholder.");
+        sb.AppendLine("- AFTER using any tag, you MUST provide a clear explanation of what you did, just like you would after a tool call.");
+        sb.AppendLine("- Example: After writing a file, say something like: 'He creado el archivo `demo.py` con el código para imprimir números primos del 1 al 100.'");
+        sb.AppendLine("- Do NOT just write the tag and stop. Always follow up with a user-friendly explanation.");
+        sb.AppendLine();
+
+        sb.AppendLine("### AVAILABLE TAGS (Type directly in chat)");
+        foreach (var handler in handlers)
+        {
+            sb.AppendLine($"- **<{handler.TagName}>**");
+        }
+        sb.AppendLine();
+
+        sb.AppendLine("### DETAILED INSTRUCTIONS");
+        foreach (var handler in handlers)
+        {
+            sb.AppendLine(handler.GetInstructions());
+            sb.AppendLine("---");
+        }
+
+        return sb.ToString();
+    }
+
+    private static Dictionary<string, string> ParseAttributes(string attrString)
+    {
+        var attributes = new Dictionary<string, string>();
+
+        // Matches key="value"
+        var attrRegex = new Regex(@"(\w+)=""([^""]*)""");
+        var matches = attrRegex.Matches(attrString);
+
+        foreach (Match match in matches)
+        {
+            attributes[match.Groups[1].Value] = match.Groups[2].Value;
+        }
+
+        return attributes;
     }
 
 
@@ -555,6 +771,18 @@ public class BaseLlmStep<TIn, TOut>(
         if (systemMessageBuilder != null)
         {
             systemPrompt = await systemMessageBuilder(input, context);
+        }
+
+        // Enrich system prompt with tool usage guidelines
+        if (tools?.Count > 0)
+        {
+            systemPrompt = EnrichSystemPromptWithToolGuidelines(systemPrompt, tools);
+        }
+
+        // Enrich system prompt with streaming actions
+        if (_streamingHandlers?.Count > 0)
+        {
+            systemPrompt = EnrichSystemPromptWithStreamingTags(systemPrompt, _streamingHandlers);
         }
 
         // Convert tools to ToolDefinition format if provided
@@ -748,6 +976,47 @@ public class BaseLlmStep<TIn, TOut>(
 
     }
 
+    #endregion
+
+    #region Tool Guidelines Enrichment
+
+    /// <summary>
+    /// Enriches the system prompt with tool usage guidelines from provided tools.
+    /// Only includes tools that have UsageGuidelines defined.
+    /// </summary>
+    private static string EnrichSystemPromptWithToolGuidelines(string? basePrompt, List<ITool> tools)
+    {
+        // Collect guidelines from tools that have them
+        var guidelines = tools
+            .Where(t => !string.IsNullOrWhiteSpace(t.UsageGuidelines))
+            .Select(t => $"- **{t.Name}**: {t.UsageGuidelines}")
+            .ToList();
+
+        // If no guidelines, return base prompt unchanged
+        if (guidelines.Count == 0)
+        {
+            return basePrompt ?? string.Empty;
+        }
+
+        var sb = new StringBuilder();
+
+        if (!string.IsNullOrEmpty(basePrompt))
+        {
+            sb.AppendLine(basePrompt);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("## TOOL USAGE GUIDELINES");
+        sb.AppendLine("Be proactive: use tools directly without asking for confirmation.");
+        sb.AppendLine();
+
+        foreach (var guideline in guidelines)
+        {
+            sb.AppendLine(guideline);
+        }
+
+        return sb.ToString();
+    }
 
     #endregion
 }

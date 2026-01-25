@@ -17,6 +17,9 @@ public sealed record StepProgressEvent : IProgressEvent
     /// <inheritdoc />
     public string? CorrelationId { get; init; }
 
+    /// <inheritdoc />
+    public bool SuppressFromUser { get; init; }
+
     /// <summary>Progress message.</summary>
     public required string Message { get; init; }
 

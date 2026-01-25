@@ -1,4 +1,5 @@
 using AITaskAgent.Core.Abstractions;
+using AITaskAgent.LLM.Constants;
 
 namespace AITaskAgent.LLM.Results;
 
@@ -6,7 +7,7 @@ public interface ILlmStepResult : IStepResult
 {
     string AssistantMessage { get; set; }
     decimal? CostUsd { get; }
-    string? FinishReason { get; }
+    FinishReason? FinishReason { get; }
     string? Model { get; }
     int? TokensUsed { get; }
 

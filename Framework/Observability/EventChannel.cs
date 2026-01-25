@@ -35,10 +35,17 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(progressEvent);
 
-        // 1. Automatic structured logging (configurable level)
+        // 1. Automatic structured logging (configurable level) - always log, even suppressed
         LogEvent(progressEvent);
 
-        // 2. Send to all subscriber channels asynchronously
+        // 2. Skip sending to user-facing subscribers if suppressed
+        if (progressEvent.SuppressFromUser)
+        {
+            _logger.LogDebug("Event {EventType} suppressed from user subscribers", progressEvent.EventType);
+            return;
+        }
+
+        // 3. Send to all subscriber channels asynchronously
         List<ChannelWriter<IProgressEvent>> subscribersCopy;
         lock (_subscribersLock)
         {

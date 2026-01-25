@@ -1,8 +1,8 @@
-# AgentOrchestrator Framework - Especificación Funcional Definitiva
+# AITaskAgent Framework - Especificación Funcional Definitiva
 
 **Versión**: 4.0 (Consolidada)  
 **Estado**: DEFINITIVO  
-**Fecha**: Diciembre 2025  
+**Fecha**: Enero 2026  
 **Documento**: Especificación Maestra Unificada
 
 ---
@@ -22,15 +22,15 @@
 11. [Observabilidad y Control](#11-observabilidad-y-control)
 12. [Patrones de Uso Avanzados](#12-patrones-de-uso-avanzados)
 13. [Guías de Implementación](#13-guías-de-implementación)
-14. [Roadmap y Evolución](#14-roadmap-y-evolución)
+
 
 ---
 
 ## 1. Visión y Propósito
 
-### 1.1 ¿Qué es AgentOrchestrator?
+### 1.1 ¿Qué es AITaskAgent?
 
-**AgentOrchestrator** es un marco de trabajo .NET diseñado para orquestar **Agentes Especializados** y **Procesos Deterministas** en sistemas empresariales donde la creatividad de la Inteligencia Artificial debe estar estrictamente acotada por reglas de negocio, validaciones de código y una ejecución predecible.
+**AITaskAgent** es un marco de trabajo .NET diseñado para orquestar **Agentes Especializados** y **Procesos Deterministas** en sistemas empresariales donde la creatividad de la Inteligencia Artificial debe estar estrictamente acotada por reglas de negocio, validaciones de código y una ejecución predecible.
 
 **No es un framework genérico para cualquier tipo de agente.** Está optimizado específicamente para:
 
@@ -95,7 +95,7 @@ El framework impone una distinción arquitectónica rígida entre dos mundos:
 - Proyectos que priorizan autonomía total del agente sobre control
 
 ### 1.4 Principios de Diseño
-AgentOrchestrator se construye sobre cuatro pilares fundamentales que dictan cada decisión de arquitectura:
+AITaskAgent se construye sobre cuatro pilares fundamentales que dictan cada decisión de arquitectura:
 
 1. **Determinismo sobre Autonomía.** Rechazamos la idea de que la IA debe controlar el flujo de la aplicación. En este framework, el código C# es el rey y el LLM es un consejero. El pipeline define la estructura rígida; el agente solo rellena el contenido flexible. No hay "bucles mágicos" ni planes emergentes impredecibles.
 2. **Type Safety (Seguridad de Tipos) Radical.** Si no compila, no debería ejecutarse. Huimos de los diccionarios de string y los objetos dinámicos. Desde la definición de los Steps hasta la agregación paralela, todo está fuertemente tipado para aprovechar la robustez del compilador de .NET.
@@ -108,28 +108,32 @@ AgentOrchestrator se construye sobre cuatro pilares fundamentales que dictan cad
 
 Estas decisiones son los **cimientos inmutables** del framework. Cualquier cambio futuro debe respetar estos principios o proporcionar una justificación arquitectónica sólida.
 
-### ADR-001: Vendor Lock-in (OpenAI Protocol)
+### ADR-001: Abstracción de Protocolos LLM
 
-**Decisión:** Usar el esquema de objetos de OpenAI (`ChatMessage`, `ChatTool`, `ChatCompletion`) como tipos nativos del framework, sin capa de abstracción.
+**Decisión:** El framework abstrae el protocolo de comunicación con LLMs a través de la interfaz `ILlmService`, permitiendo implementaciones para diferentes proveedores (OpenAI, Google, Anthropic, etc.).
 
 **Contexto:** 
-- El protocolo de OpenAI es el "USB-C de la IA" - adoptado por Azure OpenAI, DeepSeek, Anthropic (via conversion), Ollama, OpenRouter, y docenas de providers
-- Abstraer estos tipos añade una capa de indirección que complica debugging y aumenta el overhead
-- Los tipos de OpenAI están bien diseñados y cubren el 99% de casos de uso
+- Diferentes proveedores LLM tienen APIs distintas pero funcionalidad similar
+- Los requisitos de negocio pueden cambiar el proveedor preferido
+- El framework debe ser agnóstico del proveedor específico
 
 **Justificación:**
-- Ergonomía: Los desarrolladores pueden usar documentación oficial de OpenAI directamente
-- Performance: Cero overhead de conversión entre tipos
-- Mantenibilidad: No hay mapeos personalizados que mantener
-- Compatibilidad: Cualquier provider compatible con OpenAI funciona inmediatamente
+- **Flexibilidad**: Cambiar de proveedor sin modificar código de negocio
+- **Testabilidad**: Fácil mockear `ILlmService` en pruebas unitarias
+- **Multi-proveedor**: Usar diferentes modelos para diferentes steps según necesidad
+
+**Implementación:**
+```
+ILlmService (abstracción)
+├─ OpenAILlmService (implementación OpenAI/Azure OpenAI)
+├─ GoogleLlmService (implementación Google AI)
+└─ [Custom implementations]
+```
 
 **Consecuencias:**
-- Debugging más fácil (stack traces reales, no objetos wrapper)
-- Menor superficie de API para aprender
--  Migrar a un protocolo completamente diferente (ej: Google Gemini nativo) requeriría adaptadores
-- La mayoría de providers ya soportan OpenAI protocol, minimizando el riesgo
-
-**Excepciones:** Si un provider tiene capacidades únicas no expresables en OpenAI protocol (ej: multimodalidad avanzada), se pueden añadir extensiones específicas sin romper la base.
+- Código de negocio desacoplado del proveedor LLM
+- Cada implementación puede optimizar para su proveedor específico
+- Las características únicas de cada proveedor se configuran vía `LlmProviderConfig`
 
 ---
 
@@ -437,7 +441,7 @@ Desventaja: Routing dinámico complejo
 Desventaja: Overhead arquitectónico
 ```
 
-**Modelo C: Inversión de Control con Delegado (AgentOrchestrator)**
+**Modelo C: Inversión de Control con Delegado (AITaskAgent)**
 ```
 Pipeline inyecta delegado en Context
 Step decide siguiente → Pide a Pipeline que ejecute
@@ -525,7 +529,7 @@ Sin overhead de grafo declarativo
 
 **Diferencias con Coreografía (Microservicios)**
 
-| Aspecto | Coreografía Clásica | AgentOrchestrator |
+| Aspecto | Coreografía Clásica | AITaskAgent |
 |---------|---------------------|-------------------|
 | **Control de flujo** | Distribuido entre actores | Centralizado en Pipeline |
 | **Orden de ejecución** | Emergente e impredecible | Determinista y definido |
@@ -533,13 +537,15 @@ Sin overhead de grafo declarativo
 | **Acoplamiento** | Alto (mensajes y eventos) | Bajo (solo contrato I/O) |
 | **Supervisión** | Difícil (sin punto central) | Total (Pipeline controla todo) |
 
+
+
 **Diagrama aclaratorio:**
 ```
 Coreografía (Microservicio A no sabe que B existe)
    ServiceA → EventBus → ServiceB → EventBus → ServiceC
    (Flujo emergente, difícil de seguir)
 
-AgentOrchestrator (Step1 decide pero no ejecuta)
+AITaskAgent (Step1 decide pero no ejecuta)
    Pipeline → Step1 (decide Step2) → Pipeline (ejecuta Step2)
    (Flujo definido, control centralizado)
 ```
@@ -1831,6 +1837,23 @@ MockToolRegistry
 
 ---
 
+### 10.6 Enriquecimiento y Mensajería en Tools
+
+Para mejorar la experiencia de usuario, las tools pueden emitir mensajes de progreso en tiempo real y enriquecer los eventos estándar.
+
+**Arquitectura Base (`LlmTool`):**
+Las tools complejas (como `BaseFileTool` y sus derivadas) deben heredar de `LlmTool` (en lugar de implementar directament `ITool`) para acceder a hooks de observabilidad (`EnrichActivity`) y al contexto de ejecución completo (`PipelineContext`, `ILogger`).
+
+**Mensajería (`NotifyProgressAsync`):**
+Permite a una tool enviar actualizaciones de estado intermedias visibles para el usuario:
+```csharp
+// Ejemplo en ListDirTool
+await NotifyProgressAsync($"📂 Listing directory '{path}'...", context, cancellationToken);
+```
+Esto emite un `StepProgressEvent` que puede ser renderizado por la UI.
+
+---
+
 ## 11. Observabilidad y Control
 
 ### 11.1 Sistema de Observabilidad
@@ -2207,7 +2230,9 @@ SendAsync(new ToolCompletedEvent(...))
 1. **Step Lifecycle**: `StepStartedEvent`, `StepCompletedEvent`, `StepFailedEvent`.
 2. **LLM Interaction**: `LlmRequestEvent`, `LlmResponseEvent`.
 3. **Tools**: `ToolCompletedEvent` (detalles de ejecución, duración, resultado).
-4. **Streaming**: `ContentDeltaEvent` (tokens individuales para efecto máquina de escribir).
+4. **Artefactos en Streaming**: `TagStartedEvent` (inicio), `TagCompletedEvent` (fin).
+    > *Nota: Los artefactos (e.g., escritura de archivos xml) son side-effects generados durante el streaming y no cuentan como turnos de conversación.*
+5. **Streaming**: `ContentDeltaEvent` (tokens individuales para efecto máquina de escribir).
 
 **Ventajas:**
 
@@ -2410,6 +2435,23 @@ Pipeline inicia
         └─ Log: "Pipeline completed in 5.3s, 1500 tokens, $0.0045"
 ```
 
+**Logging Independiente por Step (Scope Automático):**
+
+El framework envuelve automáticamente la ejecución de cada `IStep` en un Scope de logging que incluye:
+- `Step`: Nombre del paso.
+- `Path`: Ruta de ejecución (e.g. `MainPipeline/Router/SalesPipeline`).
+- `CorrelationId`: ID único de la traza.
+
+Esto permite filtrar logs de un paso específico incluso si ocurren dentro de servicios inyectados o middlewares.
+
+**Ejemplo de filtro (Serilog):**
+```csharp
+// Solo ver logs del paso "SchemaValidator"
+.Filter.ByIncludingOnly(le => 
+    le.Properties.ContainsKey("Step") && 
+    le.Properties["Step"].ToString().Contains("SchemaValidator"))
+```
+
 **Proveedores compatibles:**
 - Serilog (recomendado)
 - NLog
@@ -2448,7 +2490,7 @@ Pipeline inicia
 **Dashboard conceptual:**
 ```
 ┌─────────────────────────────────────────┐
-│  AGENTORCHESTRATOR DASHBOARD            │
+│  AITASKAGENT DASHBOARD                  │
 ├─────────────────────────────────────────┤
 │                                         │
 │  HEALTH                              │
@@ -2759,13 +2801,13 @@ Usado en:
 
 **Instalación del paquete NuGet:**
 ```
-dotnet add package AgentOrchestrator
+dotnet add package AITaskAgent
 ```
 
 **Configuración en Startup:**
 ```
 Registrar servicios:
-├─ AddAgentOrchestrator(options => { // Configurar JSON Serializer settings aquí si es necesario})
+├─ AddAITaskAgent(configuration)
 ├─ AddSingleton<IToolRegistry, ToolRegistry>()
 ├─ AddScoped<ConversationContext>()
 ├─ AddSingleton<ISSEChannel, SSEChannel>() 
@@ -2823,39 +2865,8 @@ Main Pipeline:
     └─ Compare     → PipelineStep(ComparePipeline)
 ```
 
-### 13.3 Testing Recomendado
 
-**Unit Tests (Steps Individuales):**
-```
-Test: IntentionAnalyzer_ClassifiesCorrectly
-├─ Mock LLM service
-├─ Input: "Please summarize this document"
-├─ Expected: Intent = Summarize
-└─ Assert: Confidence > 0.8
-```
-
-**Integration Tests (Pipelines Completos):**
-```
-Test: SummarizePipeline_EndToEnd
-├─ Usar LLM real (o mock realista)
-├─ Input: Documento de prueba conocido
-├─ Ejecutar pipeline completo
-├─ Assert: Resumen tiene longitud esperada
-├─ Assert: Contiene keywords clave del documento
-└─ Assert: No hay errores de validación
-```
-
-**Performance Tests:**
-```
-Test: Pipeline_HandlesLoad
-├─ Ejecutar 100 requests concurrentes
-├─ Medir: Latencia P50, P95, P99
-├─ Medir: Throughput (req/s)
-├─ Assert: Error rate < 1%
-└─ Assert: No memory leaks
-```
-
-### 13.4 Mejores Prácticas
+### 13.3 Mejores Prácticas
 
 **Organización del Código:**
 ```
@@ -2951,480 +2962,21 @@ NO loguear:
 
 ---
 
-## 14. Roadmap y Evolución
-
-### 14.1 Estado Actual (v4.0)
-
-**Características implementadas:**
-- Modelo de ejecución con delegado (inversión de control)
-- Agentes con bucle de corrección interno
-- Validación híbrida (estructural + semántica)
-- Tools recursivas con límites
-- Bookmarks para optimización de tokens
-- Conversaciones multi-turn con sliding window
-- Circuit breaker y retry policies
-- Observabilidad garantizada
-- Type safety completo
-- Soporte para OpenAI Protocol
-
-### 14.2 Próximas Versiones
-
-**v4.1 - Mejoras de Performance (Q1 2026)**
-```
-Objetivos:
-├─ Semantic caching layer
-│   └─ Redis backend para cacheo de respuestas LLM
-│
-├─ Token counting real
-│   └─ Integración con SharpToken (Tiktoken)
-│
-├─ Parallel execution optimizada
-│   └─ Better work stealing para CPU-bound tasks
-│
-└─ Métricas mejoradas
-    └─ Histogramas de latencia por percentiles
-```
-
-**v4.2 - Extensibilidad Avanzada (Q2 2026)**
-```
-Objetivos:
-├─ Embedding router
-│   └─ Clasificación rápida con cosine similarity
-│
-├─ Multi-modelo support
-│   └─ Usar GPT-4 para razonamiento, GPT-3.5 para simple
-│
-├─ Dynamic tool loading
-│   └─ Cargar tools desde plugins (assemblies externos)
-│
-└─ Workflow DSL
-    └─ Definir pipelines con sintaxis fluida mejorada
-```
-
-**v4.3 - Enterprise Features (Q3 2026)**
-```
-Objetivos:
-├─ Multi-tenancy
-│   └─ Aislamiento por tenant con quotas
-│
-├─ RBAC avanzado
-│   └─ Permisos granulares por tool y pipeline
-│
-├─ Audit trail completo
-│   └─ Registro inmutable de todas las decisiones
-│
-└─ Disaster recovery
-    └─ Checkpoint/restore de conversaciones
-```
-
-### 14.3 Visión a Largo Plazo
-
-**Dirección estratégica:**
-
-1. **Best-in-class para Agentes Empresariales**
-   - Framework de referencia para .NET en producción
-   - Competir con Semantic Kernel en control y observabilidad
-   - Mantener simplicidad sobre abstracción
-
-2. **Ecosistema de Tools**
-   - Marketplace de tools reutilizables
-   - Integración con servicios comunes (CRM, ERP, etc.)
-   - Community contributions
-
-3. **Multi-Agent Orchestration**
-   - Coordinación entre múltiples agentes especializados
-   - Negociación y consenso entre agentes
-   - Jerarquías de agentes (supervisor → workers)
-
-4. **Advanced Reasoning**
-   - Chain-of-Thought prompting integrado
-   - Self-critique loops para mejora continua
-   - Meta-learning de errores comunes
-
-### 14.4 Principios de Evolución
-
-**Compromisos no negociables:**
-
-1. **Backward Compatibility**
-   - No romper APIs públicas sin deprecation cycle
-   - Migrations automáticas cuando sea posible
-   - Versioning semántico estricto
-
-2. **Performance First**
-   - Benchmarks obligatorios antes de cada release
-   - No añadir features que degraden performance base >5%
-   - Profiling continuo en producción
-
-3. **Developer Experience**
-   - Documentación exhaustiva con ejemplos
-   - Error messages descriptivos y accionables
-   - Debugging debe ser trivial con breakpoints
-
-4. **Production Ready**
-   - Testing exhaustivo (unit, integration, load)
-   - Observabilidad no opcional
-   - Security audits regulares
-
-### 14.5 Contribuciones de la Comunidad
-
-**Áreas prioritarias para contribuciones:**
-
-1. **Implementaciones de Storage**
-   - Redis para ConversationStorage
-   - PostgreSQL con Marten
-   - Azure Cosmos DB
-   - MongoDB
-
-2. **Adaptadores de LLM Providers**
-   - Google Gemini (nativo, no via OpenAI)
-   - Anthropic Claude (optimizaciones específicas)
-   - Ollama (local deployment)
-   - Azure AI Studio
-
-3. **Tools Especializadas**
-   - Tools para dominio financiero
-   - Tools para healthcare (HIPAA compliant)
-   - Tools para e-commerce
-   - Tools para DevOps
-
-4. **Observability Integrations**
-   - Datadog connector
-   - New Relic connector
-   - Grafana dashboards
-   - Prometheus exporters
-
----
-
-## Apéndice A: Glosario Completo
-
-**Agent / Agente**
-- Componente con capacidad de razonamiento LLM
-- Tiene System Prompt, memoria opcional y acceso a tools
-- Implementa bucle interno de corrección
-- Ejemplo: ChatAgentStep, RouterAgentStep
-
-**AgentPipeline**
-- Secuencia orquestada de steps (agentes y deterministas)
-- Responsable de control de flujo y observabilidad
-- Forward-only (no retrocede)
-
-**Bookmark**
-- Punto de restauración en historial de conversación
-- Usado para limpieza de reintentos fallidos
-- Optimiza uso de tokens
-
-**Circuit Breaker**
-- Patrón de resiliencia que previene sobrecarga
-- Estados: Closed, Open, Half-Open
-- Protege servicios degradados
-
-**Cognitive Retries**
-- Reintentos que hace un agente para autocorregirse
-- Métrica de calidad del prompting
-- Incluyen feedback del validador
-
-**ConversationContext**
-- Contexto de negocio con historial de mensajes
-- Mutable, puede clonarse para paralelización
-- Opcional (no todos los pipelines lo necesitan)
-
-**Delegado (InvokeStep)**
-- Función inyectada en PipelineContext
-- Permite a steps pedir al pipeline que ejecute el siguiente
-- Garantiza observabilidad
-
-**Deterministic Step**
-- Step sin LLM, lógica pura C#
-- Tipos: LambdaStep, ActionStep, SwitchStep, ParserStep
-- Comportamiento predecible y repetible
-
-**Few-Shot Prompting**
-- Técnica de incluir ejemplos en el prompt
-- Usado por RouterAgentStep con descripciones del Enum
-- Mejora precisión de clasificación
-
-**LambdaStep**
-- Step de validación que falla rápido
-- No reintenta, solo valida reglas de negocio
-- Detiene pipeline si falla
-
-**Inversión de Control**
-- Patrón donde steps deciden pero pipeline ejecuta
-- Ventaja: observabilidad sin overhead arquitectónico
-
-**MessageHistory**
-- Gestión del historial de mensajes en conversación
-- Implementa sliding window y bookmarks
-- Optimiza tokens automáticamente
-
-**PipelineContext**
-- Contexto técnico inmutable (record)
-- Contiene: Services, Metrics, Logger, CancellationToken
-- Transporta el delegado InvokeStep
-
-**RAG (Retrieval-Augmented Generation)**
-- Patrón de consultar bases de conocimiento antes de generar
-- Mejora precisión con datos externos
-- Framework soporta RAG multi-fuente en paralelo
-
-**Retry Policy**
-- Configuración de reintentos con backoff exponencial
-- Aplica jitter para prevenir thundering herd
-- Distinto para errores HTTP vs validación
-
-**Semantic Validation**
-- Validación que requiere servicios externos
-- Ejemplo: compilador, base de datos, APIs
-- Se inyecta como delegado en AgentStep
-
-**Sliding Window**
-- Estrategia de mantener primeros N + últimos M mensajes
-- Optimiza tokens en conversaciones largas
-- Configurable por pipeline
-
-**SSE (Server-Sent Events)**
-- Protocolo para streaming unidireccional
-- Usado para reportar progreso en tiempo real
-- Implementado con Channels lock-free
-
-**StepResult**
-- Salida tipada de un step
-- Implementa ValidateAsync() para validación estructural
-- Soporta reflection para templates
-
-**Structural Validation**
-- Validación de forma/estructura del resultado
-- No requiere servicios externos
-- Implementada en IStepResult.ValidateAsync()
-
-**Tool / Capability**
-- Función invocable por un agente
-- Registrada en ToolRegistry
-- Subject a permisos (Least Privilege)
-
-**Tool Recursion**
-- LLM solicita tool → ejecuta → LLM ve resultado → repite
-- Limitado por MaxToolIterations
-- Implementado automáticamente por BaseLlmStep
-
----
-
-## Apéndice B: Preguntas Frecuentes (FAQ)
-
-**P: ¿Por qué no usar Semantic Kernel?**
-R: Semantic Kernel es propósito general con planners complejos. AgentOrchestrator prioriza control determinista y observabilidad garantizada para escenarios empresariales donde la autonomía total del LLM no es aceptable.
-
-**P: ¿Soporta multi-agente (varios agentes colaborando)?**
-R: En v4.0, cada pipeline tiene agentes especializados pero sin negociación entre ellos. Multi-agent orchestration está en roadmap para v4.3+.
-
-**P: ¿Puedo usar modelos locales (Ollama)?**
-R: Sí, cualquier provider compatible con OpenAI protocol funciona. Ollama expone API compatible.
-
-**P: ¿Cómo debugging un pipeline complejo?**
-R: Breakpoints en cada step funcionan normalmente. El flujo es síncrono y lineal (no callbacks ocultos). Además, cada step loguea su ejecución automáticamente.
-
-**P: ¿El framework escala horizontalmente?**
-R: Sí. Los pipelines son stateless por defecto. ConversationStorage puede usar Redis para multi-instancia. No hay estado compartido problemático.
-
-**P: ¿Qué pasa si el LLM nunca genera salida válida?**
-R: Tras MaxLlmRetries (default: 3), el AgentStep lanza excepción. El pipeline la captura y puede manejarla con OnStepError hook o propagar al caller.
-
-**P: ¿Cómo limitar costes por usuario?**
-R: Implementar LambdaStep que verifique quota antes de invocar agente. Métricas de coste se registran automáticamente. Alertas configurables por threshold.
-
-**P: ¿Soporta streaming de respuestas parciales?**
-R: Sí. LlmOptions.EnableStreaming = true activa streaming token-a-token. El Observer recibe cada chunk vía eventos.
-
-**P: ¿Puedo mixear diferentes modelos en un pipeline?**
-R: Sí. Cada AgentStep puede especificar su modelo en LlmOptions.Model. Ejemplo: GPT-3.5 para simple, GPT-4 para razonamiento complejo.
-
-**P: ¿Las tools pueden ser asíncronas?**
-R: Sí. ITool.ExecuteAsync() es async por diseño. Perfectas para llamadas HTTP, DB queries, etc.
-
-**P: ¿Cómo testear sin gastar tokens reales?**
-R: Mock ILlmService en tests. O usar MockToolRegistry para simular respuestas. Dry-run mode también disponible.
-
-**P: ¿El framework es thread-safe?**
-R: Sí. PipelineContext es inmutable. ConversationContext debe clonarse en paralelización (ADR-003). ToolRegistry es thread-safe.
-
-**P: ¿Qué hago si un agente genera contenido inapropiado?**
-R: Implementar LambdaStep de content moderation tras cada AgentStep crítico. Integrar con Azure Content Safety, OpenAI Moderation API, etc.
-
-**P: ¿Puedo usar esto en Blazor WebAssembly?**
-R: El framework es .NET Standard 2.1+ compatible. Pero llamadas LLM requieren CORS configurado. Preferible usar Blazor Server o API backend.
-
-**P: ¿Hay límite en el tamaño del pipeline?**
-R: No hay límite técnico. Pero considerar: a más steps, más latencia. Pipelines >20 steps considerar dividir. Routers pueden tener profundidad máxima (configurable).
-
----
-
-## Apéndice C: Comparación de Decisiones de Diseño
-
-### Por qué NO abstraer OpenAI Protocol (ADR-001)
-
-**Alternativa A: Abstracción completa**
-```
-Problemas:
-├─ Capa extra de conversión
-├─ Debugging complejo (stack traces ocultos)
-├─ Overhead de performance
-├─ Mantenimiento de mapeos
-└─ Menos documentación aplicable
-
-Lo que ganas:
-└─ Teóricamente más portable
-   (pero en práctica, el 95% de providers soportan OpenAI)
-```
-
-**Decisión actual: OpenAI nativo**
-```
-Ventajas:
-├─ Zero overhead
-├─ Debugging directo
-├─ Documentación oficial aplicable
-├─ Menos código que mantener
-└─ Ergonomía superior
-
- Trade-off:
-└─ Si un provider NO soporta OpenAI protocol,
-   requiere adaptador custom
-```
-
-### Por qué Reflection sin caché manual (ADR-002)
-
-**Alternativa A: Cacheo manual**
-```
-Problemas:
-├─ Complejidad añadida
-├─ Bugs sutiles (invalidación de caché)
-├─ Overhead de mantenimiento
-└─ Ganancia insignificante (0.0015% del tiempo total)
-
-Lo que ganas:
-└─ ~30µs por objeto
-   (irrelevante vs 2000ms del LLM)
-```
-
-**Decisión actual: Reflection sin caché**
-```
-Ventajas:
-├─ Código simple y mantenible
-├─ .NET 7+ ya optimiza internamente
-├─ Sin bugs de caché
-└─ Ergonomía de API perfecta
-
- Trade-off:
-└─ Si el sistema fuera CPU-bound (no lo es),
-   sería subóptimo
-```
-
-### Por qué Validación Interna vs Pipeline Cíclico (ADR-004)
-
-**Alternativa A: Pipeline cíclico**
-```
-Problemas:
-├─ Stack overflow risk
-├─ Métricas confusas
-├─ Debugging complejo (loops infinitos)
-├─ Observabilidad inconsistente
-└─ Hard to test
-
-Lo que ganas:
-└─ El pipeline "ve" cada reintento
-   (pero contamina métricas)
-```
-
-**Decisión actual: Loop interno en AgentStep**
-```
-Ventajas:
-├─ Pipeline ve solo "Agente completó o falló"
-├─ Métricas limpias
-├─ No hay riesgo de loops infinitos (MaxLlmRetries)
-├─ Debugging con breakpoints trivial
-└─ Encapsulación perfecta
-
- Trade-off:
-└─ Los reintentos internos no son visibles
-   en el pipeline (esto es intencional)
-```
-
----
-
-## Apéndice D: Checklist de Implementación
-
-### Pre-Producción Checklist
-
-**Configuración:**
-- [ ] API keys en Key Vault / Secrets Manager
-- [ ] Timeouts configurados apropiadamente
-- [ ] Circuit breaker habilitado con thresholds correctos
-- [ ] Rate limiting configurado según plan del provider
-- [ ] Logging level apropiado (Warning/Error en prod)
-- [ ] Métricas enviándose a sistema de monitoreo
-
-**Seguridad:**
-- [ ] Tools tienen validación de permisos
-- [ ] Content moderation habilitada (si aplicable)
-- [ ] PII no se loguea
-- [ ] Audit trail configurado
-- [ ] CORS configurado correctamente
-- [ ] API keys rotadas regularmente
-
-**Performance:**
-- [ ] Benchmarks corridos (latencia, throughput)
-- [ ] Memory leaks descartados
-- [ ] Connection pooling habilitado
-- [ ] Caching estratégico implementado
-- [ ] Conversation storage optimizado
-
-**Observabilidad:**
-- [ ] Dashboard de métricas funcionando
-- [ ] Alertas configuradas (críticas y warnings)
-- [ ] Traces distribuidos habilitados
-- [ ] Logs estructurados con CorrelationId
-- [ ] SSE funcionando para streaming
-
-**Testing:**
-- [ ] Unit tests > 80% coverage
-- [ ] Integration tests para flujos críticos
-- [ ] Load testing completado
-- [ ] Chaos testing (circuit breaker, timeouts)
-- [ ] Security testing (OWASP Top 10)
-
-**Documentación:**
-- [ ] README con setup instructions
-- [ ] Arquitectura documentada
-- [ ] Runbooks para operación
-- [ ] Troubleshooting guide
-- [ ] API documentation (si expuesto)
-
----
-
 ## Conclusión
 
-**AgentOrchestrator** representa un enfoque maduro y pragmático para construir agentes especializados en entornos empresariales. A través de decisiones arquitectónicas conscientes (ADRs), el framework equilibra control determinista con flexibilidad de LLMs, garantizando observabilidad sin sacrificar performance.
+**AITaskAgent** representa un enfoque maduro y pragmático para construir agentes especializados en entornos empresariales. A través de decisiones arquitectónicas conscientes (ADRs), el framework equilibra control determinista con flexibilidad de LLMs, garantizando observabilidad sin sacrificar performance.
 
-**Principios clave que lo definen:**
+**Principios clave:**
 
-1. **Híbrido Estricto**: Separación clara entre mundo probabilístico (agentes) y determinista (steps)
-2. **Observabilidad Garantizada**: Modelo de inversión de control que hace imposible saltarse el logging
+1. **Híbrido Estricto**: Separación clara entre mundo probabilístico (agentes LLM) y determinista (steps de código)
+2. **Observabilidad Garantizada**: Imposible ejecutar un paso sin que deje huella de auditoría
 3. **Validación en Capas**: Estructural vs Semántica, con corrección automática
-4. **Type Safety Completo**: Compile-time checking previene errores tontos
-5. **Production First**: Diseñado desde día uno para sistemas críticos
+4. **Type Safety Completo**: Compile-time checking previene errores en tiempo de ejecución
+5. **Production First**: Diseñado desde día uno para sistemas críticos empresariales
 
-El framework no intenta ser todo para todos. Es una herramienta especializada para equipos que construyen agentes task-oriented donde el control, la auditabilidad y la predictibilidad son no negociables.
-
-**Para adopción exitosa:**
-- Entiende los ADRs y sus justificaciones
-- Respeta la separación entre validación estructural y semántica
-- Aprovecha la observabilidad integrada
-- Testea exhaustivamente antes de producción
-- Monitorea costes y performance continuamente
-
-El roadmap futuro mantiene el compromiso con simplicidad sobre abstracción, performance sobre features, y developer experience sobre complejidad arquitectónica.
+El framework no intenta ser todo para todos. Es una herramienta especializada para equipos que construyen agentes task-oriented donde el control, la auditabilidad y la predictibilidad son requisitos no negociables.
 
 ---
 
 **Versión del Documento**: 4.0 (Consolidada)  
-**Última Actualización**: Diciembre 2025  
-**Próxima Revisión**: Con release de v4.1 (Q1 2026)
+**Última Actualización**: Enero 2026

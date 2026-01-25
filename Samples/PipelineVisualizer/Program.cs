@@ -1,4 +1,5 @@
 using AITaskAgent.Configuration;
+using AITaskAgent.Core.Execution;
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.Observability;
 using PipelineVisualizer.Middleware;
@@ -58,6 +59,9 @@ builder.Services.AddControllers()
 builder.WebHost.UseUrls("http://localhost:5000");
 
 var app = builder.Build();
+
+app.Services.RegisterPipelineMiddleware<ContextBroadcastMiddleware>();
+
 
 app.UseCors();
 app.UseDefaultFiles();

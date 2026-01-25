@@ -4,8 +4,6 @@
 
 AITaskAgent uses a **pipeline architecture** with middleware composition, similar to ASP.NET Core.
 
-![Pipeline Execution Conceptual](../assets/images/pipeline_execution_architecture.png)
-
 ## Core Components
 
 ### Pipeline
@@ -72,6 +70,39 @@ public async Task<IStepResult> InvokeAsync(
 ## Execution Flow
 
 ![Execution Sequence Flow](../assets/images/execution_sequence_flow.png)
+
+## The Dynamic Execution Loop
+
+The AITaskAgent engine operates as a **Dynamic Stack Consumer** centered around a shared state. This architecture allows for runtime-extensible flows, self-correcting agents, and resilient execution.
+
+![Advanced Execution Flow Schematic](../assets/images/aitaskagent_architecture_v4.png)
+
+### 1. Context Activation & Setup
+Before execution, the `PipelineContextFactory` initializes the **Operational Memory (Context)**:
+- **Fresh Mode**: No IDs provided. Initializes a clean context with a new `CorrelationId`.
+- **Resumption Mode (`ContextId`)**: Recovers existing context. The engine uses `StepResults` to skip previously completed steps and resume exactly where it failed.
+- **Continuation Mode (`ConversationId`)**: New context but pre-loads the long-term history of a specific conversation.
+
+### 2. The Execution Cycle
+The engine processes a dynamic **Step Stack** instead of a rigid list:
+
+1. **Fetch**: Pops the next step from the stack.
+2. **Wrap (Middleware Chain)**: The step is executed through a chain of "shields":
+    - **Observability**: Emits traces and events.
+    - **Resilience**: Manages retries via `RetryMiddleware`.
+    - **Safety**: Enforces execution timeouts.
+3. **Execute & Persist**: The step logic runs. The result is stored in the **Context (StepResults)** cache to prevent re-execution and enable bookmarks.
+4. **Dynamic Branching**:
+    - **Error?** → Execution stops; Error results are emitted.
+    - **NextSteps Injected?** → If the step produced `NextSteps` (e.g., via a `SwitchStep` or LLM decision), these are pushed onto the **Stack**. The engine processes them in the next iteration.
+
+### 3. Peripheral Observability (Projections)
+As the loop iterates, it emits data to the **EventChannel**. This is a projection of the internal state, not part of the context itself:
+- **Events (Milestones)**: `PipelineStarted`, `StepCompleted`, `RouterDecision`, `ToolExecution`.
+- **Metrics (Health)**: `StepErrors` counters, `StepDuration` histograms, `TokenUsage` metrics.
+- **Traces (Call Graph)**: Distributed traces showing the hierarchy of dynamic calls.
+
+---
 
 ## Non-Linear Flows
 

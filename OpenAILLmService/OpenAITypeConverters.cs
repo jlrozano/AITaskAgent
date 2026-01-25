@@ -31,7 +31,10 @@ internal static class OpenAITypeConverters
         {
             "system" => ChatMessage.CreateSystemMessage(message.Content),
             "user" => ChatMessage.CreateUserMessage(message.Content),
-            "assistant" => ChatMessage.CreateAssistantMessage(message.Content),
+            "assistant" => message.ToolCalls?.Count > 0
+                ? ChatMessage.CreateAssistantMessage(
+                    message.ToolCalls.Select(tc => tc.ToChatToolCall()))
+                : ChatMessage.CreateAssistantMessage(message.Content),
             "tool" => ChatMessage.CreateToolMessage(message.ToolCallId!, message.Content),
             _ => throw new ArgumentException($"Unknown role: {message.Role}")
         };
@@ -46,7 +49,9 @@ internal static class OpenAITypeConverters
         // Determine role and extract content based on concrete message type
         string role;
         var content = string.Empty;
+
         string? toolCallId = null;
+        List<ToolCall>? toolCalls = null;
 
         switch (chatMessage)
         {
@@ -63,6 +68,10 @@ internal static class OpenAITypeConverters
             case AssistantChatMessage assistantMsg:
                 role = "assistant";
                 content = ExtractTextContent(assistantMsg.Content);
+                if (assistantMsg.ToolCalls != null && assistantMsg.ToolCalls.Count > 0)
+                {
+                    toolCalls = assistantMsg.ToolCalls.Select(tc => tc.ToFrameworkToolCall()).ToList();
+                }
                 break;
 
             case ToolChatMessage toolMsg:
@@ -80,6 +89,7 @@ internal static class OpenAITypeConverters
             Role = role,
             Content = content,
             ToolCallId = toolCallId,
+            ToolCalls = toolCalls,
             Native = new NativeObject
             {
                 Provider = ProviderName,

@@ -4,6 +4,9 @@ using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
 using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.LLM.Results;
+using AITaskAgent.LLM.Tools.Abstractions;
+
+using AITaskAgent.LLM.Streaming;
 
 namespace AITaskAgent.LLM.Steps;
 
@@ -16,13 +19,19 @@ public sealed class LlmStep(
     string name,
     LlmProviderConfig profile,
     Func<StepResult, PipelineContext, Task<string>> promptBuilder,
-    string? systemPrompt = null)
+    string? systemPrompt = null,
+    List<ITool>? tools = null,
+    int maxToolIterations = 5,
+    List<IStreamingTagHandler>? streamingHandlers = null)
     : LlmStep<LlmStringStepResult>(
         llmService,
         name,
         profile,
         promptBuilder,
-        systemPrompt)
+        systemPrompt,
+        tools,
+        maxToolIterations: maxToolIterations,
+        streamingHandlers: streamingHandlers)
 {
 }
 
@@ -37,21 +46,24 @@ public class LlmStep<TOut>(
     LlmProviderConfig profile,
     Func<StepResult, PipelineContext, Task<string>> promptBuilder,
     string? systemPrompt = null,
-    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null)
+    List<ITool>? tools = null,
+    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null,
+    int maxToolIterations = 5,
+    List<IStreamingTagHandler>? streamingHandlers = null)
     : BaseLlmStep<StepResult, TOut>(
         llmService,
         name,
         profile,
         promptBuilder,
         systemPrompt != null ? (_, _) => Task.FromResult(systemPrompt) : null,
-        null, // tools
-        resultValidator)
+        tools,
+        resultValidator,
+        maxToolIterations,
+        streamingHandlers)
     where TOut : LlmStepResult
 {
     protected override ConversationContext GetConversationContext(PipelineContext context)
         => context.Conversation;
-
-
 }
 
 /// <summary>
@@ -66,20 +78,23 @@ public sealed class LlmStep<TIn, TOut>(
     LlmProviderConfig profile,
     Func<TIn, PipelineContext, Task<string>> promptBuilder,
     string? systemPrompt = null,
-    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null)
+    List<ITool>? tools = null,
+    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null,
+    int maxToolIterations = 5,
+    List<IStreamingTagHandler>? streamingHandlers = null)
     : BaseLlmStep<TIn, TOut>(
         llmService,
         name,
         profile,
         promptBuilder,
         systemPrompt != null ? (_, _) => Task.FromResult(systemPrompt) : null,
-        null, // tools
-        resultValidator)
+        tools,
+        resultValidator,
+        maxToolIterations,
+        streamingHandlers)
     where TIn : StepResult
     where TOut : LlmStepResult
 {
     protected override ConversationContext GetConversationContext(PipelineContext context)
         => context.Conversation;
-
 }
-

@@ -24,7 +24,10 @@ public abstract class StepBase(string name, Type inputType, Type outputType) : I
     public Type InputType { get; protected set; } = inputType;
     public Type OutputType { get; protected set; } = outputType;
     protected ILogger Logger => _logger ??= Pipeline.LoggerFactory.CreateLogger(GetType());
-
+    /// <summary>
+    /// Optional timeout for this step. If null, uses Pipeline.DefaultStepTimeout.
+    /// </summary>
+    public virtual TimeSpan? Timeout { get; set; }
     protected Type ValueType => _activatorInfo.Value.ValueType;
     protected JsonSchema? Schema => _activatorInfo.Value.JsonSchema;
     protected IStepResult CreateResult(object? value, IStepError? error = null)

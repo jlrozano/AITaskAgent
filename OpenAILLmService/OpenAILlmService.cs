@@ -1,5 +1,6 @@
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
+using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Models;
 using AITaskAgent.LLM.Support;
 using AITaskAgent.Resilience;
@@ -76,7 +77,7 @@ public sealed class OpenAILlmService : ILlmService
         var clientOptions = new OpenAIClientOptions()
         {
             Endpoint = new Uri(profile.BaseUrl),
-            NetworkTimeout = TimeSpan.FromMinutes(5)
+            NetworkTimeout = TimeSpan.FromMinutes(30)
         };
 
         var newClient = new OpenAIClient(new ApiKeyCredential(profile.ApiKey), clientOptions);
@@ -118,9 +119,34 @@ public sealed class OpenAILlmService : ILlmService
         {
             try
             {
-                var completion = await chatClient.CompleteChatAsync(chatMessages, chatOptions, cancellationToken);
+                ChatCompletion response;
+                try
+                {
+                    var completion = await chatClient.CompleteChatAsync(chatMessages, chatOptions, cancellationToken);
+                    response = completion.Value;
+                }
+                catch (ArgumentOutOfRangeException ex) when (ex.Message.Contains("ChatFinishReason"))
+                {
+                    // OpenRouter and other providers may return non-standard finish_reason values
+                    // that the OpenAI SDK doesn't recognize (e.g., "end_turn").
+                    // Extract the actual finish_reason value for logging
+                    var unknownReason = ex.ParamName ?? "UNKNOWN";
 
-                var response = completion.Value;
+                    _logger.LogError(
+                        "Provider returned unsupported finish_reason: '{UnknownReason}'. " +
+                        "This model may not be fully compatible with OpenAI SDK. " +
+                        "Exception: {ExceptionMessage}",
+                        unknownReason, ex.Message);
+
+                    // Since we can't get the actual response due to deserialization failure,
+                    // we need to make another call or handle this differently.
+                    // For now, throw a more informative error.
+                    throw new InvalidOperationException(
+                        $"Provider returned unsupported finish_reason: '{unknownReason}'. " +
+                        $"This model may not be fully compatible with OpenAI SDK. " +
+                        $"Consider using a different model or provider. Error: {ex.Message}", ex);
+                }
+
                 var usage = response.Usage;
 
                 // Extract content from ContentUpdate
@@ -134,6 +160,15 @@ public sealed class OpenAILlmService : ILlmService
                     }
                 }
 
+                var (finishReason, rawFinishReason) = FinishReasonExtensions.Parse(response.FinishReason.ToString());
+
+                // Log raw response for debugging (similar to GeminiLlmService)
+                _logger.LogDebug(
+                    "OpenAI raw response - Model: {Model}, FinishReason: {FinishReason}, ToolCalls: {ToolCallCount}",
+                    response.Model,
+                    response.FinishReason,
+                    response.ToolCalls?.Count ?? 0);
+
                 var llmResponse = new LlmResponse
                 {
                     Content = content,
@@ -141,7 +176,8 @@ public sealed class OpenAILlmService : ILlmService
                     PromptTokens = usage.InputTokenCount,
                     CompletionTokens = usage.OutputTokenCount,
                     CostUsd = CalculateCost(request.Profile, usage.InputTokenCount, usage.OutputTokenCount),
-                    FinishReason = response.FinishReason.ToString(),
+                    FinishReason = finishReason,
+                    RawFinishReason = rawFinishReason,
                     Model = response.Model,
                     ToolCalls = response.ToolCalls?.Select(tc => tc.ToFrameworkToolCall()).ToList(),
                     NativeResponse = response
@@ -255,7 +291,7 @@ public sealed class OpenAILlmService : ILlmService
                         {
                             Delta = string.Empty,
                             IsComplete = true,
-                            FinishReason = "stop"
+                            FinishReason = FinishReason.Stop
                         };
                     }
                     yield break;
@@ -278,21 +314,28 @@ public sealed class OpenAILlmService : ILlmService
         var contentUpdate = update.ContentUpdate.FirstOrDefault();
 
         // Safely get finish reason, handling unknown values from non-standard providers
-        string? finishReason = null;
+        FinishReason? finishReason = null;
+        string? rawFinishReason = null;
         var isComplete = false;
 
         if (update.FinishReason.HasValue)
         {
             try
             {
-                finishReason = update.FinishReason.Value.ToString();
+                (finishReason, rawFinishReason) = FinishReasonExtensions.Parse(update.FinishReason.Value.ToString());
                 isComplete = true;
             }
             catch (ArgumentOutOfRangeException ex) when (ex.Message.Contains("ChatFinishReason"))
             {
-                // Handle unknown finish reasons from non-standard providers (e.g., HuggingFace Router returning "abort")
-                _logger.LogWarning("Unknown finish reason encountered, treating as 'stop': {Message}", ex.Message);
-                finishReason = "stop";
+                // Handle unknown finish reasons from non-standard providers
+                var unknownReason = ex.ParamName ?? update.FinishReason?.ToString() ?? "UNKNOWN";
+
+                _logger.LogWarning(
+                    "Unknown finish_reason in stream: '{UnknownReason}', treating as 'stop'. Exception: {ExceptionMessage}",
+                    unknownReason, ex.Message);
+
+                finishReason = FinishReason.Other;
+                rawFinishReason = unknownReason;
                 isComplete = true;
             }
         }
@@ -304,6 +347,7 @@ public sealed class OpenAILlmService : ILlmService
             Delta = contentUpdate?.Text ?? string.Empty,
             IsComplete = isComplete,
             FinishReason = finishReason,
+            RawFinishReason = rawFinishReason,
             ToolCallUpdates = update.ToolCallUpdates?.Select(u => u.ToFrameworkToolCallUpdate()).ToList(),
             NativeChunk = update
         };
@@ -335,7 +379,12 @@ public sealed class OpenAILlmService : ILlmService
             catch (ArgumentOutOfRangeException ex) when (ex.Message.Contains("ChatFinishReason"))
             {
                 // Deserialization failed due to unknown finish reason from non-standard provider
-                _logger.LogWarning("Stream deserialization failed due to unknown finish reason (likely 'abort'), ending stream gracefully: {Message}", ex.Message);
+                var unknownReason = ex.ParamName ?? "UNKNOWN";
+
+                _logger.LogWarning(
+                    "Stream deserialization failed due to unknown finish_reason: '{UnknownReason}', ending stream gracefully. Exception: {ExceptionMessage}",
+                    unknownReason, ex.Message);
+
                 exceptionOccurred = true;
             }
 

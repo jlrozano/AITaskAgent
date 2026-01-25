@@ -26,7 +26,6 @@ public sealed class PipelineExecutor
     private readonly ILlmProviderResolver _profileResolver;
     private readonly IEventChannel _eventChannel;
     private readonly ILogger<PipelineExecutor> _logger;
-    private readonly IServiceProvider _serviceProvider;
     private readonly ContextStore _contextStore;
     private string? _lastStory;
 
@@ -38,7 +37,6 @@ public sealed class PipelineExecutor
         ILlmProviderResolver profileResolver,
         IEventChannel eventChannel,
         ILogger<PipelineExecutor> logger,
-        IServiceProvider serviceProvider,
         IConfiguration configuration,
         ContextStore contextStore)
     {
@@ -46,7 +44,6 @@ public sealed class PipelineExecutor
         _profileResolver = profileResolver;
         _eventChannel = eventChannel;
         _logger = logger;
-        _serviceProvider = serviceProvider;
         _contextStore = contextStore;
 
         var templatesPath = configuration["AITaskAgent:TemplatesPath"] ?? "templates";
@@ -89,15 +86,12 @@ public sealed class PipelineExecutor
                 context.Conversation.History.CopyFrom(existingHistory);
             }
 
-            // Register context broadcast middleware
-            var broadcastMiddleware = _serviceProvider.GetRequiredService<ContextBroadcastMiddleware>();
-
             // Build pipeline
             var pipeline = BuildPipeline(request.PipelineName);
 
             // Execute
             var input = new UserInputResult(request.Message);
-            var result = await Pipeline.ExecuteAsync(request.PipelineName, pipeline, input, context, [broadcastMiddleware]);
+            var result = await Pipeline.ExecuteAsync(request.PipelineName, pipeline, input, context);
 
             // Save updated history for next turn
             _contextStore.SaveHistory(conversationId, context.Conversation.History);

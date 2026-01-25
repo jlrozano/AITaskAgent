@@ -21,13 +21,19 @@ public abstract class LlmTool : ITool
     /// <summary>Gets the description of what the tool does.</summary>
     public abstract string Description { get; }
 
+    /// <summary>
+    /// Optional behavioral guidelines for the LLM on when/how to use this tool.
+    /// Override in derived classes to provide proactive usage hints.
+    /// </summary>
+    public virtual string? UsageGuidelines => null;
+
     /// <summary>Gets the JSON schema for the tool parameters.</summary>
     protected abstract BinaryData ParametersSchema { get; }
 
     /// <summary>
     /// Gets the provider-agnostic tool definition.
     /// </summary>
-    public ToolDefinition GetDefinition()
+    public virtual ToolDefinition GetDefinition()
     {
         return new ToolDefinition
         {
@@ -79,13 +85,14 @@ public abstract class LlmTool : ITool
 
         try
         {
-            result = await InternalExecuteAsync(argumentsJson, cancellationToken);
+            result = await InternalExecuteAsync(argumentsJson, context, logger, cancellationToken);
 
             stopwatch.Stop();
             activity?.SetStatus(ActivityStatusCode.Ok);
 
-            logger.LogDebug("Tool {ToolName} completed, result length: {Length} chars",
-                Name, result?.Length ?? 0);
+            // Log full result as requested (no truncation)
+            logger.LogDebug("Tool {ToolName} completed. Duration: {Duration}ms. Result:\n{Result}",
+                Name, stopwatch.Elapsed.TotalMilliseconds, result);
         }
         catch (Exception ex)
         {
@@ -139,6 +146,8 @@ public abstract class LlmTool : ITool
     /// </summary>
     protected abstract Task<string> InternalExecuteAsync(
         string argumentsJson,
+        PipelineContext context,
+        ILogger logger,
         CancellationToken cancellationToken);
 
     // ═══════════════════════════════════════════════════════════════════════════

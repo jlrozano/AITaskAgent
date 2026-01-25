@@ -1,3 +1,5 @@
+using AITaskAgent.LLM.Constants;
+
 namespace AITaskAgent.LLM.Models;
 
 /// <summary>
@@ -20,11 +22,17 @@ public sealed class LlmResponse
     /// <summary>Estimated cost in USD.</summary>
     public decimal? CostUsd { get; init; }
 
-    /// <summary>Reason the generation finished.</summary>
-    public string? FinishReason { get; init; }
+    /// <summary>Normalized reason why the generation finished.</summary>
+    public FinishReason? FinishReason { get; init; }
+
+    /// <summary>Provider-specific finish reason string.</summary>
+    public string? RawFinishReason { get; init; }
 
     /// <summary>Tool calls requested by the LLM.</summary>
     public List<ToolCall>? ToolCalls { get; init; }
+
+    /// <summary>All completion choices generated (if more than one requested).</summary>
+    public IReadOnlyList<LlmChoice> Choices { get; init; } = [];
 
     /// <summary>Model used for generation.</summary>
     public string? Model { get; init; }

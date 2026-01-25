@@ -36,6 +36,12 @@ public static partial class AITaskAgentConstants
 
         /// <summary>Event type for step routing decision.</summary>
         public const string StepRouting = "step.routing";
+
+        /// <summary>Event type for streaming tag started.</summary>
+        public const string TagStarted = "tag.started";
+
+        /// <summary>Event type for streaming tag completed.</summary>
+        public const string TagCompleted = "tag.completed";
     }
 }
 

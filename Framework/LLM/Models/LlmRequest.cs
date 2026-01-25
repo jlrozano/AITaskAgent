@@ -44,6 +44,15 @@ public sealed record LlmRequest
     /// <summary>Presence penalty (-2.0 to 2.0).</summary>
     public float? PresencePenalty { get; init; }
 
+    /// <summary>Enable reasoning/thinking output (o1, Gemini Thinking, DeepSeek R1). Overrides Profile.</summary>
+    public bool? EnableThinking { get; init; }
+
+    /// <summary>Budget for thinking tokens. Overrides Profile.</summary>
+    public int? ThinkingBudget { get; init; }
+
+    /// <summary>Number of chat completion choices to generate. Overrides Profile.</summary>
+    public int? ChoiceCount { get; init; }
+
     /// <summary>User identifier for tracking.</summary>
     public string? User { get; init; }
 

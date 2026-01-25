@@ -257,6 +257,39 @@ AITaskAgent adds these tags to traces:
 | `llm.provider` | Provider name |
 | `llm.tokens_used` | Total tokens |
 
+| `llm.tokens_used` | Total tokens |
+
+---
+
+## Structured Logging & Scopes
+
+The framework leverages **Structured Logging** with **Scopes** to automatically tag log entries with context, even if those logs occur deep within injected services.
+
+### Automatic Pipeline Scope
+
+Every execution of `IStep` is automatically wrapped in a Logging Scope containing:
+
+- **`Step`**: Name of the currently executing step (e.g., "SchemaValidator").
+- **`Path`**: Hierarchical execution path (e.g., "MainPipeline/Router/SalesPipeline").
+- **`CorrelationId`**: The global trace ID.
+
+### Benefit: Independent Step Logging
+
+This architecture allows you to isolate logs for a specific logical step without needing to pass `ILogger` manually through your entire call stack.
+
+**Example: Filter logs for "SchemaValidator" step (Serilog):**
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .Filter.ByIncludingOnly(logEvent => 
+        logEvent.Properties.ContainsKey("Step") && 
+        logEvent.Properties["Step"].ToString().Contains("SchemaValidator"))
+    .CreateLogger();
+```
+
+Use `ILogger<T>` in your middlewares and services normally. The framework ensures their output is correctly tagged with the active Step context.
+
 ---
 
 ## Full Example

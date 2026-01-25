@@ -66,9 +66,37 @@ public sealed class LlmResponse
     public int? PromptTokens { get; init; }
     public int? CompletionTokens { get; init; }
     public decimal? CostUsd { get; init; }
-    public string? FinishReason { get; init; }
+    public FinishReason? FinishReason { get; init; }
+    public string? RawFinishReason { get; init; }
     public List<ToolCall>? ToolCalls { get; init; }
     public string? Model { get; init; }
+}
+```
+
+---
+
+## Tool Base Classes
+
+### LlmTool
+
+Base class for tools requiring observability and context.
+
+```csharp
+public abstract class LlmTool : ITool, IEnrichableStep
+{
+    public abstract string Name { get; }
+    public abstract string Description { get; }
+    public virtual ToolDefinition GetDefinition();
+    
+    // Derived classes implement this instead of ExecuteAsync
+    protected abstract Task<string> InternalExecuteAsync(
+        string argumentsJson,
+        PipelineContext context,
+        ILogger logger,
+        CancellationToken cancellationToken);
+        
+    // Usage: Notify intermediate progress
+    // context.SendEventAsync(new StepProgressEvent(...));
 }
 ```
 

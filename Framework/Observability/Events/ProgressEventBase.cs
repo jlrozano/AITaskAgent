@@ -17,4 +17,7 @@ public abstract record ProgressEventBase : IProgressEvent
 
     /// <inheritdoc />
     public string? CorrelationId { get; init; }
+
+    /// <inheritdoc />
+    public bool SuppressFromUser { get; init; }
 }

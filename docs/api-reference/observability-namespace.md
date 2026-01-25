@@ -21,6 +21,25 @@ public class EventChannel : IEventChannel
 
 ---
 
+## Base Classes
+
+### ProgressEventBase
+
+Base record for all events, implementing `IProgressEvent`.
+
+```csharp
+public abstract record ProgressEventBase : IProgressEvent
+{
+    public required string StepName { get; init; }
+    public abstract string EventType { get; }
+    public DateTimeOffset Timestamp { get; init; }
+    public string? CorrelationId { get; init; }
+    public bool SuppressFromUser { get; init; } // Controls UI visibility
+}
+```
+
+---
+
 ## Event Types
 
 ### Pipeline Events
@@ -139,6 +158,7 @@ public sealed record ToolStartedEvent : ProgressEventBase
 {
     public override string EventType => "tool.started";
     public required string ToolName { get; init; }
+    public Dictionary<string, object>? AdditionalData { get; init; }
 }
 ```
 
@@ -152,6 +172,42 @@ public sealed record ToolCompletedEvent : ProgressEventBase
     public bool Success { get; init; }
     public TimeSpan Duration { get; init; }
     public string? ErrorMessage { get; init; }
+}
+```
+
+---
+
+### Artifact Generation Events (Streaming)
+
+> [!NOTE]
+> Unlike standard Tools (`ITool`), Streaming Tags (Artifacts) represent side-effects generated directly during the LLM streaming process (e.g., writing a file). They **do not** create a new turn in the conversation history and are "fire-and-forget" from the Agent's cognitive perspective. These events provide observability for those side-effects.
+
+#### TagStartedEvent
+
+```csharp
+public sealed record TagStartedEvent : ProgressEventBase
+{
+    public override string EventType => "tag.started";
+    /// <summary>
+    /// Name of the artifact being generated (e.g., "write_file", "svg_diagram").
+    /// </summary>
+    public required string TagName { get; init; }
+    public Dictionary<string, string>? Attributes { get; init; }
+    public Dictionary<string, object>? AdditionalData { get; init; }
+}
+```
+
+#### TagCompletedEvent
+
+```csharp
+public sealed record TagCompletedEvent : ProgressEventBase
+{
+    public override string EventType => "tag.completed";
+    public required string TagName { get; init; }
+    public bool Success { get; init; } = true;
+    public TimeSpan Duration { get; init; }
+    public string? ErrorMessage { get; init; }
+    public Dictionary<string, object>? AdditionalData { get; init; }
 }
 ```
 

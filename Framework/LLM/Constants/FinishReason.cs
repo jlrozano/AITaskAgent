@@ -45,7 +45,9 @@ public static class FinishReasonExtensions
             "stop" => (FinishReason.Stop, null),
             "length" => (FinishReason.Length, null),
             "tool_calls" => (FinishReason.ToolCalls, null),
+            "toolcalls" => (FinishReason.ToolCalls, null),  // SDK OpenAI devuelve PascalCase
             "content_filter" => (FinishReason.ContentFilter, null),
+            "contentfilter" => (FinishReason.ContentFilter, null),  // SDK OpenAI devuelve PascalCase
             _ => (FinishReason.Other, value)
         };
     }

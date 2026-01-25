@@ -21,7 +21,7 @@ public interface IStep
     /// Optional timeout for this step's execution.
     /// If null, uses Pipeline.DefaultStepTimeout.
     /// </summary>
-    TimeSpan? Timeout => TimeSpan.FromMinutes(1);
+    TimeSpan? Timeout => null;
     /// <summary>Executes the step with the given input and execution context.</summary>
     Task<IStepResult> ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken cancellationToken);
     /// <summary>

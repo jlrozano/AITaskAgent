@@ -15,6 +15,13 @@ public interface ITool
     /// <summary>Gets the description of what the tool does.</summary>
     string Description { get; }
 
+    /// <summary>
+    /// Optional behavioral guidelines for the LLM on when/how to use this tool.
+    /// Injected into the system prompt to guide proactive tool usage.
+    /// Unlike Description (which goes in ToolDefinition), this provides behavioral context.
+    /// </summary>
+    string? UsageGuidelines => null;
+
     /// <summary>Gets the provider-agnostic tool definition.</summary>
     ToolDefinition GetDefinition();
 

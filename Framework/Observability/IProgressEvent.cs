@@ -16,5 +16,8 @@ public interface IProgressEvent
 
     /// <summary>Correlation ID for distributed tracing.</summary>
     string? CorrelationId { get; }
+
+    /// <summary>If true, event should not be shown to end users (only logging/debugging).</summary>
+    bool SuppressFromUser { get; }
 }
 

@@ -35,6 +35,7 @@ VOLCADO_TOTAL_LITERAL_CONTEXTO.zip
 .editorconfig
 .agent/
 .trae/
+VOLCADO_TOTAL_LITERAL_CONTEXTO
 
 Samples/PipelineVisualizer/logs/
 Samples/AdvancedLlmPipeline/bin/
@@ -49,3 +50,18 @@ Samples/AdvancedLlmPipeline/conversations/
 Thumbs.db
 Desktop.ini
 .DS_Store
+Framework/Core/ANALISIS_Abstractions.md
+Framework/Core/ANALISIS_Base.md
+Framework/Core/ANALISIS_Constants.md
+Framework/Core/ANALISIS_Execution.md
+Framework/Core/ANALISIS_StepResults.md
+Framework/Core/ANALISIS_Steps.md
+Framework/Core/RESUMEN_FINAL.md
+analisis_abstractions.md
+analisis_framework_core.md
+analisis_models.md
+analisis_stepresults.md
+analisis.md
+GeminiAnalisis.md
+Recovering Lost Enrichment Features.md
+Samples/FileToolsTestApp/logs/events.jsonl

@@ -51,6 +51,15 @@ public sealed class LlmProviderConfig
     /// <summary>Presence penalty (-2.0 - 2.0).</summary>
     public float? PresencePenalty { get; init; }
 
+    /// <summary>Enable reasoning/thinking output (o1, Gemini Thinking, DeepSeek R1). Overrides Profile.</summary>
+    public bool? EnableThinking { get; init; }
+
+    /// <summary>Budget for thinking tokens. Overrides Profile.</summary>
+    public int? ThinkingBudget { get; init; }
+
+    /// <summary>Number of chat completion choices to generate for each input message.</summary>
+    public int? ChoiceCount { get; init; }
+
     // Pricing configuration
 
     /// <summary>
@@ -85,4 +94,5 @@ public sealed class LlmProviderConfig
     /// Determines whether to use json_object, json_schema, or prompt injection.
     /// </summary>
     public JsonResponseCapability JsonCapability { get; init; } = JsonResponseCapability.None;
+
 }

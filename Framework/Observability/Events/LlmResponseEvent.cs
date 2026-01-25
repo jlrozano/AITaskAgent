@@ -24,6 +24,9 @@ public sealed record LlmResponseEvent : ProgressEventBase
     /// </summary>
     public string? RawFinishReason { get; init; }
 
+    /// <summary>Whether this chunk is internal thinking/reasoning content.</summary>
+    public bool IsThinking { get; init; }
+
     /// <summary>Total tokens used (only set on final response).</summary>
     public int TokensUsed { get; init; }
 
