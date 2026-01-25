@@ -1653,6 +1653,16 @@ Tool: get_current_time
 [LLM sees result and continues reasoning]
 ```
 
+### 10.3 Implementation Providers
+
+The framework supports pluggable LLM backends:
+- **`OpenAILLMService`**: Standard OpenAI API integration.
+- **`GeminiLlmService`**: Native Google GenAI SDK integration. Supports:
+  - **Context Caching**: Reduce costs for long prompts.
+  - **Google Grounding**: Search-augmented responses.
+  - **Thinking Budget**: Control reasoning depth (Gemini 2.0).
+
+
 ### 10.3 Common Tool Types
 
 **1. Information Retrieval**

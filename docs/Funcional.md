@@ -2234,6 +2234,15 @@ SendAsync(new ToolCompletedEvent(...))
     > *Nota: Los artefactos (e.g., escritura de archivos xml) son side-effects generados durante el streaming y no cuentan como turnos de conversación.*
 5. **Streaming**: `ContentDeltaEvent` (tokens individuales para efecto máquina de escribir).
 
+### 11.4 Proveedores de Implementación
+
+El framework es agnóstico del proveedor LLM:
+- **`OpenAILLMService`**: Integración estándar OpenAI.
+- **`GeminiLlmService`**: Integración nativa Google GenAI SDK. Soporta:
+  - **Context Caching**: Optimización de costos.
+  - **Google Grounding**: Búsqueda en Google integrada.
+  - **Thinking models**: Presupuesto de razonamiento (Gemini 2.0).
+
 **Ventajas:**
 
 1. **Non-blocking**: La escritura en el canal es inmediata; el procesamiento es background.
