@@ -1,4 +1,4 @@
-namespace AITaskAgent.FileTools;
+namespace FileTools;
 
 public static class FileToolsConfiguration
 {
@@ -8,3 +8,4 @@ public static class FileToolsConfiguration
     /// </summary>
     public static string? RootDirectory { get; set; }
 }
+

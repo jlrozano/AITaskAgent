@@ -182,6 +182,23 @@ public sealed record ToolCompletedEvent : ProgressEventBase
 > [!NOTE]
 > Unlike standard Tools (`ITool`), Streaming Tags (Artifacts) represent side-effects generated directly during the LLM streaming process (e.g., writing a file). They **do not** create a new turn in the conversation history and are "fire-and-forget" from the Agent's cognitive perspective. These events provide observability for those side-effects.
 
+### System Prompt Injection
+
+When Streaming Tags are enabled, the Framework automatically enriches the System Prompt to instruct the LLM on how to generate these artifacts. This ensures the model uses the correct XML syntax without manual user prompting.
+
+**Injected Instruction Example:**
+```markdown
+## Available Streaming Actions
+You can perform the following actions inline:
+
+- **Create files**: Use <write_file path="relative/path.md">content</write_file>
+
+IMPORTANT:
+- Content inside tags will NOT appear in conversation history
+- Only a file reference will be added: [File: path/to/file.md]
+- If you need to verify the content later, use view_file tool
+```
+
 #### TagStartedEvent
 
 ```csharp

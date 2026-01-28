@@ -10,7 +10,6 @@ using Newtonsoft.Json.Linq;
 
 /// <summary>
 /// A step that executes JavaScript code to transform or process data.
-/// Equivalent to BRMS JsScriptRule/JsScriptNormalizer.
 /// </summary>
 [StepId("JsScript")]
 [StepCategory("Script")]
