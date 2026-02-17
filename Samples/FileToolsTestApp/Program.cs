@@ -8,19 +8,18 @@ using AITaskAgent.FileTools.Streaming;
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
 using AITaskAgent.LLM.Constants;
-using AITaskAgent.LLM.Results;
 using AITaskAgent.LLM.Steps;
 using AITaskAgent.LLM.Streaming;
 using AITaskAgent.LLM.Tools.Abstractions;
 using AITaskAgent.Observability;
 using AITaskAgent.Observability.Events;
+using FileTools;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
 using Serilog;
-using Serilog.Events;
 
 namespace FileToolsTestApp;
 

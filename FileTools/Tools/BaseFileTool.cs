@@ -1,9 +1,7 @@
-using System.Diagnostics;
 using AITaskAgent.Core.Models;
-using AITaskAgent.LLM.Models;
-using AITaskAgent.LLM.Tools.Abstractions;
 using AITaskAgent.LLM.Tools.Base;
 using AITaskAgent.Observability.Events;
+using FileTools;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
@@ -180,7 +178,7 @@ public abstract partial class BaseFileTool : LlmTool
             var parameters = constructor.GetParameters();
             var args = new object?[parameters.Length];
 
-            for (int i = 0; i < parameters.Length; i++)
+            for (var i = 0; i < parameters.Length; i++)
             {
                 var paramName = parameters[i].Name!;
 
@@ -313,7 +311,7 @@ public abstract partial class BaseFileTool : LlmTool
     /// </summary>
     protected static string ResolvePath(string? path)
     {
-        string root = string.IsNullOrWhiteSpace(FileToolsConfiguration.RootDirectory)
+        var root = string.IsNullOrWhiteSpace(FileToolsConfiguration.RootDirectory)
             ? AppContext.BaseDirectory
             : FileToolsConfiguration.RootDirectory;
 
