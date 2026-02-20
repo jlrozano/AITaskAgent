@@ -65,3 +65,6 @@ analisis.md
 GeminiAnalisis.md
 Recovering Lost Enrichment Features.md
 Samples/FileToolsTestApp/logs/events.jsonl
+
+# Worktrees
+.worktrees/
