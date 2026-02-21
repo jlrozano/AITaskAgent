@@ -1,4 +1,5 @@
 using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Models;
 using AITaskAgent.Core.StepResults;
 using System.ComponentModel;
 
@@ -52,7 +53,7 @@ public sealed class IntentionResult<TEnum>(IStep step, Intention<TEnum>? value) 
 {
     public Enum Options => throw new NotImplementedException();
 
-    public override Task<(bool IsValid, string? Error)> ValidateAsync()
+    public override Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
     {
         if (Value == null)
         {

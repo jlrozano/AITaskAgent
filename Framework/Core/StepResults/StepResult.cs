@@ -1,4 +1,5 @@
 using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Models;
 using System.Reflection;
 
 namespace AITaskAgent.Core.StepResults;
@@ -24,7 +25,7 @@ public abstract class StepResult(IStep step, object? value = null) : IStepResult
 
 
     /// <summary>Validates the result content. Override for custom validation.</summary>
-    public virtual Task<(bool IsValid, string? Error)> ValidateAsync()
+    public virtual Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
     {
         return Task.FromResult((true, (string?)null));
     }

@@ -10,8 +10,7 @@ public sealed class LlmProvidersConfig
     /// Available LLM profiles.
     /// Key = profile name, Value = profile configuration.
     /// </summary>
-    public Dictionary<string, LlmProviderConfig> Providers { get; init; } = [];
-
+    public Dictionary<string, LlmProviderConfig> Providers { get; init; } = new Dictionary<string, LlmProviderConfig>(StringComparer.InvariantCultureIgnoreCase);
     /// <summary>
     /// Default profile name.
     /// Used when no profile is explicitly specified.

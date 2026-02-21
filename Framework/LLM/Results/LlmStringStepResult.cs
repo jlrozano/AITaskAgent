@@ -1,4 +1,5 @@
 using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
 
 namespace AITaskAgent.LLM.Results;
@@ -12,7 +13,7 @@ public sealed class LlmStringStepResult(IStep step) : LlmStepResult<string>(step
     public string? Content { get => Value; init => Value = value; }
     public List<ToolCall>? ToolCalls { get; init; }
 
-    public override Task<(bool IsValid, string? Error)> ValidateAsync()
+    public override Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
     {
         // Valid if either Content is present OR ToolCalls are present
         var hasContent = !string.IsNullOrEmpty(Content);

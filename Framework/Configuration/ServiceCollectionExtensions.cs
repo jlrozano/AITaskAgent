@@ -62,12 +62,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IStepTracer, ConsoleStepTracer>();
 
         // Observability - Event Channel
+        services.AddOptions<EventChannelOptions>()
+            .Configure<IOptions<AITaskAgentOptions>>((eventOptions, agentOptions) =>
+            {
+                eventOptions.EventLogLevel = agentOptions.Value.Observability.EventLogLevel;
+                eventOptions.ChannelCapacity = agentOptions.Value.Observability.EventChannelCapacity;
+            });
+
         services.AddSingleton<IEventChannel, EventChannel>();
-        services.PostConfigure<EventChannelOptions>(options =>
-        {
-            // EventLogLevel will be set from AITaskAgentOptions in EventChannel constructor
-            // Default is already set in ObservabilityOptions
-        });
 
         // Pipeline Context Factory
         services.AddSingleton(sp =>

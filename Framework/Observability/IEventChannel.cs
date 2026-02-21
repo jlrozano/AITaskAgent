@@ -1,3 +1,5 @@
+using System.Threading.Channels;
+
 namespace AITaskAgent.Observability;
 
 /// <summary>
@@ -15,5 +17,14 @@ public interface IEventChannel
     /// <param name="cancellationToken">Cancellation token.</param>
     Task SendAsync<TEvent>(TEvent progressEvent, CancellationToken cancellationToken = default)
         where TEvent : IProgressEvent;
-}
 
+    /// <summary>
+    /// Subscribes to receive all events. Returns a channel reader for async enumeration.
+    /// </summary>
+    ChannelReader<IProgressEvent> Subscribe(int capacity = 100);
+
+    /// <summary>
+    /// Creates a subscription that can be disposed to unsubscribe.
+    /// </summary>
+    IEventSubscription CreateSubscription(int capacity = 100);
+}

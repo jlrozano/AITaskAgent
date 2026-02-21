@@ -1,6 +1,7 @@
 using AITaskAgent.Core;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Base;
+using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
 using AITaskAgent.LLM.Abstractions;
@@ -14,6 +15,7 @@ using AITaskAgent.LLM.Support;
 using AITaskAgent.LLM.Tools.Abstractions;
 using AITaskAgent.Observability.Events;
 using AITaskAgent.Support.JSON;
+using AITaskAgent.Support.Template;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using NJsonSchema;
@@ -23,6 +25,36 @@ using System.Text.RegularExpressions;
 
 namespace AITaskAgent.LLM.Steps;
 
+
+/// <summary>
+/// Non-generic base for LLM steps. Holds the LLM service, profile, and optional template provider.
+/// Exposes InputType/OutputType with internal set so the YAML pipeline factory can inject types post-construction.
+/// </summary>
+public abstract class BaseLlmStep(
+    ILlmService llmService,
+    string name,
+    Type inputType,
+    Type outputType,
+    LlmProviderConfig profile,
+    ITemplateProvider? templateProvider = null) : StepBase(name, inputType, outputType)
+{
+    protected readonly ILlmService LlmService = llmService ?? throw new ArgumentNullException(nameof(llmService));
+    protected readonly LlmProviderConfig Profile = profile;
+    protected readonly ITemplateProvider? TemplateProvider = templateProvider;
+
+    /// <summary>
+    /// Resolves a prompt string, expanding @templatename references via ITemplateProvider.
+    /// </summary>
+    protected Task<string> ResolvePromptAsync(string rawPrompt, PipelineContext context)
+    {
+        if (rawPrompt.StartsWith('@') && TemplateProvider != null)
+        {
+            var templateName = rawPrompt[1..];
+            return Task.FromResult(TemplateProvider.Render(templateName, context) ?? rawPrompt);
+        }
+        return Task.FromResult(rawPrompt);
+    }
+}
 
 /// <summary>
 /// Base class for steps that interact with LLMs.
@@ -38,12 +70,12 @@ public class BaseLlmStep<TIn, TOut>(
     List<ITool>? tools = null,
     Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null,
     int maxToolIterations = 5,
-    List<IStreamingTagHandler>? streamingHandlers = null
-    ) : TypedStep<TIn, TOut>(name)
+    List<IStreamingTagHandler>? streamingHandlers = null,
+    ITemplateProvider? templateProvider = null
+    ) : BaseLlmStep(llmService, name, typeof(TIn), typeof(TOut), profile, templateProvider), IStep<TIn, TOut>
     where TIn : IStepResult
     where TOut : ILlmStepResult
 {
-    private readonly ILlmService _llmService = llmService ?? throw new ArgumentNullException(nameof(llmService));
     private readonly Func<TOut, Task<(bool IsValid, string? Error)>>? _resultValidator = resultValidator;
     private readonly List<IStreamingTagHandler>? _streamingHandlers = streamingHandlers;
     private ConversationContext? _conversation = null;
@@ -64,6 +96,37 @@ public class BaseLlmStep<TIn, TOut>(
     /// Maximum tool execution iterations to prevent infinite loops.
     /// </summary>
     protected int MaxToolIterations { get; init; } = maxToolIterations;
+
+    // ── Typed helpers (mirror TypedStep<TIn,TOut> since it's no longer in the hierarchy) ──
+    new protected TOut CreateResult(object? value = null, IStepError? error = null)
+        => (TOut)base.CreateResult(value, error);
+
+    new protected TOut CreateErrorResult(string message, Exception? exception = null)
+        => (TOut)base.CreateErrorResult(message, exception);
+
+    // ── IStep<TIn,TOut> explicit implementations ──
+    Type IStep.InputType => typeof(TIn);
+    Type IStep.OutputType => typeof(TOut);
+
+    Task<TOut> IStep<TIn, TOut>.ExecuteAsync(TIn input, PipelineContext context, int Attempt, TOut? lastStepResult, CancellationToken cancellationToken)
+        => ExecuteAsync(input, context, Attempt, lastStepResult, cancellationToken);
+
+    // ── Untyped → typed dispatch (satisfies StepBase abstract) ──
+    protected override async Task<IStepResult> ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken cancellationToken)
+    {
+        if (input.GetType().IsAssignableTo(typeof(TIn)))
+            return await ExecuteAsync((TIn)input, context, attempt, (TOut?)lastStepResult, cancellationToken);
+        try
+        {
+            var newInput = StepResultFactory.CreateStepResult<TIn>(this, input.Value);
+            return await ExecuteAsync(newInput, context, attempt, (TOut?)lastStepResult, cancellationToken);
+        }
+        catch
+        {
+            throw new InvalidOperationException(
+                $"Step '{Name}' expected input type '{typeof(TIn).Name}' but received '{input.GetType().Name}'.");
+        }
+    }
 
     protected override Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {
@@ -108,9 +171,8 @@ public class BaseLlmStep<TIn, TOut>(
 
     /// <summary>
     /// Executes the LLM step with validation retry logic, bookmarks, and recursive tool execution.
-    /// Uses attempt and lastStepResult from TypedStep for retry state.
     /// </summary>
-    protected override async Task<TOut> ExecuteAsync(
+    protected async Task<TOut> ExecuteAsync(
         TIn input,
         PipelineContext context,
         int attempt,
@@ -433,7 +495,7 @@ public class BaseLlmStep<TIn, TOut>(
         // If streaming is not requested, invoke directly
         if (!request.UseStreaming)
         {
-            var response = await _llmService.InvokeAsync(request, cancellationToken);
+            var response = await LlmService.InvokeAsync(request, cancellationToken);
 
             // Process tags in non-streaming mode
             if (_streamingHandlers?.Count > 0 && !string.IsNullOrEmpty(response.Content))
@@ -493,7 +555,7 @@ public class BaseLlmStep<TIn, TOut>(
             ? new StreamingTagParser(_streamingHandlers)
             : null;
 
-        await foreach (var chunk in _llmService.InvokeStreamingAsync(request, cancellationToken))
+        await foreach (var chunk in LlmService.InvokeStreamingAsync(request, cancellationToken))
         {
             if (!string.IsNullOrEmpty(chunk.Delta))
             {
@@ -799,7 +861,8 @@ public class BaseLlmStep<TIn, TOut>(
             TopK = profile.TopK,
             FrequencyPenalty = profile.FrequencyPenalty,
             PresencePenalty = profile.PresencePenalty,
-            Tools = toolDefinitions
+            Tools = toolDefinitions,
+            UseStreaming = profile.UseStreaming
         };
 
         // Allow derived classes to customize request parameters (temperature, tokens, etc.)

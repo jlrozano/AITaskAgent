@@ -25,9 +25,9 @@ public sealed class LlmProviderResolver(LlmProvidersConfig config) : ILlmProvide
                 $"Available providers: {string.Join(", ", _config.Providers.Keys)}");
         }
 
-        var name = providerName ?? _config.DefaultProvider;
+        var name = (providerName?.ToLowerInvariant() ?? "default") == "default" ? _config.DefaultProvider : providerName;
 
-        if (!_config.Providers.TryGetValue(name, out var provider))
+        if (!_config.Providers.TryGetValue(name??"", out var provider))
         {
             throw new InvalidOperationException(
                 $"LLM provider '{name}' not found. Available providers: {string.Join(", ", _config.Providers.Keys)}");

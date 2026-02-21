@@ -60,6 +60,9 @@ public sealed class LlmProviderConfig
     /// <summary>Number of chat completion choices to generate for each input message.</summary>
     public int? ChoiceCount { get; init; }
 
+    /// <summary>Whether to use streaming mode for requests using this profile.</summary>
+    public bool UseStreaming { get; init; } = false;
+
     // Pricing configuration
 
     /// <summary>

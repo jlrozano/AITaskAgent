@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -22,8 +22,12 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="NJsonSchema" Version="11.0.0" />
+    <PackageReference Include="NJsonSchema" Version="11.*" />
+    <PackageReference Include="NJsonSchema.CodeGeneration.CSharp" Version="11.*" />
     <PackageReference Include="OpenAI" Version="2.7.0" />
+    <PackageReference Include="YamlDotNet" Version="13.0.1" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.*" />
+    <PackageReference Include="Microsoft.ClearScript.V8" Version="7.*" />
   </ItemGroup>
 
 </Project>

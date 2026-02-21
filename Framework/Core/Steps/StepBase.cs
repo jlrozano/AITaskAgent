@@ -21,8 +21,8 @@ public abstract class StepBase(string name, Type inputType, Type outputType) : I
 
     public string Name { get; } = name;
     public int MaxRetries { get; set; } = 3;
-    public Type InputType { get; protected set; } = inputType;
-    public Type OutputType { get; protected set; } = outputType;
+    public Type InputType { get; internal set; } = inputType;
+    public Type OutputType { get; internal set; } = outputType;
     protected ILogger Logger => _logger ??= Pipeline.LoggerFactory.CreateLogger(GetType());
     /// <summary>
     /// Optional timeout for this step. If null, uses Pipeline.DefaultStepTimeout.

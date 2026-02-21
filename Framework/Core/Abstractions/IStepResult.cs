@@ -1,3 +1,5 @@
+using AITaskAgent.Core.Models;
+
 namespace AITaskAgent.Core.Abstractions;
 
 /// <summary>
@@ -12,7 +14,8 @@ public interface IStepResult
     IStepError? Error { get; set; }
 
     /// <summary>Validates the result content.</summary>
-    Task<(bool IsValid, string? Error)> ValidateAsync();
+    Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
+        => Task.FromResult((true, (string?)null));
 
     /// <summary>Gets the step that produced this result.</summary>
     IStep Step { get; }

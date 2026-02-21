@@ -57,8 +57,8 @@ internal sealed class RetryMiddleware(ILogger<RetryMiddleware> logger) : IPipeli
                 continue; // Retry with feedback (StepBase tracks the error)
             }
 
-            // CASE 2: Structural validation (IStepResult.ValidateAsync)            
-            (var structValid, var structError) = await result.ValidateAsync();
+            // CASE 2: Structural validation (IStepResult.ValidateAsync)
+            (var structValid, var structError) = await result.ValidateAsync(context);
             if (!structValid)
             {
                 _logger.LogDebug("Structural validation failed on attempt {Attempt}/{MaxRetries}: {Error}",
