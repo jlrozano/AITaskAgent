@@ -1,73 +1,97 @@
-# YAML-Driven Dynamic Pipelines Design (Unified)
+# YAML-Driven Dynamic Pipelines Design (Comprehensive Unified Architecture)
 
-## Overview
-This document outlines the consolidated architectural design for the YAML-based pipeline orchestration engine in `AITaskFramework`. 
-The objective is to allow dynamic definition of both the pipeline execution flow (YAML) and the strongly-typed data contracts (JSON Schema) without requiring manual C# boilerplates, while maintaining the robustness of the native C# core engine.
+## 1. Executive Summary
+This document forms the technical specification and exhaustive design parameters for the YAML Pipeline Engine within `AITaskFramework`. Its primary objective is to empower users to define deeply complex LLM step orchestrations—and their corresponding strongly-typed data payloads—entirely via declarative configuration (YAML and JSON Schema).
 
-## Core Principles & Agreements
-
-### 1. No JObjects, Strict C# Types
-The execution engine requires strongly-typed objects implementing `IStepResult`. We will not pass generic `JObject` or `dynamic` instances between steps.
-
-### 2. Runtime Schema Compilation (AOT-like)
-*   **Definition:** Data contracts are defined strictly via standard JSON Schemas (`.json`).
-*   **Compilation:** A `SchemaCompiler` component reads these schemas at application startup.
-*   **Generation:** Using `NJsonSchema` and `Microsoft.CodeAnalysis.CSharp` (Roslyn), the framework generates pure C# DTO classes directly into a dynamic in-memory assembly. These generated classes natively implement `IStepResult`.
-*   **Caching:** To reduce startup overhead, a disk-cache mechanism can optionally store the compiled `.dll` if the source schemas haven't changed.
-
-### 3. JavaScript Validation (V8 ClearScript)
-Dynamic data payloads require validation that cannot be hardcoded in C#.
-*   The generated C# classes implement `Task<(bool IsValid, string? Error)> ValidateAsync()`.
-*   This method leverages the native **V8 JavaScript engine** via ClearScript (reusing patterns from `BRMS.StdRules.Modules.Scripting`).
-*   Users can attach JavaScript validation logic directly to their schemas, allowing Turing-complete validation rules evaluated dynamically during the pipeline run.
+This design fundamentally preserves the core execution robustness of `Pipeline.cs`, retaining strict statically-typed semantics, logging boundaries, retries, and validations while introducing a fully dynamic compilation and orchestration facade.
 
 ---
 
-## The YAML Orchestrator
-
-### 1. Modular Execution (DAG Style)
-*   **Structure:** The `pipeline.yaml` is written in a flat, Directed Acyclic Graph (DAG) style. Steps are declared in a root array and linked using `dependsOn` or `stepId` references.
-*   **Modularity:** Pipelines can be split across multiple YAML files organized in subfolders. The framework merges these "step groups" during initialization, allowing large pipelines to be composed of smaller, reusable fragments.
-*   **Validation:** Before execution, the orchestrator performs a semantic pass to detect circular dependencies (infinite loops) and validate that `OutputSchema` matches the next step's `InputSchema`.
-
-### 2. Native Deserialization (`YamlDotNet` & Tags)
-The framework natively deserializes the YAML directly into C# classes without creating custom "Proxy" deserializers.
-*   **Reflection Discovery:** The `YamlPipelineFactory` scans the AppDomain for classes implementing the `IYamlStep` interface and decorated with `[YamlStepTag("TagName")]`.
-*   **Tag Mapping:** It automatically calls `DeserializerBuilder.WithTagMapping("!TagName", typeof(TheClass))` for each discovered step type.
-*   **YAML Syntax:** In the YAML file, users specify the type natively using tags, for example: `!LlmStep`.
-
-### 3. `IYamlStep` Interface
-To ensure the deserializer can map the DAG, all YAML-exposed steps must implement `IYamlStep`, which strictly requires:
-```csharp
-public interface IYamlStep
-{
-    string StepId { get; init; } // Replaces generic names, acts as the global DAG node ID
-    string InputSchema { get; init; } // The name of the JSON Schema to use as TIn
-    string OutputSchema { get; init; } // The name of the JSON Schema to use as TOut
-}
-```
+## 2. Core Architectural Principles
+- **No `JObject` / No `dynamic` bypasses:** The underlying pipeline engine strictly requires all payloads to be C# objects that implement `IStepResult`. This rule enforces type-safety down to the core engine and ensures observability tools can serialize results reliably.
+- **AOT-like Dynamic Compilation at Boot:** JSON Schemas are translated to real C# IL (Intermediate Language) assemblies *strictly before* the pipeline runs first.
+- **Extensible Configuration via Composition & Inheritance:** YAML objects map to real C# classes (via `YamlDotNet` native tags `@!` and reflection scanning) interacting natively with the DI container.
 
 ---
 
-## Core Refactoring: Non-Generic `BaseLlmStep`
+## 3. Phase 1: Dynamic Data Compilation (The Schema Compiler)
 
-To support both the Code-First (C#) and YAML-First approaches cleanly, the native `BaseLlmStep` will be refactored to eliminate strict generic parameters at the base level.
+To satisfy the "No `JObject`" rule, the configuration engine must generate physical C# types at runtime that mirror the user's JSON Schemas.
 
-### 1. Types as constructor parameters
-Instead of `BaseLlmStep<TIn, TOut>`, the class becomes `BaseLlmStep` and receives `Type inputType` and `Type outputType` via its constructor.
-*   It operates entirely on `IStepResult` internally (handling retries, bookmarks, LLM tool logic, and validation).
+### 3.1. Compilation Mechanics
+1. **Source Definitions:** Users define contracts using strict JSON Schema standard files (e.g., `ClientFactura.json`).
+2. **Generation:** During application startup (or DI builder phase), a new `SchemaCompiler` component discovers these schemas.
+3. **Emit to Memory:** Using `NJsonSchema.CodeGeneration.CSharp` for generating the C# syntax trees and `Microsoft.CodeAnalysis` (Roslyn) for compilation, the code is emitted directly to an in-memory assembly (e.g., `AITaskAgent.DynamicTypes.dll`).
+4. **Caching Strategy:** To prevent high startup latency on massive volumes, a hash of the JSON Schemas can be checked against a cached `.dll` on disk. If the hash matches, the file is loaded directly via `AssemblyLoadContext` without invoking Roslyn.
 
-### 2. Dual Inheritance Approach
-*   **`TypedLlmStep<TIn, TOut> : BaseLlmStep`**: For C# developers. It receives strongly-typed delegates (`Func<TIn, string>`) and passes `typeof(TIn)` and `typeof(TOut)` to the base class.
-*   **`YamlLlmStep : BaseLlmStep, IYamlStep`**: For YAML integration. It exposes public string properties (`SystemPrompt`, `UserPrompt`, `InputSchema`, `OutputSchema`) compatible with `YamlDotNet`. 
-    *   Once deserialized, the factory reads the string properties (like `InputSchema`), resolves the compiled dynamic C# `Type` from the `SchemaCompiler`, and injects both the Types and the DI services (`ILogger`, `ILlmService`) into the `BaseLlmStep` constructor.
+### 3.2. JavaScript Validation via V8 (ClearScript)
+Because the types are dynamically generated, developers cannot easily write standard `IStepResult.ValidateAsync()` methods in C# for them.
 
-### 3. Template Resolution (`@` Prefix)
-All string properties in steps (like LLM Prompts) support a dynamic fallback convention:
-*   **Raw Text:** `prompt: "Resume esto..."` is processed literally.
-*   **Template Reference:** `prompt: "@prompts/extractor.md"` is intercepted. The framework uses the configured `ITemplateProvider` to load the file and render `{{ variables }}` based on the current `PipelineContext`.
+**The Solution:**
+*   The generated C# schema classes automatically implement `Task<(bool IsValid, string? Error)> ValidateAsync()`.
+*   Inside this method, the C# code invokes the **V8 JavaScript engine** via ClearScript (re-using patterns established in `BRMS.StdRules.Modules.Scripting`).
+*   **The Validation Context:** The JavaScript function does *not* just receive the current object. It receives the **entire `PipelineContext`**. This is critical because validation often depends on cross-step data (e.g., "Field X is only valid if Step 2 returned Y").
+*   The developer writes this JS directly into the JSON Schema configuration (or an accompanying JS file) and the compiler injects the script text into the generated C#.
 
-### 4. Security & Environment Configuration
-Environment-specific variables (like DB connections, API Keys, Base URLs) are **not** handled via YAML interpolation.
-*   The YAML strictly references a descriptive "Profile" name (`provider: "OpenAI_Prod"`).
-*   The framework resolves all secure credentials natively using the `ILlmProviderResolver.GetProvider(profileName)`, which expands environment variables securely outside of the YAML scope.
+---
+
+## 4. Phase 2: YAML Orchestration Engine
+
+### 4.1. DAG Modularity and Step Groups
+*   **Structure:** `pipeline.yaml` describes the flow as a Directed Acyclic Graph (DAG) instead of deep nesting.
+*   **Unique Step IDs:** Every single step declared has a robust `stepId`. This guarantees uniquely addressable nodes for dependencies (`dependsOn` arrays), and context lookups.
+*   **Inclusion/Fragments:** A pipeline can be split across multiple YAML files, allowing logical groupings inside subfolders. The YAML loader merges these fragments sequentially in-memory before passing the resolved structured string to `YamlDotNet`.
+
+### 4.2. Native Type Deserialization (The Interface Mapping)
+We avoid fragile generic parsing in YAML. We embrace `YamlDotNet` standard tag parsing:
+1.  ** `IYamlStep` Marker:** All steps expose `stepId`, `inputSchema`, and `outputSchema` explicitly as properties defined by `IYamlStep`.
+2.  **Reflection Auto-Discovery:** On boot, the factory grabs `AppDomain.CurrentDomain.GetAssemblies()` and finds all classes implementing `IYamlStep` annotated with `[YamlStepTag("LlmStep")]`.
+3.  **Deserializer Registration:** It automatically registers `DeserializerBuilder().WithTagMapping("!LlmStep", type)` without hardcoded switches.
+4.  **Property Binding:** Once instantiated by `YamlDotNet`, the framework has all properties matched cleanly using required init parameters.
+
+---
+
+## 5. Core Refactoring: The `BaseLlmStep` Evolution
+
+To allow these features to exist, the core architecture undergoes a critical shift to detach generic `<TIn, TOut>` compile-time enforcement from the base LLM operational logic.
+
+### 5.1. Moving to Constructor-Level Types
+The signature `BaseLlmStep<TIn, TOut>` is retired in favor of a standard `BaseLlmStep(Type inputType, Type outputType)`.
+*   The base class manages LLM communication, retry loops, streaming, metric event logic, and tool tracking by relying exclusively on downcasted `IStepResult`.
+
+### 5.2. The Dual-Headed Hierarchy
+From `BaseLlmStep`, two distinct families branch out:
+
+1.  **Code-First Users (`TypedLlmStep<TIn, TOut>`)**:
+    *   Designed for pure C# usage.
+    *   Constructors retain `Func<TIn, string>` strong delegates.
+    *   Injects `typeof(TIn)` and `typeof(TOut)` to the parent.
+2.  **YAML-First Users (`YamlLlmStep`)**:
+    *   Implements `IYamlStep`.
+    *   Configures everything via primitive string properties (`InputSchema`, `SystemPrompt`).
+    *   Uses a factory interception step post-deserialization to read the raw `InputSchema` string ("Factura"), fetch the matching dynamic `Type` from `SchemaCompiler`, and assign it to the Parent's `inputType`.
+
+---
+
+## 6. Dynamic Evaluation Capabilities
+
+### 6.1. Template Resolution (`@` Prefix Syntax)
+The framework supports late-binding interpolation syntax for prompt strings **and data payload mapping** using the `{}` handlebars syntax managed by `ITemplateProvider` + `JsonTemplateEngine`.
+
+*   **Syntax Format:** References are defined explicitly by a leading `@` followed strictly by the **template *name*** (e.g., `@extractor`, `@resumidor`), *not paths or extensions*.
+*   **Resolution:** The `ITemplateProvider.GetTemplate("extractor")` implementation handles searching standard directories, resolving the physical file or database record, and returning the base markdown.
+*   **Scope:** The engine renders against `PipelineContext` to inject parameters globally.
+    *   *Usage Example:* `prompt: "@extractor"` -> `ITemplateProvider` finds "extractor" -> engine resolves `{{ Context.StepResults['PasosPrevios'].Dato }}`.
+
+### 6.2. Security and Profiles (No Secrets in YAML)
+No tokens, URLs, or API keys will ever reside in the Pipeline YAML.
+*   **YAML Spec:** The YAML step only references profile names (e.g., `profile: "OpenAI_Advanced_Model"`).
+*   **Resolver Mechanics:** `ILlmProviderResolver.GetProvider(profileName)` is invoked by the Engine during the execution phase. This service extracts secrets from secure storage or standard environment variables safely before passing configs down to the `LLMService`.
+
+---
+
+## 7. Execution Guardrails & Pre-Validation
+
+The orchestration factory will implement a final fail-fast **Semantic Pass** over the assembled DAG before emitting the runtime Pipeline.
+1.  **Schema Mismatch Detection:** If Step 1 `outputSchema="A"` but its dependent Step 2 specifies `inputSchema="B"`, the system throws an instant ConfigurationException on load to prevent cryptic runtime casting errors down the line.
+2.  **Cycle Detection:** Circular `dependsOn` arrays are detected using a topological sort on boot.
