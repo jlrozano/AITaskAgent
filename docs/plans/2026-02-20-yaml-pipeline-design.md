@@ -7,15 +7,15 @@ This document outlines the architectural design for introducing YAML-based pipel
 
 The design employs a **Hybrid Factory Pattern** (inspired by `BRMS.Abstractions`), which separates the compilation of data contracts from the runtime orchestration of the pipeline.
 
-### Phase 1: Dynamic Data Compilation (AOT-like)
+### Phase 1: Dynamic Data Compilation (Runtime/AOT-like)
 1. **Input/Output Definitions:** Users define their data contracts using JSON Schemas (e.g., `ClientRequest.json`, `LlmResponse.json`).
-2. **Code Generation:** A `SchemaCompiler` component reads these schemas at application startup or via a builder command.
-3. **In-Memory Assembly:** Using `NJsonSchema` and `Microsoft.CodeAnalysis` (Roslyn), the framework generates pure C# DTO classes (e.g., `Dynamic_ClientRequest`) and compiles them into a dynamic assembly (e.g., `AITaskFramework.DynamicTypes.dll`). 
+2. **Code Generation:** A `SchemaCompiler` component reads these schemas strictly at runtime during application startup (or builder configuration).
+3. **In-Memory Assembly:** Using `NJsonSchema` and `Microsoft.CodeAnalysis` (Roslyn), the framework generates pure C# DTO classes (e.g., `Dynamic_ClientRequest`) and compiles them directly into a dynamic assembly in memory (e.g., `AITaskFramework.DynamicTypes.dll`). This avoids the need for external build steps and provides maximum agility. A disk-caching mechanism may be optionally introduced to skip recompilation of unchanged schemas on subsequent runs.
 4. **Result:** Strongly-typed classes exist at runtime, allowing the native pipeline engine to pass `IStepResult` objects securely between steps.
 
-### Phase 2: YAML Orchestration & Reflection Factory
-1. **Pipeline Definition:** Users define the execution flow in `pipeline.yaml` using aliases for existing "Factory-Friendly" step types (e.g., `type: "LlmStep"`).
-2. **Type Resolution:** A `YamlPipelineFactory` reads the YAML. It resolves the generic base type (e.g., `typeof(YamlLlmStep<,>)`) and uses reflection (`MakeGenericType`) to create a closed type using the dynamically generated schema classes (e.g., `typeof(YamlLlmStep<Dynamic_ClientRequest, Dynamic_LlmResponse>)`).
+### Phase 2: YAML Orchestration (DAG Style) & Reflection Factory
+1. **Pipeline Definition:** Users define the execution flow in `pipeline.yaml` using a flat Graph/DAG (Directed Acyclic Graph) structure. Steps are grouped at the root level and utilize properties like `dependsOn` or `inputFrom` to define execution order and dependencies, avoiding deep nesting and accommodating complex convergences.
+2. **Type Resolution:** A `YamlPipelineFactory` reads the YAML. It translates the aliases (e.g., `type: "LlmStep"`) into generic base types (e.g., `typeof(YamlLlmStep<,>)`) and uses reflection (`MakeGenericType`) to create a closed type using the dynamically generated schema classes.
 3. **Instantiation:** The factory uses `ActivatorUtilities` (Dependency Injection) to instantiate the closed type, automatically resolving core services (Logger, LLM Service, Template Provider).
 4. **Property Binding:** The factory uses `YamlDotNet` (or JSON deserialization) to map the `properties` block from the YAML directly onto the public properties of the newly instantiated step.
 
@@ -32,13 +32,13 @@ This class inherits from the native `BaseLlmStep<TIn, TOut>` but replaces hardco
 
 ## Data Routing and Context Access
 
-The YAML structure mirrors the tree-like execution model of `Pipeline.cs`, specifically the `NextSteps` paradigm.
+The YAML structure utilizes a DAG-style model, which the factory will translate back into the tree-like execution model of `Pipeline.cs` (`NextSteps`) under the hood, or evaluate continuously.
 
-### Implicit Data Flow (Parent to Child)
-Data flows naturally down the execution tree. The framework enforces that if Step B is in the `nextSteps` of Step A, Step B's `inputSchema` must be assignable from Step A's `outputSchema`. The native engine passes the `IStepResult` directly.
+### DAG Data Flow (Step Dependencies)
+Data flows based on explicit dependency declarations (e.g., `dependsOn`). The framework enforces that if Step B depends on Step A, Step B's `inputSchema` must be assignable from Step A's `outputSchema`. The native engine orchestrates the passing of `IStepResult` accordingly.
 
 ### Explicit Context Access (Cross-Branch)
-When a step needs data from a step that is not its direct parent (or needs data from the initial pipeline input), it leverages the native `PipelineContext.StepResults`.
+When a step needs data from a step that is not direct, it leverages the native `PipelineContext.StepResults`.
 * **Templating Power:** Within the markdown prompt templates (e.g., `user_resumidor.md`), the `JsonTemplateEngine` can evaluate expressions against the shared context.
 * **Syntax Example:** `{{ Context.StepResults['PasoExtraccion'].Input.TextoOriginal }}` allows any step to pull historical data safely.
 
