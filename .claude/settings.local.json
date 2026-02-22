@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(grep:*)",
+      "Bash(git:*)",
+      "Bash(cd \"C:/GeminiCli/CodeGui/AITaskFramework\" && dotnet build Framework/AITaskAgent.csproj 2>&1)",
+      "Bash(cd \"C:/GeminiCli/CodeGui/AITaskFramework\" && dotnet build Samples/YamlPipelineDemo/ 2>&2)",
+      "Bash(cd \"C:/GeminiCli/CodeGui/AITaskFramework\" && dotnet run --project Samples/YamlPipelineDemo/ 2>&1)",
+      "Bash(cd \"C:/GeminiCli/CodeGui/AITaskFramework\" && dotnet build Framework/AITaskAgent.csproj 2>&1 | tail -5 && dotnet run --project Samples/YamlPipelineDemo/ 2>&1)"
+    ]
+  }
+}

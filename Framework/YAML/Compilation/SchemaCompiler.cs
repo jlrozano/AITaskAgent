@@ -1,5 +1,7 @@
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
+using AITaskAgent.Core.StepResults;
+using AITaskAgent.LLM.Results;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.ClearScript.V8;
@@ -96,30 +98,40 @@ public class SchemaCompiler
 
     private static string EnrichGeneratedCode(string className, string rawCode, string validationBody)
     {
+        // NJsonSchema generates the POCO using `className` as the class name.
+        // We rename it to `{className}Data` so it stays a pure POCO (no IStepResult),
+        // and then generate a proper {className} result wrapper that extends StepResult<{className}Data>.
+        var dataClassName = $"{className}Data";
+        var renamedCode = RenameGeneratedClass(rawCode, className, dataClassName);
+
         var sb = new StringBuilder();
         sb.AppendLine("using AITaskAgent.Core.Abstractions;");
         sb.AppendLine("using AITaskAgent.Core.Models;");
+        sb.AppendLine("using AITaskAgent.LLM.Results;");
         sb.AppendLine("using System.Collections.Generic;");
         sb.AppendLine("using System.Threading.Tasks;");
         sb.AppendLine();
-        sb.AppendLine(rawCode);
 
-        // Inject IStepResult implementation into the generated class
-        // We append a partial implementation after the raw code
+        // 1. Pure POCO — output of NJsonSchema, renamed to {Name}Data
+        sb.AppendLine(renamedCode);
+
+        // 2. Result wrapper — extends LlmStepResult<{Name}Data> so that:
+        //    a) It implements ILlmStepResult (required by BaseLlmStep.FinalizeAsync hard cast)
+        //    b) The 1-param ctor is found by StepResultFactory.BuildInfo
         sb.AppendLine($$"""
             namespace AITaskAgent.YAML.Generated
             {
-                public partial class {{className}} : AITaskAgent.Core.Abstractions.IStepResult
+                public class {{className}} : AITaskAgent.LLM.Results.LlmStepResult<{{dataClassName}}>
                 {
-                    private AITaskAgent.Core.Abstractions.IStep? _step;
-                    public AITaskAgent.Core.Abstractions.IStep Step => _step!;
-                    internal void SetStep(AITaskAgent.Core.Abstractions.IStep step) => _step = step;
-                    public AITaskAgent.Core.Abstractions.IStepError? Error { get; set; }
-                    public bool HasError => Error != null;
-                    public object? Value => this;
-                    public System.Collections.Generic.List<AITaskAgent.Core.Abstractions.IStep> NextSteps { get; } = new();
+                    // 1-param ctor: found by StepResultFactory (CreateResult / CreateErrorResult)
+                    public {{className}}(AITaskAgent.Core.Abstractions.IStep step)
+                        : base(step) { }
 
-                    public Task<(bool IsValid, string? Error)> ValidateAsync(AITaskAgent.Core.Models.PipelineContext context)
+                    // 2-param ctor: used for direct construction with a value (e.g. Activator.CreateInstance)
+                    public {{className}}(AITaskAgent.Core.Abstractions.IStep step, {{dataClassName}}? value)
+                        : base(step) { Value = value; }
+
+                    public override Task<(bool IsValid, string? Error)> ValidateAsync(AITaskAgent.Core.Models.PipelineContext context)
                     {
                         {{validationBody}}
                     }
@@ -128,6 +140,20 @@ public class SchemaCompiler
             """);
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Renames the primary generated class from <paramref name="oldName"/> to <paramref name="newName"/>
+    /// inside the NJsonSchema-produced source code, leaving all other type references untouched.
+    /// </summary>
+    private static string RenameGeneratedClass(string rawCode, string oldName, string newName)
+    {
+        // NJsonSchema emits "public partial class {Name}" — replace the class declaration only.
+        // Using word-boundary replacement avoids touching property types that happen to share the name.
+        return System.Text.RegularExpressions.Regex.Replace(
+            rawCode,
+            $@"\bclass\s+{System.Text.RegularExpressions.Regex.Escape(oldName)}\b",
+            $"class {newName}");
     }
 
     private static async Task<Type> CompileAndLoadAsync(string typeName, string sourceCode)
@@ -179,6 +205,7 @@ public class SchemaCompiler
         // Framework references
         refs.Add(MetadataReference.CreateFromFile(typeof(IStepResult).Assembly.Location));
         refs.Add(MetadataReference.CreateFromFile(typeof(PipelineContext).Assembly.Location));
+        refs.Add(MetadataReference.CreateFromFile(typeof(LlmStepResult<>).Assembly.Location));
 
         // ClearScript V8 (only needed if JS validation is used, but include always)
         try
@@ -186,6 +213,10 @@ public class SchemaCompiler
             refs.Add(MetadataReference.CreateFromFile(typeof(V8ScriptEngine).Assembly.Location));
         }
         catch { /* optional */ }
+
+        // DataAnnotations (NJsonSchema generates [Required] etc.)
+        refs.Add(MetadataReference.CreateFromFile(
+            typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly.Location));
 
         // netstandard / System assemblies
         var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!;

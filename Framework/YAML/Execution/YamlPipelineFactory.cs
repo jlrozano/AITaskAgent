@@ -87,6 +87,7 @@ public sealed class YamlPipelineFactory(
             {
                 stepBase.InputType = schemaCompiler.GetCompiledType(step.InputSchema);
                 stepBase.OutputType = schemaCompiler.GetCompiledType(step.OutputSchema);
+                
             }
         }
 

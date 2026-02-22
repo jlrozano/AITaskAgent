@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "ClassificationOutput",
+  "properties": {
+    "content": { "type": "string" },
+    "type": { "type": "string" },
+    "confidence": { "type": "number" },
+    "reasoning": { "type": "string" }
+  },
+  "required": ["content", "type", "confidence"]
+}

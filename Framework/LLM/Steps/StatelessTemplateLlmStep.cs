@@ -21,16 +21,14 @@ public class StatelessTemplateLlmStep<TIn, TOut>(
     string name,
     LlmProviderConfig profile,
     string promptTemplateName,
-    string? systemPromptTemplateName = null,
-    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null)
+    string? systemPromptTemplateName = null)
     : TemplateLlmStep<TIn, TOut>(
         llmService,
         templateProvider,
         name,
         profile,
         promptTemplateName,
-        systemPromptTemplateName,
-        resultValidator)
+        systemPromptTemplateName)
     where TIn : IStepResult
     where TOut : ILlmStepResult
 {

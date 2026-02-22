@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "ResumenOutput",
+  "properties": {
+    "resumen": { "type": "string" },
+    "aprobado": { "type": "boolean" },
+    "motivo": { "type": "string" }
+  },
+  "required": ["resumen", "aprobado"]
+}

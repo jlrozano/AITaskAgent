@@ -1,0 +1,1520 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  
+  <!-- Mensajes de Configuración -->
+  <data name="CONFIG_InvalidConfiguration" xml:space="preserve">
+    <value>## ⚠️ Configuración Inválida Detectada
+
+**Descripción**: El sistema ha encontrado una configuración inválida que impide el funcionamiento correcto.
+
+**Causas Comunes**:
+- Parámetros de configuración requeridos faltantes
+- Tipos de datos incorrectos en los valores de configuración
+- Rutas de archivos o cadenas de conexión inválidas
+
+**Acciones Recomendadas**:
+1. Revisar el archivo de configuración en busca de errores de sintaxis
+2. Validar que todos los parámetros requeridos estén presentes
+3. Verificar la compatibilidad de tipos de datos
+4. Comprobar rutas de archivos y conectividad de red</value>
+    <comment>Mensaje de error de validación de configuración</comment>
+  </data>
+  
+  <data name="CONFIG_MissingRequiredParameter" xml:space="preserve">
+    <value>## 🔧 Parámetro de Configuración Requerido Faltante
+
+**Parámetro**: `{0}`
+
+**Descripción**: Un parámetro de configuración obligatorio está ausente en la configuración del sistema.
+
+**Impacto**: El sistema no puede inicializarse correctamente sin este parámetro.
+
+**Pasos de Resolución**:
+1. Localizar el archivo de configuración (típicamente `appsettings.json` o `web.config`)
+2. Agregar el parámetro faltante con el valor apropiado
+3. Reiniciar la aplicación para aplicar los cambios
+
+**Ejemplo de Configuración**:
+```json
+{
+  "{0}": "su_valor_aquí"
+}
+```</value>
+    <comment>Error de parámetro de configuración faltante</comment>
+  </data>
+
+  <!-- Mensajes de Error -->
+  <data name="ERROR_ValidationFailed" xml:space="preserve">
+    <value># Error de Validación
+
+**Código de Error:** `VALIDATION_001`
+
+**Descripción:** Los datos proporcionados fallaron las verificaciones de validación. Por favor revise los parámetros de entrada y asegúrese de que cumplan con los criterios requeridos.
+
+**Causas Comunes:**
+- Campos requeridos faltantes
+- Formato de datos inválido
+- Los datos exceden los límites permitidos
+
+**Resolución:** Verifique las reglas de validación y corrija los datos de entrada en consecuencia.</value>
+    <comment>Mensaje de error genérico de falla de validación con guía de solución de problemas</comment>
+  </data>
+  <data name="ERROR_InvalidSourceType" xml:space="preserve">
+    <value># Tipo de Objeto Fuente Inválido
+
+**Código de Error:** `TYPE_001`
+
+**Descripción:** El objeto fuente proporcionado para la transformación no es del tipo esperado. El sistema requiere un tipo de objeto específico para realizar la operación solicitada.
+
+**Tipo Esperado:** UserDto
+
+**Resolución:** Asegúrese de que el objeto fuente sea del tipo correcto antes de intentar la transformación.</value>
+    <comment>Mensaje de error para tipo de objeto fuente inválido en transformaciones</comment>
+  </data>
+
+  <!-- Claves de Configuración Faltantes -->
+  <data name="CONFIG_DefaultRuleEngine" xml:space="preserve">
+    <value>MotorDeReglasDefault</value>
+    <comment>Configuración del motor de reglas por defecto</comment>
+  </data>
+  
+  <data name="CONFIG_DefaultSchemaValidator" xml:space="preserve">
+    <value>ValidadorDeEsquemaDefault</value>
+    <comment>Configuración del validador de esquema por defecto</comment>
+  </data>
+  
+  <data name="CONFIG_DefaultTransformer" xml:space="preserve">
+    <value>TransformadorDefault</value>
+    <comment>Configuración del transformador por defecto</comment>
+  </data>
+  
+  <data name="CONFIG_DefaultNormalizer" xml:space="preserve">
+    <value>NormalizadorDefault</value>
+    <comment>Configuración del normalizador por defecto</comment>
+  </data>
+  
+  <data name="CONFIG_DefaultPluginLoader" xml:space="preserve">
+    <value>CargadorDePluginsDefault</value>
+    <comment>Configuración del cargador de plugins por defecto</comment>
+  </data>
+  
+  <data name="CONFIG_DefaultLogger" xml:space="preserve">
+    <value>LoggerDefault</value>
+    <comment>Configuración del logger por defecto</comment>
+  </data>
+  
+  <data name="CONFIG_DefaultCacheProvider" xml:space="preserve">
+    <value>ProveedorDeCacheDefault</value>
+    <comment>Configuración del proveedor de caché por defecto</comment>
+  </data>
+  
+  <data name="CONFIG_DefaultMetricsCollector" xml:space="preserve">
+    <value>RecolectorDeMetricasDefault</value>
+    <comment>Configuración del recolector de métricas por defecto</comment>
+  </data>
+
+  <data name="ERROR_RuleExecutionFailed" xml:space="preserve">
+    <value>## ❌ Falló la Ejecución de Regla
+
+**ID de Regla**: `{0}`
+**Detalles del Error**: {1}
+
+**Descripción**: La ejecución de la regla de negocio encontró un error inesperado y no pudo completarse exitosamente.
+
+**Posibles Causas**:
+- Formato de datos de entrada inválido
+- Dependencias o referencias faltantes
+- Excepciones de tiempo de ejecución en la lógica de la regla
+- Problemas de conectividad con la base de datos
+
+**Pasos de Solución de Problemas**:
+1. Verificar que los datos de entrada coincidan con el esquema esperado
+2. Revisar los registros del sistema para información detallada del error
+3. Validar la configuración de la regla y las dependencias
+4. Probar con un conjunto mínimo de datos para aislar el problema</value>
+    <comment>Mensaje de fallo en ejecución de regla</comment>
+  </data>
+
+  <data name="ERROR_InvalidJsonPath" xml:space="preserve">
+    <value>## 🔍 Expresión de Ruta JSON Inválida
+
+**Ruta**: `{0}`
+
+**Descripción**: La expresión de ruta JSON proporcionada está mal formada o no puede ser evaluada contra el documento JSON objetivo.
+
+**Problemas Comunes de Ruta JSON**:
+- **Errores de Sintaxis**: Corchetes, comillas u operadores faltantes
+- **Nombres de Propiedades Inválidos**: Propiedades inexistentes en la estructura JSON
+- **Indexación de Arrays Incorrecta**: Acceso a arrays fuera de límites
+- **Desajustes de Tipos**: Intentar operaciones de array en objetos
+
+**Ejemplos de Rutas JSON Válidas**:
+```
+$.user.name          // Acceder a la propiedad name del usuario
+$.items[0].price     // Precio del primer elemento
+$.products[?(@.active == true)]  // Filtrar productos activos
+```
+
+**Pasos de Validación**:
+1. Probar la expresión de ruta con un validador de rutas JSON
+2. Verificar que la estructura JSON objetivo coincida con las expectativas
+3. Revisar errores tipográficos en nombres de propiedades
+4. Asegurar el escape apropiado de caracteres especiales</value>
+    <comment>Error de validación de ruta JSON</comment>
+  </data>
+
+  <!-- Mensajes de Log -->
+  <data name="LOG_RuleExecutionStarted" xml:space="preserve">
+    <value>## 🚀 Ejecución de Regla Iniciada
+
+**Información de la Regla**:
+- **ID de Regla**: `{0}`
+- **Contexto de Ejecución**: {1}
+- **Marca de Tiempo**: {2}
+
+**Descripción**: El motor de reglas de negocio ha iniciado la ejecución de la regla especificada.
+
+**Puntos de Monitoreo**:
+- Estado de validación de datos de entrada
+- Duración del procesamiento de la regla
+- Progreso de generación de salida
+- Métricas de utilización de recursos
+
+**Próximos Pasos**: Monitorear el progreso de ejecución y validar los resultados al completarse.</value>
+    <comment>Mensaje de log de inicio de ejecución de regla</comment>
+  </data>
+
+  <data name="LOG_RuleExecutionCompleted" xml:space="preserve">
+    <value>## ✅ Ejecución de Regla Completada Exitosamente
+
+**Resumen de Ejecución**:
+- **ID de Regla**: `{0}`
+- **Duración**: {1}ms
+- **Registros Procesados**: {2}
+- **Estado**: Completado
+
+**Métricas de Rendimiento**:
+- Tasa de procesamiento: {3} registros/segundo
+- Uso de memoria: Dentro de parámetros normales
+- No se detectaron errores o advertencias
+
+**Resultado**: La ejecución de la regla se completó exitosamente con todas las validaciones aprobadas.</value>
+    <comment>Mensaje de log de finalización de ejecución de regla</comment>
+  </data>
+
+  <data name="LOG_TransformationApplied" xml:space="preserve">
+    <value>## 🔄 Transformación de Datos Aplicada
+
+**Detalles de la Transformación**:
+- **Tipo**: {0}
+- **Campo Origen**: `{1}`
+- **Campo Destino**: `{2}`
+- **Registros Afectados**: {3}
+
+**Descripción**: Se ha aplicado exitosamente una transformación de datos al conjunto de datos especificado.
+
+**Resumen de Transformación**:
+- Validación de entrada: ✓ Aprobada
+- Mapeo de datos: ✓ Completado
+- Validación de salida: ✓ Verificada
+- Rendimiento: Dentro de límites aceptables
+
+**Aseguramiento de Calidad**: Todos los datos transformados han sido validados contra las reglas de negocio y restricciones de integridad de datos.</value>
+    <comment>Mensaje de log de transformación de datos</comment>
+  </data>
+
+  <!-- Mensajes de Validación -->
+  <data name="VALIDATION_RequiredFieldMissing" xml:space="preserve">
+    <value>## 📋 Error de Validación de Campo Requerido
+
+**Nombre del Campo**: `{0}`
+
+**Descripción**: Un campo obligatorio está ausente o no contiene valor, impidiendo el procesamiento exitoso de los datos.
+
+**Requisitos de Validación**:
+- El campo debe contener un valor no nulo
+- Cadenas vacías y valores que solo contienen espacios en blanco no son aceptados
+- El campo debe cumplir con los requisitos de longitud mínima si aplica
+
+**Resolución**:
+1. Proporcionar un valor válido para el campo requerido
+2. Asegurar que el valor cumple con todos los criterios especificados
+3. Verificar la compatibilidad del tipo de datos
+
+**Impacto**: El procesamiento de datos no puede continuar hasta que este error de validación sea resuelto.</value>
+    <comment>Error de validación de campo requerido</comment>
+  </data>
+
+  <data name="VALIDATION_InvalidDataType" xml:space="preserve">
+    <value>## 🔢 Error de Validación de Tipo de Datos
+
+**Campo**: `{0}`
+**Tipo Esperado**: {1}
+**Tipo Recibido**: {2}
+
+**Descripción**: Los datos proporcionados no coinciden con el tipo de datos esperado para este campo.
+
+**Guías de Conversión de Tipos**:
+- **String**: Valores de texto, encerrados entre comillas
+- **Integer**: Números enteros sin puntos decimales
+- **Decimal**: Números con precisión decimal
+- **Boolean**: Solo valores `true` o `false`
+- **DateTime**: Formato ISO 8601 (YYYY-MM-DDTHH:mm:ss.sssZ)
+- **Array**: Colección de valores entre corchetes cuadrados
+
+**Soluciones Comunes**:
+1. Convertir el valor al tipo de datos correcto
+2. Actualizar la definición del campo si el cambio de tipo es intencional
+3. Usar métodos de análisis apropiados para tipos complejos</value>
+    <comment>Error de validación de tipo de datos</comment>
+  </data>
+
+  <!-- Mensajes de UI -->
+  <data name="UI_ProcessingInProgress" xml:space="preserve">
+    <value>## ⏳ Procesamiento en Progreso
+
+**Estado**: Su solicitud está siendo procesada
+
+**Descripción**: El sistema está ejecutando actualmente su solicitud. Este proceso puede tomar varios momentos dependiendo de la complejidad y volumen de datos siendo procesados.
+
+**Lo que está Ocurriendo**:
+- Validación y preprocesamiento de datos
+- Evaluación de reglas de negocio
+- Compilación y formateo de resultados
+- Verificaciones de aseguramiento de calidad
+
+**Por Favor Espere**: No actualice la página ni navegue a otra ubicación mientras el procesamiento está en progreso. Será notificado cuando la operación se complete.</value>
+    <comment>Mensaje de estado de procesamiento para UI</comment>
+  </data>
+
+  <data name="UI_OperationSuccessful" xml:space="preserve">
+    <value>## 🎉 Operación Completada Exitosamente
+
+**Resultado**: Su operación ha sido completada sin errores
+
+**Resumen**:
+- Todas las validaciones aprobadas ✓
+- Datos procesados exitosamente ✓
+- Resultados generados y verificados ✓
+- No se detectaron advertencias o problemas ✓
+
+**Próximos Pasos**: Ahora puede revisar los resultados o proceder con operaciones adicionales según sea necesario.
+
+**Soporte**: Si tiene preguntas sobre los resultados, por favor consulte la documentación o contacte al soporte técnico.</value>
+    <comment>Mensaje de éxito para operaciones de UI</comment>
+  </data>
+
+  <!-- Mensajes de Descripción de Esquema -->
+  <data name="CONFIG_DateTimeFormatDescription" xml:space="preserve">
+    <value>## 📅 Especificación de Formato de Fecha y Hora
+
+**Formato Requerido**: Estándar ISO 8601
+**Patrón**: `YYYY-MM-DDTHH:mm:ss.sssZ`
+
+**Descripción**: Este campo requiere un formato de fecha y hora estandarizado para procesamiento consistente a través de diferentes sistemas y zonas horarias.
+
+**Componentes del Formato**:
+- **YYYY**: Año de 4 dígitos (ej., 2024)
+- **MM**: Mes de 2 dígitos (01-12)
+- **DD**: Día de 2 dígitos (01-31)
+- **T**: Separador literal entre fecha y hora
+- **HH**: Hora de 2 dígitos en formato 24 horas (00-23)
+- **mm**: Minutos de 2 dígitos (00-59)
+- **ss**: Segundos de 2 dígitos (00-59)
+- **sss**: Milisegundos de 3 dígitos (000-999)
+- **Z**: Indicador de zona horaria UTC (o +/-HH:mm para zona horaria específica)
+
+**Ejemplos Válidos**:
+- `2024-01-15T14:30:00.000Z` (Hora UTC)
+- `2024-12-25T09:15:30.500+02:00` (Con desplazamiento de zona horaria)
+
+**Ejemplos Inválidos**:
+- `2024/01/15 14:30:00` (Separadores incorrectos)
+- `24-1-15T14:30` (Formato incompleto)
+- `2024-13-01T25:00:00.000Z` (Mes/hora inválidos)</value>
+    <comment>Descripción de formato de fecha y hora para validación de esquema</comment>
+  </data>
+
+  <data name="CONFIG_DateFormatDescription" xml:space="preserve">
+    <value>## 📆 Especificación de Formato de Fecha
+
+**Formato Requerido**: `YYYY-MM-DD`
+
+**Descripción**: Este campo acepta valores de fecha en el formato de fecha estandarizado ISO 8601, asegurando manejo consistente de fechas a través de todos los componentes del sistema.
+
+**Requisitos del Formato**:
+- **YYYY**: Año de 4 dígitos (1900-2100)
+- **MM**: Mes de 2 dígitos con cero inicial (01-12)
+- **DD**: Día de 2 dígitos con cero inicial (01-31)
+- **Separadores**: Se deben usar guiones (-) entre componentes
+
+**Reglas de Validación**:
+- Los años bisiestos se manejan automáticamente
+- Las fechas inválidas (ej., 30 de febrero) serán rechazadas
+- Las fechas futuras pueden estar restringidas según las reglas de negocio
+
+**Ejemplos Válidos**:
+- `2024-01-01` (Día de Año Nuevo 2024)
+- `2024-02-29` (Fecha de año bisiesto)
+- `2023-12-31` (Último día de 2023)
+
+**Ejemplos Inválidos**:
+- `2024/01/01` (Separadores incorrectos)
+- `24-1-1` (Formato incompleto)
+- `2024-13-01` (Mes inválido)
+- `2024-02-30` (Fecha inválida)</value>
+    <comment>Descripción de formato de fecha para validación de esquema</comment>
+  </data>
+
+  <data name="CONFIG_LengthConstraintDescription" xml:space="preserve">
+    <value>## 📏 Información de Restricción de Longitud
+
+**Detalles de Restricción**: {0}
+
+**Descripción**: Este campo tiene requisitos específicos de longitud que deben cumplirse para una validación y procesamiento exitoso de datos.
+
+**Tipos de Validación de Longitud**:
+- **Longitud Mínima**: El campo debe contener al menos el número especificado de caracteres
+- **Longitud Máxima**: El campo no puede exceder el límite de caracteres especificado
+- **Longitud Exacta**: El campo debe contener exactamente el número especificado de caracteres
+- **Rango**: La longitud del campo debe estar dentro de los límites mínimo y máximo especificados
+
+**Reglas de Conteo de Caracteres**:
+- Todos los caracteres visibles son contados
+- Los espacios y caracteres especiales se incluyen en el conteo
+- Los espacios en blanco al inicio y final pueden ser eliminados antes de la validación
+- Los caracteres Unicode cuentan como caracteres individuales
+
+**Comportamiento de Validación**:
+- Los valores que excedan la longitud máxima serán rechazados
+- Los valores por debajo de la longitud mínima serán rechazados
+- Los valores nulos o vacíos se manejan según los requisitos del campo
+
+**Mejores Prácticas**:
+- Eliminar espacios en blanco innecesarios antes del envío
+- Validar la longitud del lado del cliente para mejor experiencia de usuario
+- Considerar la codificación de caracteres al manejar texto internacional</value>
+    <comment>Descripción de restricción de longitud para validación de esquema</comment>
+  </data>
+
+  <data name="CONFIG_MinDateConstraintDescription" xml:space="preserve">
+    <value>## 📅 Restricción de Fecha Mínima
+
+**Fecha Mínima Permitida**: {0}
+
+**Descripción**: Este campo aplica una restricción de fecha mínima para asegurar la integridad de datos y el cumplimiento de reglas de negocio.
+
+**Propósito de la Restricción**:
+- Prevenir entrada de datos históricos más allá de límites aceptables
+- Asegurar consistencia de datos temporales
+- Soportar requisitos de procesos de negocio
+- Mantener estándares de calidad de datos
+
+**Reglas de Validación**:
+- Las fechas anteriores a la fecha mínima serán rechazadas
+- La fecha mínima es inclusiva (la fecha exacta está permitida)
+- Los componentes de tiempo son considerados si están presentes
+- La información de zona horaria es respetada en las comparaciones
+
+**Casos de Uso Comunes**:
+- **Fechas de Inicio de Contrato**: No pueden ser anteriores al establecimiento de la empresa
+- **Fechas de Nacimiento**: No pueden ser irrazonablemente lejanas en el pasado
+- **Fechas de Transacción**: No pueden preceder la implementación del sistema
+- **Fechas de Eventos**: No pueden ser anteriores a fechas de hitos relevantes
+
+**Manejo de Errores**: Si se proporciona una fecha anterior a la mínima, se retornará un error de validación claro con el rango de fechas aceptable.</value>
+    <comment>Descripción de restricción de fecha mínima</comment>
+  </data>
+
+  <data name="CONFIG_MaxDateConstraintDescription" xml:space="preserve">
+    <value>## 📅 Restricción de Fecha Máxima
+
+**Fecha Máxima Permitida**: {0}
+
+**Descripción**: Este campo aplica una restricción de fecha máxima para prevenir fechas futuras más allá de límites de negocio aceptables.
+
+**Propósito de la Restricción**:
+- Limitar la entrada de fechas futuras a marcos de tiempo razonables
+- Prevenir conflictos de programación y proyecciones irreales
+- Asegurar cumplimiento con horizontes de planificación de negocio
+- Mantener consistencia de datos temporales
+
+**Reglas de Validación**:
+- Las fechas posteriores a la fecha máxima serán rechazadas
+- La fecha máxima es inclusiva (la fecha exacta está permitida)
+- Los componentes de tiempo son considerados si están presentes
+- La información de zona horaria es respetada en las comparaciones
+
+**Casos de Uso Comunes**:
+- **Fechas Límite de Proyectos**: No pueden exceder el horizonte de planificación organizacional
+- **Fechas de Fin de Contrato**: No pueden extenderse más allá de los límites de política
+- **Programación de Citas**: No pueden ser programadas demasiado lejos en el futuro
+- **Expiración de Garantía**: No pueden exceder el período máximo de garantía
+
+**Consideraciones de Planificación**: Al establecer fechas futuras, considere los ciclos de negocio, disponibilidad de recursos y capacidad organizacional para compromisos a largo plazo.</value>
+    <comment>Descripción de restricción de fecha máxima</comment>
+  </data>
+
+  <!-- UI Messages and Descriptions -->
+  <data name="UI_Welcome" xml:space="preserve">
+    <value># Bienvenido a BRMS
+
+**Sistema de Gestión de Reglas de Negocio** - Una solución integral para gestionar y ejecutar reglas de negocio con capacidades avanzadas de validación y transformación.</value>
+    <comment>Mensaje de bienvenida mostrado a los usuarios al acceder al sistema BRMS</comment>
+  </data>
+  <data name="UI_RuleId_Description" xml:space="preserve">
+    <value>**Identificador de Regla** - Debe ser una de las reglas registradas en el sistema. Este identificador único se utiliza para localizar y ejecutar la regla de negocio específica.</value>
+    <comment>Descripción para la propiedad RuleId en la clase Rule</comment>
+  </data>
+  <data name="UI_PropertyPath_Description" xml:space="preserve">
+    <value>**Ruta JSON** - Especifica la ruta al elemento del modelo de datos que esta regla procesará. Utiliza sintaxis JSONPath para navegar a través de estructuras de datos complejas.</value>
+    <comment>Descripción para la propiedad PropertyPath en la clase Rule</comment>
+  </data>
+  <data name="UI_ErrorSeverityLevel_Description" xml:space="preserve">
+    <value>**Nivel de Severidad del Error** - Determina si las fallas de validación se reportarán como errores o incidencias. Esto afecta cómo el sistema maneja y escala los problemas.</value>
+    <comment>Descripción para la propiedad ErrorSeverityLevel en la clase Rule</comment>
+  </data>
+  <data name="UI_ErrorMessage_Description" xml:space="preserve">
+    <value>**Mensaje de Error Personalizado** - Mensaje opcional que se mostrará cuando esta regla falle la validación. Proporciona contexto específico sobre qué salió mal.</value>
+    <comment>Descripción para la propiedad ErrorMessage en la clase Rule</comment>
+  </data>
+  <data name="UI_MustNotifyChange_Description" xml:space="preserve">
+    <value>**Bandera de Notificación de Cambios** - Indica si el sistema debe notificar sobre los cambios realizados por este normalizador. Cuando está habilitado, todas las modificaciones serán rastreadas y reportadas.</value>
+    <comment>Descripción para la propiedad MustNotifyChange en la clase Normalizer</comment>
+  </data>
+  
+  <!-- Mensajes de Error Faltantes -->
+  <data name="ERROR_PluginLoadFailed" xml:space="preserve">
+    <value>## ❌ Falló la Carga del Plugin
+
+**Plugin**: `{0}`
+**Error**: {1}
+
+**Descripción**: El sistema falló al cargar el plugin especificado, lo que puede afectar la funcionalidad.
+
+**Posibles Causas**:
+- Archivo de plugin no encontrado o corrupto
+- Dependencias faltantes
+- Problemas de compatibilidad de versión
+- Restricciones de seguridad
+
+**Pasos de Resolución**:
+1. Verificar que el archivo del plugin existe y es accesible
+2. Comprobar que las dependencias del plugin están instaladas
+3. Validar la compatibilidad de versión del plugin
+4. Revisar los permisos de seguridad</value>
+    <comment>Mensaje de error de falla en carga de plugin</comment>
+  </data>
+  
+  <data name="ERROR_SchemaValidationFailed" xml:space="preserve">
+    <value>## 📋 Falló la Validación del Esquema
+
+**Esquema**: `{0}`
+**Error de Validación**: {1}
+
+**Descripción**: Los datos proporcionados no se ajustan a la estructura de esquema requerida.
+
+**Problemas Comunes**:
+- Propiedades requeridas faltantes
+- Tipos de datos inválidos
+- Violaciones de restricciones
+- Desajustes de formato
+
+**Resolución**:
+1. Revisar los requisitos del esquema
+2. Validar la estructura de datos
+3. Verificar tipos de datos y formatos
+4. Asegurar que todos los campos requeridos estén presentes</value>
+    <comment>Mensaje de error de falla en validación de esquema</comment>
+  </data>
+  
+  <data name="ERROR_TransformationFailed" xml:space="preserve">
+    <value>## 🔄 Falló la Transformación de Datos
+
+**Transformador**: `{0}`
+**Detalles del Error**: {1}
+
+**Descripción**: El proceso de transformación de datos encontró un error y no pudo completarse.
+
+**Posibles Causas**:
+- Formato de datos de origen inválido
+- Errores en las reglas de transformación
+- Definiciones de mapeo faltantes
+- Excepciones en tiempo de ejecución
+
+**Solución de Problemas**:
+1. Validar la estructura de datos de origen
+2. Verificar las reglas de transformación
+3. Revisar las configuraciones de mapeo
+4. Consultar los logs de error para detalles</value>
+    <comment>Mensaje de error de falla en transformación de datos</comment>
+  </data>
+  
+  <data name="ERROR_NormalizationFailed" xml:space="preserve">
+    <value>## 🔧 Falló la Normalización de Datos
+
+**Normalizador**: `{0}`
+**Error**: {1}
+
+**Descripción**: El proceso de normalización de datos falló al completarse exitosamente.
+
+**Impacto**: Los datos pueden no estar en el formato estandarizado esperado.
+
+**Pasos de Resolución**:
+1. Verificar la calidad de los datos de entrada
+2. Validar las reglas de normalización
+3. Revisar las configuraciones
+4. Probar con datos de muestra</value>
+    <comment>Mensaje de error de falla en normalización de datos</comment>
+  </data>
+  
+  <!-- Mensajes de Log Faltantes -->
+  <data name="LOG_PluginLoaded" xml:space="preserve">
+    <value>Plugin '{0}' cargado exitosamente desde '{1}'</value>
+    <comment>Mensaje de log de plugin cargado exitosamente</comment>
+  </data>
+  
+  <data name="LOG_PluginLoadFailed" xml:space="preserve">
+    <value>Falló al cargar el plugin '{0}': {1}</value>
+    <comment>Mensaje de log de falla en carga de plugin</comment>
+  </data>
+  
+  <data name="LOG_SchemaValidationStarted" xml:space="preserve">
+    <value>Iniciando validación de esquema para '{0}' usando esquema '{1}'</value>
+    <comment>Mensaje de log de validación de esquema iniciada</comment>
+  </data>
+  
+  <data name="LOG_SchemaValidationCompleted" xml:space="preserve">
+    <value>Validación de esquema completada para '{0}' - Resultado: {1}</value>
+    <comment>Mensaje de log de validación de esquema completada</comment>
+  </data>
+  
+  
+  <data name="LOG_NormalizationStarted" xml:space="preserve">
+    <value>Iniciando normalización de datos usando normalizador '{0}'</value>
+    <comment>Mensaje de log de normalización de datos iniciada</comment>
+  </data>
+  
+  <data name="LOG_NormalizationCompleted" xml:space="preserve">
+    <value>Normalización de datos completada exitosamente usando normalizador '{0}'</value>
+    <comment>Mensaje de log de normalización de datos completada</comment>
+  </data>
+  
+  <!-- Mensajes de Validación Faltantes -->
+  <data name="VALIDATION_PluginNotFound" xml:space="preserve">
+    <value>Plugin '{0}' no fue encontrado en la ubicación especificada</value>
+    <comment>Mensaje de validación de plugin no encontrado</comment>
+  </data>
+  
+  <data name="VALIDATION_InvalidPluginType" xml:space="preserve">
+    <value>Plugin '{0}' no implementa la interfaz requerida '{1}'</value>
+    <comment>Mensaje de validación de tipo de plugin inválido</comment>
+  </data>
+  
+  <data name="VALIDATION_SchemaNotFound" xml:space="preserve">
+    <value>Esquema '{0}' no fue encontrado en el registro de esquemas</value>
+    <comment>Mensaje de validación de esquema no encontrado</comment>
+  </data>
+  
+  <data name="VALIDATION_InvalidSchemaFormat" xml:space="preserve">
+    <value>Esquema '{0}' tiene un formato inválido: {1}</value>
+    <comment>Mensaje de validación de formato de esquema inválido</comment>
+  </data>
+  
+  <data name="VALIDATION_TransformerNotFound" xml:space="preserve">
+    <value>Transformador '{0}' no fue encontrado en el registro de transformadores</value>
+    <comment>Mensaje de validación de transformador no encontrado</comment>
+  </data>
+  
+  <data name="VALIDATION_InvalidTransformerConfiguration" xml:space="preserve">
+    <value>Transformador '{0}' tiene configuración inválida: {1}</value>
+    <comment>Mensaje de validación de configuración de transformador inválida</comment>
+  </data>
+  
+  <data name="VALIDATION_SchemaError" xml:space="preserve">
+    <value>## 📋 Error de Validación de Esquema
+
+**Esquema**: `{0}`
+**Campo**: `{1}`
+**Error**: {2}
+
+**Descripción**: Los datos proporcionados no cumplen con las reglas de validación del esquema especificado.
+
+**Problemas Comunes de Validación**:
+- **Campos Requeridos**: Propiedades obligatorias faltantes o vacías
+- **Tipos de Datos**: Valores que no coinciden con el tipo esperado
+- **Restricciones de Formato**: Patrones, longitudes o rangos inválidos
+- **Valores Permitidos**: Datos fuera del conjunto de valores aceptables
+
+**Pasos de Resolución**:
+1. Revisar la definición del esquema para entender los requisitos
+2. Validar que todos los campos requeridos estén presentes
+3. Verificar que los tipos de datos coincidan con las especificaciones
+4. Asegurar que los valores cumplan con las restricciones definidas
+
+**Impacto**: Los datos no pueden ser procesados hasta que se resuelvan todos los errores de validación del esquema.</value>
+    <comment>Mensaje de error de validación de esquema</comment>
+  </data>
+  <data name="VALIDATION_TransformationError_NullSourceValue" xml:space="preserve">
+    <value>Error de transformación: el valor de origen no puede ser nulo</value>
+    <comment>Mensaje de error cuando el valor de origen de la transformación es nulo</comment>
+  </data>
+  
+  <!-- Mensajes de Esquema Faltantes -->
+  <data name="SCHEMA_PluginDefinition" xml:space="preserve">
+    <value>Esquema de Definición de Plugin</value>
+    <comment>Nombre del esquema de definición de plugin</comment>
+  </data>
+  
+  <data name="SCHEMA_RuleDefinition" xml:space="preserve">
+    <value>Esquema de Definición de Regla</value>
+    <comment>Nombre del esquema de definición de regla</comment>
+  </data>
+  
+  <data name="SCHEMA_TransformationDefinition" xml:space="preserve">
+    <value>Esquema de Definición de Transformación</value>
+    <comment>Nombre del esquema de definición de transformación</comment>
+  </data>
+  
+  <data name="SCHEMA_ValidationDefinition" xml:space="preserve">
+    <value>Esquema de Definición de Validación</value>
+    <comment>Nombre del esquema de definición de validación</comment>
+  </data>
+  
+
+
+  <data name="LOG_NugetRepositoriesFound" xml:space="preserve">
+    <value>Repositorios NuGet encontrados: {Repositories}</value>
+    <comment>Mensaje de log con los repositorios NuGet encontrados</comment>
+  </data>
+  <data name="LOG_PluginCreationWithDiFailed" xml:space="preserve">
+    <value>Falló la creación del plugin con DI para el tipo {TypeName}: {ErrorMessage}</value>
+    <comment>Mensaje de log cuando falla la creación de plugin con inyección de dependencias</comment>
+  </data>
+  <data name="LOG_ServiceCollectionNotAvailable" xml:space="preserve">
+    <value>Colección de servicios no disponible para el registro de reglas del plugin</value>
+    <comment>Mensaje de log cuando la colección de servicios no está disponible</comment>
+  </data>
+  <data name="LOG_PluginRulesRegisteredSuccessfully" xml:space="preserve">
+    <value>Reglas del plugin registradas exitosamente para el ensamblado: {AssemblyName}</value>
+    <comment>Mensaje de log cuando las reglas del plugin se registran correctamente</comment>
+  </data>
+  <data name="LOG_PluginRulesRegistrationFailed" xml:space="preserve">
+    <value>Falló el registro de reglas del plugin para el ensamblado {AssemblyName}: {ErrorMessage}</value>
+    <comment>Mensaje de log cuando falla el registro de reglas del plugin</comment>
+  </data>
+  <data name="JsonPathNotFound" xml:space="preserve">
+    <value>Ruta JSON no encontrada: {JsonPath}</value>
+    <comment>Mensaje de log cuando no se encuentra la ruta JSON</comment>
+  </data>
+  <data name="JsonConversionError" xml:space="preserve">
+    <value>Error de conversión JSON: {Error}</value>
+    <comment>Mensaje de log cuando falla la conversión JSON</comment>
+  </data>
+  <data name="TypeConversionError" xml:space="preserve">
+    <value>Error de conversión de tipo de {SourceType} a {TargetType}: {Error}</value>
+    <comment>Mensaje de log cuando falla la conversión de tipo</comment>
+  </data>
+  <data name="ExecutingRule" xml:space="preserve">
+    <value>Ejecutando regla: {RuleName}</value>
+    <comment>Mensaje de log cuando inicia la ejecución de regla</comment>
+  </data>
+  <data name="RuleCompleted" xml:space="preserve">
+    <value>Regla completada: {RuleName} en {ExecutionTime}ms</value>
+    <comment>Mensaje de log cuando se completa la ejecución de regla</comment>
+  </data>
+  <data name="RuleFailed" xml:space="preserve">
+    <value>Regla falló: {RuleName} - {Error}</value>
+    <comment>Mensaje de log cuando falla la ejecución de regla</comment>
+  </data>
+  <data name="RuleSlowExecution" xml:space="preserve">
+    <value>Ejecución lenta de regla detectada: {RuleName} tomó {ExecutionTime}ms</value>
+    <comment>Mensaje de log cuando la ejecución de regla es lenta</comment>
+  </data>
+  <data name="RuleExecutionError" xml:space="preserve">
+    <value>Error de ejecución de regla: {RuleName} - {Error}</value>
+    <comment>Mensaje de log cuando la ejecución de regla encuentra un error</comment>
+  </data>
+  <data name="EmailDomainVerificationError" xml:space="preserve">
+    <value>Error de verificación de dominio de email para {Email}: {Error}</value>
+    <comment>Mensaje de log cuando falla la verificación de dominio de email</comment>
+  </data>
+  <data name="TransformationFailed" xml:space="preserve">
+    <value>Transformación falló: {TransformationName} - {Error}</value>
+    <comment>Mensaje de log cuando falla la transformación</comment>
+  </data>
+  <data name="CONFIG_ConfigurationSections" xml:space="preserve">
+    <value>ConfigurationSections</value>
+    <comment>Clave de secciones de configuración</comment>
+  </data>
+  <data name="CONFIG_BrmsNugetConfigEnv" xml:space="preserve">
+    <value>BRMS_NUGET_CONFIG</value>
+    <comment>Nombre de variable de entorno para configuración NuGet de BRMS</comment>
+  </data>
+  <data name="CONFIG_NugetConfig" xml:space="preserve">
+    <value>nuget.config</value>
+    <comment>Nombre del archivo de configuración NuGet</comment>
+  </data>
+  <data name="CONFIG_NugetLocal" xml:space="preserve">
+    <value>nuget-local</value>
+    <comment>Directorio de paquetes NuGet locales</comment>
+  </data>
+  <data name="CONFIG_NupkgPattern" xml:space="preserve">
+    <value>*.nupkg</value>
+    <comment>Patrón de archivos de paquetes NuGet</comment>
+  </data>
+  <data name="CONFIG_NetCoreApp" xml:space="preserve">
+    <value>netcoreapp</value>
+    <comment>Identificador de framework .NET Core App</comment>
+  </data>
+  <data name="CONFIG_Net" xml:space="preserve">
+    <value>net</value>
+    <comment>Identificador de framework .NET</comment>
+  </data>
+  <data name="CONFIG_DllExtension" xml:space="preserve">
+    <value>.dll</value>
+    <comment>Extensión de archivo de biblioteca de enlace dinámico</comment>
+  </data>
+  <data name="VALIDATION_MissingName" xml:space="preserve">
+    <value>El nombre es requerido y no puede estar vacío</value>
+    <comment>Mensaje de validación cuando falta el nombre</comment>
+  </data>
+  <data name="SCHEMA_DateTimeFormat" xml:space="preserve">
+    <value>date-time</value>
+    <comment>Formato JSON Schema para fecha-hora</comment>
+  </data>
+  <data name="SCHEMA_DateTimeDescription" xml:space="preserve">
+    <value>Fecha y hora en formato ISO 8601</value>
+    <comment>Descripción para formato de esquema fecha-hora</comment>
+  </data>
+  <data name="SCHEMA_DateFormat" xml:space="preserve">
+    <value>date</value>
+    <comment>Formato JSON Schema para fecha</comment>
+  </data>
+  <data name="SCHEMA_DateDescription" xml:space="preserve">
+    <value>Fecha en formato YYYY-MM-DD</value>
+    <comment>Descripción para formato de esquema fecha</comment>
+  </data>
+  <data name="SCHEMA_ValidValuesTemplate" xml:space="preserve">
+    <value>Valores válidos: {0}</value>
+    <comment>Plantilla para descripción de valores válidos</comment>
+  </data>
+  <data name="SCHEMA_ValueSeparator" xml:space="preserve">
+    <value>, </value>
+    <comment>Separador para valores de esquema</comment>
+  </data>
+  <data name="SCHEMA_MaximumDateTemplate" xml:space="preserve">
+    <value>Fecha máxima: {0}</value>
+    <comment>Plantilla para descripción de fecha máxima</comment>
+  </data>
+  <data name="SCHEMA_DescriptionSeparator" xml:space="preserve">
+    <value>. </value>
+    <comment>Separador para descripciones de esquema</comment>
+  </data>
+  <data name="SCHEMA_LengthTemplate" xml:space="preserve">
+    <value>Longitud: {0}</value>
+    <comment>Plantilla para descripción de longitud</comment>
+  </data>
+  <data name="SCHEMA_MinimumLengthTemplate" xml:space="preserve">
+    <value>Longitud mínima: {0}</value>
+    <comment>Plantilla para descripción de longitud mínima</comment>
+  </data>
+  <data name="SCHEMA_MinimumItemsTemplate" xml:space="preserve">
+    <value>Elementos mínimos: {0}</value>
+    <comment>Plantilla para descripción de elementos mínimos</comment>
+  </data>
+  <data name="SCHEMA_MaximumLengthTemplate" xml:space="preserve">
+    <value>Longitud máxima: {0}</value>
+    <comment>Plantilla para descripción de longitud máxima</comment>
+  </data>
+  <data name="SCHEMA_MaximumItemsTemplate" xml:space="preserve">
+    <value>Elementos máximos: {0}</value>
+    <comment>Plantilla para descripción de elementos máximos</comment>
+  </data>
+  <data name="DefaultMessages_InvalidConfiguration" xml:space="preserve">
+    <value>Configuración inválida proporcionada</value>
+    <comment>Mensaje por defecto para configuración inválida</comment>
+  </data>
+  <data name="DefaultMessages_RuleNotFound" xml:space="preserve">
+    <value>Regla no encontrada</value>
+    <comment>Mensaje por defecto cuando no se encuentra la regla</comment>
+  </data>
+  <data name="ErrorMessages_RuleNameCannotBeEmpty" xml:space="preserve">
+    <value>El nombre de la regla no puede ser nulo o vacío</value>
+    <comment>Mensaje de error cuando el nombre de la regla está vacío</comment>
+  </data>
+  <data name="ErrorMessages_TypeMustImplementIRule" xml:space="preserve">
+    <value>El tipo debe implementar la interfaz IRule</value>
+    <comment>Mensaje de error cuando el tipo no implementa IRule</comment>
+  </data>
+  <data name="ErrorMessages_RuleNotFound" xml:space="preserve">
+    <value>Regla '{0}' no encontrada en el registro</value>
+    <comment>Mensaje de error cuando no se encuentra una regla específica</comment>
+  </data>
+  <data name="ErrorMessages_JsonPathMustStartWithDollar" xml:space="preserve">
+    <value>La ruta JSON debe comenzar con '$'. Proporcionado: '{0}'</value>
+    <comment>Mensaje de error para formato de ruta JSON inválido</comment>
+  </data>
+  <data name="ErrorMessages_PropertyNotFoundOrNotReadable" xml:space="preserve">
+    <value>Propiedad '{0}' no encontrada o no legible en el tipo '{1}'.</value>
+    <comment>Mensaje de error cuando la propiedad no es legible</comment>
+  </data>
+  <data name="ErrorMessages_PropertyNotFoundOrNotWritable" xml:space="preserve">
+    <value>Propiedad '{0}' no encontrada o no escribible en el tipo '{1}'.</value>
+    <comment>Mensaje de error cuando la propiedad no es escribible</comment>
+  </data>
+  <data name="ErrorMessages_TypeDoesNotImplementIRule" xml:space="preserve">
+    <value>El tipo {0} no implementa IRule</value>
+    <comment>Mensaje de error cuando el tipo no implementa la interfaz IRule</comment>
+  </data>
+  <data name="ErrorMessages_UnableToCreateRuleInstance" xml:space="preserve">
+    <value>No se puede crear una instancia del tipo de regla {0}</value>
+    <comment>Mensaje de error cuando falla la creación de instancia de regla</comment>
+  </data>
+  <data name="ErrorMessages_RuleTypeDoesNotImplementIRule" xml:space="preserve">
+    <value>El tipo de regla '{0}' no implementa la interfaz IRule.</value>
+    <comment>Mensaje de error cuando el tipo de regla no implementa IRule</comment>
+  </data>
+  <data name="ErrorMessages_PluginLoadFailed" xml:space="preserve">
+    <value>No se pudo cargar el plugin {0}. Paquetes disponibles en nuget-local: {1}</value>
+    <comment>Mensaje de error cuando falla la carga del plugin</comment>
+  </data>
+  <data name="ErrorMessages_PluginLoadError" xml:space="preserve">
+    <value>Error cargando plugin {0}: {1}</value>
+    <comment>Mensaje de error cuando la carga del plugin encuentra un error</comment>
+  </data>
+  <data name="ErrorMessages_PluginLoadGenericError" xml:space="preserve">
+    <value>Error cargando el plugin {0}: {1}</value>
+    <comment>Mensaje de error genérico para carga de plugin</comment>
+  </data>
+  <data name="ConfigurationSections_BrmsConfiguration" xml:space="preserve">
+    <value>BrmsConfiguration</value>
+    <comment>Nombre de sección de configuración para BRMS</comment>
+  </data>
+  <data name="ConfigurationSections_RulesConfiguration" xml:space="preserve">
+    <value>RulesConfiguration</value>
+    <comment>Nombre de sección de configuración para Reglas</comment>
+  </data>
+  <data name="Paths_DefaultRulesPath" xml:space="preserve">
+    <value>Rules</value>
+    <comment>Ruta por defecto para reglas</comment>
+  </data>
+  <data name="Paths_DefaultPluginsPath" xml:space="preserve">
+    <value>Plugins</value>
+    <comment>Ruta por defecto para plugins</comment>
+  </data>
+  <data name="NetFrameworks_Net60" xml:space="preserve">
+    <value>net6.0</value>
+    <comment>Identificador de framework .NET 6.0</comment>
+  </data>
+  <data name="NetFrameworks_Net70" xml:space="preserve">
+    <value>net7.0</value>
+    <comment>Identificador de framework .NET 7.0</comment>
+  </data>
+  <data name="NetFrameworks_Net80" xml:space="preserve">
+    <value>net8.0</value>
+    <comment>Identificador de framework .NET 8.0</comment>
+  </data>
+  <data name="SchemaFormats_DateTime" xml:space="preserve">
+    <value>date-time</value>
+    <comment>Formato JSON Schema para fecha-hora</comment>
+  </data>
+  <data name="SchemaFormats_Date" xml:space="preserve">
+    <value>date</value>
+    <comment>Formato JSON Schema para fecha</comment>
+  </data>
+  <data name="SchemaFormats_Time" xml:space="preserve">
+    <value>time</value>
+    <comment>Formato JSON Schema para hora</comment>
+  </data>
+  <data name="SchemaFormats_Email" xml:space="preserve">
+    <value>email</value>
+    <comment>Formato JSON Schema para email</comment>
+  </data>
+  <data name="SchemaFormats_Uri" xml:space="preserve">
+    <value>uri</value>
+    <comment>Formato JSON Schema para URI</comment>
+  </data>
+  <data name="SchemaFormats_Uuid" xml:space="preserve">
+    <value>uuid</value>
+    <comment>Formato JSON Schema para UUID</comment>
+  </data>
+  <data name="SchemaFormats_Regex" xml:space="preserve">
+    <value>regex</value>
+    <comment>Formato JSON Schema para regex</comment>
+  </data>
+  <data name="ErrorCodes_ValidationError" xml:space="preserve">
+    <value>VALIDATION_ERROR</value>
+    <comment>Código de error para errores de validación</comment>
+  </data>
+  <data name="ErrorCodes_TransformationError" xml:space="preserve">
+    <value>TRANSFORMATION_ERROR</value>
+    <comment>Código de error para errores de transformación</comment>
+  </data>
+  <data name="ErrorCodes_RuleExecutionError" xml:space="preserve">
+    <value>RULE_EXECUTION_ERROR</value>
+    <comment>Código de error para errores de ejecución de reglas</comment>
+  </data>
+  <data name="ErrorCodes_ConfigurationError" xml:space="preserve">
+    <value>CONFIGURATION_ERROR</value>
+    <comment>Código de error para errores de configuración</comment>
+  </data>
+  <data name="Timeouts_DefaultTimeout" xml:space="preserve">
+    <value>30000</value>
+    <comment>Timeout por defecto en milisegundos</comment>
+  </data>
+  <data name="Timeouts_RuleExecutionTimeout" xml:space="preserve">
+    <value>60000</value>
+    <comment>Timeout de ejecución de reglas en milisegundos</comment>
+  </data>
+  <data name="Timeouts_TransformationTimeout" xml:space="preserve">
+    <value>120000</value>
+    <comment>Timeout de transformación en milisegundos</comment>
+  </data>
+  <data name="JsonPath_Root" xml:space="preserve">
+    <value>$</value>
+    <comment>Selector raíz de ruta JSON</comment>
+  </data>
+  <data name="JsonPath_CurrentNode" xml:space="preserve">
+    <value>@</value>
+    <comment>Selector de nodo actual de ruta JSON</comment>
+  </data>
+  <data name="JsonPath_AllChildren" xml:space="preserve">
+    <value>*</value>
+    <comment>Selector de todos los hijos de ruta JSON</comment>
+  </data>
+  <data name="JsonPath_RecursiveDescent" xml:space="preserve">
+    <value>..</value>
+    <comment>Selector de descenso recursivo de ruta JSON</comment>
+  </data>
+  
+  
+
+  <!-- Claves faltantes del archivo inglés -->
+  <data name="CONFIG_InvalidDataType" xml:space="preserve">
+    <value>## 🔢 Tipo de Datos de Configuración Inválido
+
+**Parámetro**: `{0}`
+**Tipo Esperado**: {1}
+**Tipo Recibido**: {2}
+
+**Descripción**: El valor de configuración proporcionado no coincide con el tipo de datos esperado.
+
+**Resolución**: Corrija el valor de configuración para que coincida con el tipo de datos requerido.</value>
+    <comment>Error de tipo de datos de configuración inválido</comment>
+  </data>
+
+  <data name="CONFIG_ConnectionStringInvalid" xml:space="preserve">
+    <value>## 🔗 Cadena de Conexión Inválida
+
+**Cadena de Conexión**: `{0}`
+
+**Descripción**: La cadena de conexión proporcionada está mal formada o contiene parámetros inválidos.
+
+**Resolución**: Verifique la sintaxis de la cadena de conexión y asegúrese de que todos los parámetros sean válidos.</value>
+    <comment>Error de cadena de conexión inválida</comment>
+  </data>
+
+  <data name="ERROR_InvalidTargetType" xml:space="preserve">
+    <value># Tipo de Objeto Destino Inválido
+
+**Código de Error:** `TYPE_002`
+
+**Descripción:** El objeto destino proporcionado para la transformación no es del tipo esperado.
+
+**Tipo Esperado:** {0}
+
+**Resolución:** Asegúrese de que el objeto destino sea del tipo correcto antes de intentar la transformación.</value>
+    <comment>Mensaje de error para tipo de objeto destino inválido en transformaciones</comment>
+  </data>
+
+  <data name="ERROR_TransformationMappingNotFound" xml:space="preserve">
+    <value># Mapeo de Transformación No Encontrado
+
+**Código de Error:** `MAPPING_001`
+
+**Descripción:** No se encontró un mapeo de transformación válido para los tipos especificados.
+
+**Tipos:** {0} → {1}
+
+**Resolución:** Configure un mapeo de transformación apropiado para estos tipos.</value>
+    <comment>Mensaje de error cuando no se encuentra mapeo de transformación</comment>
+  </data>
+
+  <!-- Claves faltantes para sincronización completa -->
+  <data name="CONFIG_LengthConstraint" xml:space="preserve">
+    <value>## 📏 Configuración de Restricción de Longitud
+
+**Parámetro**: `{0}`
+**Longitud Mínima**: {1}
+**Longitud Máxima**: {2}
+
+**Descripción**: Configuración para restricciones de validación de longitud de cadena.
+
+**Uso**: Aplicado durante la validación de datos para asegurar que los valores de cadena cumplan con los requisitos de longitud.</value>
+    <comment>Configuración para validación de restricción de longitud</comment>
+  </data>
+  
+  <data name="CONFIG_MaxDateConstraint" xml:space="preserve">
+    <value>## 📅 Restricción de Fecha Máxima
+
+**Parámetro**: `{0}`
+**Fecha Máxima**: {1}
+
+**Descripción**: Configuración para restricción de validación de fecha máxima.
+
+**Uso**: Asegura que los valores de fecha no excedan la fecha máxima especificada.</value>
+    <comment>Configuración para restricción de fecha máxima</comment>
+  </data>
+  
+  <data name="CONFIG_MinDateConstraint" xml:space="preserve">
+    <value>## 📅 Restricción de Fecha Mínima
+
+**Parámetro**: `{0}`
+**Fecha Mínima**: {1}
+
+**Descripción**: Configuración para restricción de validación de fecha mínima.
+
+**Uso**: Asegura que los valores de fecha no sean anteriores a la fecha mínima especificada.</value>
+    <comment>Configuración para restricción de fecha mínima</comment>
+  </data>
+  
+  <data name="ERROR_NoCompatibleFrameworkFound" xml:space="preserve">
+    <value>No se encontró un framework compatible para el paquete '{0}'</value>
+    <comment>Error cuando no hay framework compatible disponible</comment>
+  </data>
+  
+  <data name="ERROR_NoDllsFoundInPackage" xml:space="preserve">
+    <value>No se encontraron archivos DLL en el paquete '{0}'</value>
+    <comment>Error cuando no se encuentran archivos DLL en el paquete</comment>
+  </data>
+  
+  <data name="ERROR_NoNupkgPackagesAvailable" xml:space="preserve">
+    <value>No hay paquetes .nupkg disponibles para el paquete '{0}' en el directorio nuget-local</value>
+    <comment>Error cuando no se encuentran paquetes nupkg</comment>
+  </data>
+  
+  <data name="ERROR_NugetLocalDirectoryNotExists" xml:space="preserve">
+    <value>El directorio nuget-local no existe para el paquete '{0}'</value>
+    <comment>Error cuando falta el directorio local de nuget</comment>
+  </data>
+  
+  <data name="ERROR_PackageDownloadFailed" xml:space="preserve">
+    <value>Error al descargar el paquete '{0}'</value>
+    <comment>Error cuando falla la descarga del paquete</comment>
+  </data>
+  
+  <data name="ERROR_PackageNotFoundInRepositories" xml:space="preserve">
+    <value>Paquete '{0}' no encontrado en ningún repositorio</value>
+    <comment>Error cuando no se puede encontrar el paquete</comment>
+  </data>
+  
+  <data name="ERROR_PluginLoadError" xml:space="preserve">
+    <value>Error de carga de plugin para el paquete '{0}': {1}</value>
+    <comment>Error general de carga de plugin</comment>
+  </data>
+  
+  <data name="ERROR_PluginLoadGenericError" xml:space="preserve">
+    <value>Error genérico de carga de plugin para el paquete '{0}': {1}</value>
+    <comment>Error genérico de carga de plugin</comment>
+  </data>
+  
+  <data name="ERROR_RuleTypeDoesNotImplementIRule" xml:space="preserve">
+    <value>El tipo de regla '{0}' no implementa la interfaz IRule</value>
+    <comment>Error cuando el tipo de regla no implementa la interfaz requerida</comment>
+  </data>
+  
+  
+  <data name="VALIDATION_TransformationError_NullResult" xml:space="preserve">
+    <value>Error de transformación: el resultado no puede ser nulo para {0}</value>
+    <comment>Error cuando el resultado de transformación es nulo</comment>
+  </data>
+  
+  <data name="VALIDATION_TranslateSchemaError" xml:space="preserve">
+    <value>Error de traducción de esquema: {0}</value>
+    <comment>Error al traducir errores de validación de esquema</comment>
+  </data>
+
+  <!-- Claves faltantes agregadas -->
+  
+  <!-- Mensajes de Log de Transformación -->
+  
+  
+
+  <!-- Mensajes de Log de Reglas -->
+
+  <!-- Mensajes de Log de Paquetes NuGet -->
+
+  <!-- Secciones de Configuración -->
+  <data name="ConfigurationSections_Brms" xml:space="preserve">
+    <value>Brms</value>
+    <comment>Nombre de la sección de configuración BRMS</comment>
+  </data>
+
+  <!-- Rutas y Directorios -->
+  <data name="Paths_BrmsNugetConfigEnv" xml:space="preserve">
+    <value>BRMS_NUGET_CONFIG</value>
+    <comment>Variable de entorno para configuración NuGet de BRMS</comment>
+  </data>
+  
+  <data name="Paths_NugetConfig" xml:space="preserve">
+    <value>nuget.config</value>
+    <comment>Nombre del archivo de configuración NuGet</comment>
+  </data>
+  
+  <data name="Paths_NugetLocal" xml:space="preserve">
+    <value>nuget-local</value>
+    <comment>Directorio local de paquetes NuGet</comment>
+  </data>
+  
+  <data name="Paths_LocalNugetPath" xml:space="preserve">
+    <value>nuget-local</value>
+    <comment>Ruta local de paquetes NuGet</comment>
+  </data>
+  
+  <data name="Paths_NupkgPattern" xml:space="preserve">
+    <value>*.nupkg</value>
+    <comment>Patrón de archivos de paquetes NuGet</comment>
+  </data>
+  
+  <data name="Paths_RulesDirectory" xml:space="preserve">
+    <value>Rules</value>
+    <comment>Directorio de reglas</comment>
+  </data>
+  
+  <data name="Paths_PluginsDirectory" xml:space="preserve">
+    <value>Plugins</value>
+    <comment>Directorio de plugins</comment>
+  </data>
+  
+  <data name="Paths_LogsDirectory" xml:space="preserve">
+    <value>Logs</value>
+    <comment>Directorio de logs</comment>
+  </data>
+  
+  <data name="Paths_ConfigDirectory" xml:space="preserve">
+    <value>Config</value>
+    <comment>Directorio de configuración</comment>
+  </data>
+  
+  <data name="Paths_TempDirectory" xml:space="preserve">
+    <value>Temp</value>
+    <comment>Directorio temporal</comment>
+  </data>
+  
+  <data name="Paths_CacheDirectory" xml:space="preserve">
+    <value>Cache</value>
+    <comment>Directorio de caché</comment>
+  </data>
+
+  <!-- Frameworks .NET -->
+  <data name="NetFrameworks_NetCoreApp" xml:space="preserve">
+    <value>netcoreapp</value>
+    <comment>Identificador de .NET Core App</comment>
+  </data>
+  
+  <data name="NetFrameworks_Net" xml:space="preserve">
+    <value>net</value>
+    <comment>Identificador de .NET</comment>
+  </data>
+  
+  <data name="NetFrameworks_DllExtension" xml:space="preserve">
+    <value>.dll</value>
+    <comment>Extensión de archivos DLL</comment>
+  </data>
+  
+  <data name="NetFrameworks_Net90" xml:space="preserve">
+    <value>net9.0</value>
+    <comment>Identificador de .NET 9.0</comment>
+  </data>
+  
+  <data name="NetFrameworks_NetStandard21" xml:space="preserve">
+    <value>netstandard2.1</value>
+    <comment>Identificador de .NET Standard 2.1</comment>
+  </data>
+  
+  <data name="NetFrameworks_NetStandard20" xml:space="preserve">
+    <value>netstandard2.0</value>
+    <comment>Identificador de .NET Standard 2.0</comment>
+  </data>
+
+  <!-- Formatos de Esquema -->
+  <data name="SchemaFormats_DateTimeFormat" xml:space="preserve">
+    <value>date-time</value>
+    <comment>Formato de fecha y hora para esquemas</comment>
+  </data>
+  
+  <data name="SchemaFormats_DateTimeDescription" xml:space="preserve">
+    <value>Fecha y hora en formato ISO 8601</value>
+    <comment>Descripción del formato de fecha y hora</comment>
+  </data>
+  
+  <data name="SchemaFormats_DateFormat" xml:space="preserve">
+    <value>date</value>
+    <comment>Formato de fecha para esquemas</comment>
+  </data>
+  
+  <data name="SchemaFormats_DateDescription" xml:space="preserve">
+    <value>Fecha en formato YYYY-MM-DD</value>
+    <comment>Descripción del formato de fecha</comment>
+  </data>
+  
+  <data name="SchemaFormats_EmailFormat" xml:space="preserve">
+    <value>email</value>
+    <comment>Formato de email para esquemas</comment>
+  </data>
+  
+  <data name="SchemaFormats_PhoneFormat" xml:space="preserve">
+    <value>phone</value>
+    <comment>Formato de teléfono para esquemas</comment>
+  </data>
+  
+  <data name="SchemaFormats_UriFormat" xml:space="preserve">
+    <value>uri</value>
+    <comment>Formato de URI para esquemas</comment>
+  </data>
+  
+  <data name="SchemaFormats_ValidValuesTemplate" xml:space="preserve">
+    <value>Valores válidos: {0}</value>
+    <comment>Plantilla para mostrar valores válidos</comment>
+  </data>
+  
+  <data name="SchemaFormats_ValueSeparator" xml:space="preserve">
+    <value>, </value>
+    <comment>Separador de valores</comment>
+  </data>
+  
+  <data name="SchemaFormats_DescriptionSeparator" xml:space="preserve">
+    <value>. </value>
+    <comment>Separador de descripciones</comment>
+  </data>
+  
+  <data name="SchemaFormats_MinimumDateTemplate" xml:space="preserve">
+    <value>Fecha mínima: {0}</value>
+    <comment>Plantilla para fecha mínima</comment>
+  </data>
+  
+  <data name="SchemaFormats_MaximumDateTemplate" xml:space="preserve">
+    <value>Fecha máxima: {0}</value>
+    <comment>Plantilla para fecha máxima</comment>
+  </data>
+  
+  <data name="SchemaFormats_LengthTemplate" xml:space="preserve">
+    <value>Longitud: {0}</value>
+    <comment>Plantilla para longitud</comment>
+  </data>
+  
+  <data name="SchemaFormats_MinimumLengthTemplate" xml:space="preserve">
+    <value>Longitud mínima: {0}</value>
+    <comment>Plantilla para longitud mínima</comment>
+  </data>
+  
+  <data name="SchemaFormats_MaximumLengthTemplate" xml:space="preserve">
+    <value>Longitud máxima: {0}</value>
+    <comment>Plantilla para longitud máxima</comment>
+  </data>
+  
+  <data name="SchemaFormats_MinimumItemsTemplate" xml:space="preserve">
+    <value>Elementos mínimos: {0}</value>
+    <comment>Plantilla para elementos mínimos</comment>
+  </data>
+  
+  <data name="SchemaFormats_MaximumItemsTemplate" xml:space="preserve">
+    <value>Elementos máximos: {0}</value>
+    <comment>Plantilla para elementos máximos</comment>
+  </data>
+
+  <!-- Códigos de Error -->
+  <data name="ErrorCodes_RuleNotFound" xml:space="preserve">
+    <value>1001</value>
+    <comment>Código de error para regla no encontrada</comment>
+  </data>
+  
+  <data name="ErrorCodes_InvalidConfiguration" xml:space="preserve">
+    <value>1002</value>
+    <comment>Código de error para configuración inválida</comment>
+  </data>
+  
+  <data name="ErrorCodes_RuleExecutionFailed" xml:space="preserve">
+    <value>1003</value>
+    <comment>Código de error para falla en ejecución de regla</comment>
+  </data>
+  
+  <data name="ErrorCodes_PluginLoadFailed" xml:space="preserve">
+    <value>1004</value>
+    <comment>Código de error para falla en carga de plugin</comment>
+  </data>
+  
+  <data name="ErrorCodes_ValidationFailed" xml:space="preserve">
+    <value>1005</value>
+    <comment>Código de error para falla en validación</comment>
+  </data>
+  
+  <data name="ErrorCodes_TimeoutExceeded" xml:space="preserve">
+    <value>1006</value>
+    <comment>Código de error para timeout excedido</comment>
+  </data>
+
+  <!-- Timeouts -->
+  <data name="Timeouts_DefaultRuleTimeout" xml:space="preserve">
+    <value>30000</value>
+    <comment>Timeout por defecto para reglas en milisegundos</comment>
+  </data>
+  
+  <data name="Timeouts_DefaultAsyncTimeout" xml:space="preserve">
+    <value>60000</value>
+    <comment>Timeout por defecto para operaciones asíncronas en milisegundos</comment>
+  </data>
+  
+  <data name="Timeouts_DefaultPluginLoadTimeout" xml:space="preserve">
+    <value>10000</value>
+    <comment>Timeout por defecto para carga de plugins en milisegundos</comment>
+  </data>
+  
+  <data name="Timeouts_DefaultCacheTimeout" xml:space="preserve">
+    <value>300000</value>
+    <comment>Timeout por defecto para caché en milisegundos</comment>
+  </data>
+  
+  <data name="Timeouts_DefaultValidation" xml:space="preserve">
+    <value>5000</value>
+    <comment>Timeout por defecto para validación en milisegundos</comment>
+  </data>
+
+  <!-- JSONPath -->
+  
+  
+  <data name="JsonPath_Current" xml:space="preserve">
+    <value>@</value>
+    <comment>Símbolo de nodo actual de JSONPath</comment>
+  </data>
+  
+  <data name="JsonPath_Wildcard" xml:space="preserve">
+    <value>*</value>
+    <comment>Símbolo comodín de JSONPath</comment>
+  </data>
+  
+  
+  
+  <data name="JsonPath_ArraySlice" xml:space="preserve">
+    <value>:</value>
+    <comment>Símbolo de slice de array de JSONPath</comment>
+  </data>
+  
+  <data name="JsonPath_FilterStart" xml:space="preserve">
+    <value>?(</value>
+    <comment>Símbolo de inicio de filtro de JSONPath</comment>
+  </data>
+  
+  <data name="JsonPath_FilterEnd" xml:space="preserve">
+    <value>)</value>
+    <comment>Símbolo de fin de filtro de JSONPath</comment>
+  </data>
+
+  <!-- Mensajes de Validación -->
+  <data name="VALIDATION_ConfigurationCannotBeNull" xml:space="preserve">
+    <value>La configuración no puede ser nula en el índice {0} para {1}</value>
+    <comment>Error cuando la configuración es nula</comment>
+  </data>
+  
+  <data name="VALIDATION_PropertyPathNotExists" xml:space="preserve">
+    <value>La ruta de propiedad no existe en el índice {0} para {1}: {2}</value>
+    <comment>Error cuando la ruta de propiedad no existe</comment>
+  </data>
+  
+  <data name="VALIDATION_RuleNotFound" xml:space="preserve">
+    <value>Regla no encontrada: {0}</value>
+    <comment>Error cuando no se encuentra una regla</comment>
+  </data>
+  
+  <data name="VALIDATION_CustomError" xml:space="preserve">
+    <value>Error de validación personalizada en regla {1} en índice {0}: {2}</value>
+    <comment>Mensaje de error de validación personalizada</comment>
+  </data>
+  
+  <data name="VALIDATION_ErrorDuringValidation" xml:space="preserve">
+    <value>Error durante la validación de regla {1} en índice {0}: {2}</value>
+    <comment>Error durante el proceso de validación</comment>
+  </data>
+  
+  <data name="VALIDATION_NoParameterSchema" xml:space="preserve">
+    <value>No hay esquema de parámetros en el índice {0} para {1}</value>
+    <comment>Error cuando no hay esquema de parámetros</comment>
+  </data>
+  
+  <data name="VALIDATION_NameCannotBeEmpty" xml:space="preserve">
+    <value>El nombre no puede estar vacío en el índice {0} para {1}</value>
+    <comment>Error cuando el nombre está vacío</comment>
+  </data>
+
+  <!-- Error de Validación General -->
+  <data name="ValidationError" xml:space="preserve">
+    <value>Error de validación</value>
+    <comment>Mensaje genérico de error de validación</comment>
+  </data>
+
+  <!-- Plantilla de Fecha Mínima para Esquemas -->
+  <data name="SCHEMA_MinimumDateTemplate" xml:space="preserve">
+    <value>Fecha mínima: {0}</value>
+    <comment>Plantilla para mostrar fecha mínima en esquemas</comment>
+  </data>
+
+ </root>

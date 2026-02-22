@@ -1,0 +1,48 @@
+name: DocumentProcessingPipeline
+steps:
+  # Step 1: Classify document type.
+  # Output carries forward `content` so step 2 can use it.
+  # Stateless: the classification depends only on the input document, not on prior turns.
+  - !LlmStep
+    stepId: step_1_classify
+    inputSchema: DocumentInput
+    outputSchema: ClassificationOutput
+    profileName: default
+    useConversationHistory: false
+    systemPrompt: "@classifier"
+    userPrompt: |
+      Document content: {{inputData.content}}
+      Classify the document and return the original content in the `content` field.
+    dependsOn: []
+
+  # Step 2: Extract key fields.
+  # Input is ClassificationOutput (matches step_1_classify.outputSchema).
+  # Stateless: all needed data (type, content) arrives via structured input.
+  - !LlmStep
+    stepId: step_2_extract
+    inputSchema: ClassificationOutput
+    outputSchema: ExtractionOutput
+    profileName: default
+    useConversationHistory: false
+    systemPrompt: "@extractor"
+    userPrompt: |
+      Document type: {{inputData.type}} (confidence: {{inputData.confidence}})
+      Document content: {{inputData.content}}
+      Extract the relevant key fields for this document type.
+    dependsOn: [step_1_classify]
+
+  # Step 3: Generate final summary.
+  # Input is ExtractionOutput (matches step_2_extract.outputSchema).
+  # Stateless: all needed data (documentType, key_fields) arrives via structured input.
+  - !LlmStep
+    stepId: step_3_summarize
+    inputSchema: ExtractionOutput
+    outputSchema: FinalOutput
+    profileName: default
+    useConversationHistory: false
+    systemPrompt: "@summarizer"
+    userPrompt: |
+      Document type: {{inputData.documentType}}
+      Extracted fields: {{inputData.key_fields}}
+      Create an executive summary with key insights and recommendations.
+    dependsOn: [step_2_extract]
