@@ -1,0 +1,619 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- 
+    Microsoft ResX Schema 
+    
+    Version 2.0
+    
+    The primary goals of this format is to allow a simple XML format 
+    that is mostly human readable. The generation and parsing of the 
+    various data types are done through the TypeConverter classes 
+    associated with the data types.
+    
+    Example:
+    
+    ... ado.net/XML headers & schema ...
+    <resheader name="resmimetype">text/microsoft-resx</resheader>
+    <resheader name="version">2.0</resheader>
+    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
+    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
+    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
+    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
+    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
+        <value>[base64 mime encoded serialized .NET Framework object]</value>
+    </data>
+    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
+        <comment>This is a comment</comment>
+    </data>
+                
+    There are any number of "resheader" rows that contain simple 
+    name/value pairs.
+    
+    Each data row contains a name, and value. The row also contains a 
+    type or mimetype. Type corresponds to a .NET class that support 
+    text/value conversion through the TypeConverter architecture. 
+    Classes that don't support this are serialized and stored with the 
+    mimetype set.
+    
+    The mimetype is used for serialized objects, and tells the 
+    ResXResourceReader how to depersist the object. This is currently not 
+    extensible. For a given mimetype the value must be set accordingly:
+    
+    Note - application/x-microsoft.net.object.binary.base64 is the format 
+    that the ResXResourceWriter will generate, however the reader can 
+    read any of the formats listed below.
+    
+    mimetype: application/x-microsoft.net.object.binary.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
+            : and then encoded with base64 encoding.
+    
+    mimetype: application/x-microsoft.net.object.soap.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
+            : and then encoded with base64 encoding.
+
+    mimetype: application/x-microsoft.net.object.bytearray.base64
+    value   : The object must be serialized into a byte array 
+            : using a System.ComponentModel.TypeConverter
+            : and then encoded with base64 encoding.
+    -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="Desc_DefaultValueNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador de Valor por Defecto** - Establece un valor predeterminado cuando el campo está vacío o es nulo. Este normalizador garantiza que los campos siempre tengan un valor significativo reemplazando entradas vacías o nulas con un valor predefinido por defecto.</value>
+  </data>
+  <data name="Desc_DefaultValueNormalizer_DefaultValue_Description" xml:space="preserve">
+    <value>**Valor por Defecto** - El valor que se asignará cuando el campo esté vacío o sea nulo. Este debe ser un valor predeterminado significativo que represente el valor más común o seguro para este campo.</value>
+  </data>
+  <data name="Desc_TrimSpacesNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador de Espacios** - Elimina espacios en blanco al inicio y final del texto. Este normalizador limpia la entrada del usuario eliminando espacios innecesarios que podrían causar inconsistencias de datos o problemas de validación.</value>
+  </data>
+  <data name="Desc_NullIfEmptyNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador Nulo si Vacío** - Convierte cadenas vacías en valores nulos. Este normalizador estandariza la representación de datos vacíos asegurando que las cadenas vacías se representen consistentemente como valores nulos en el sistema.</value>
+  </data>
+  <data name="Desc_ToUpperNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador a Mayúsculas** - Convierte el texto a letras mayúsculas. Este normalizador estandariza el caso del texto para consistencia en el almacenamiento de datos y operaciones de comparación, asegurando que todo el texto siga la misma convención de mayúsculas.</value>
+  </data>
+  <data name="Desc_CollapseSpacesNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador de Colapso de Espacios** - Reemplaza múltiples espacios internos por un solo espacio y recorta espacios al inicio y fin. Útil para limpiar entradas con espacios inconsistentes y mejorar la comparabilidad y almacenamiento uniforme.</value>
+  </data>
+  <data name="Desc_ToTitleCaseNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador a Title Case** - Convierte el texto a formato Title Case respetando las reglas de la cultura especificada. Ideal para nombres propios, direcciones y campos que requieren capitalización estandarizada.</value>
+  </data>
+  <data name="Desc_ToTitleCaseNormalizer_Culture_Description" xml:space="preserve">
+    <value>**Cultura** - Código de cultura (p. ej., es-ES, en-US) usado para calcular Title Case. Por defecto "es-ES".</value>
+  </data>
+  <data name="Desc_E164PhoneNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador Teléfono E.164** - Convierte números de teléfono al formato internacional E.164 utilizando libphonenumber. Valida número y región antes de formatear; no modifica si el número no es válido.</value>
+  </data>
+  <data name="Desc_E164PhoneNormalizer_RegionIso_Description" xml:space="preserve">
+    <value>**Región ISO** - Código ISO del país (ej. ES, US, MX) usado para parsear y validar el teléfono. Por defecto "ES".</value>
+  </data>
+  <data name="Desc_RemoveDiacriticsNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador Eliminar Diacríticos** - Elimina acentos y marcas diacríticas de cadenas para facilitar normalización y comparaciones. Puede preservar ñ/Ñ opcionalmente.</value>
+  </data>
+  <data name="Desc_RemoveDiacriticsNormalizer_PreserveEnie_Description" xml:space="preserve">
+    <value>**Preservar ñ/Ñ** - Si está habilitado, mantiene los caracteres ñ/Ñ sin eliminar su tilde. Activado por defecto.</value>
+  </data>
+  <data name="Desc_HashCharNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador de Caracteres Hash** - Reemplaza caracteres especiales con el símbolo hash (#). Este normalizador sanea el texto reemplazando caracteres especiales potencialmente problemáticos con un carácter de marcador de posición seguro.</value>
+  </data>
+  <data name="Desc_AdvancedCleanNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador de Limpieza Avanzada** - Realiza limpieza integral de cadenas aplicando múltiples reglas de transformación: maneja caracteres '#' (eliminación en bordes, conversión a 'ñ' entre letras), elimina secuencias de puntos excesivas, convierte cadenas cortas de solo puntos/comas a NULL, elimina puntos/espacios al inicio, transforma cadenas repetitivas (>3 chars) a NULL, reemplaza caracteres especiales (,:¿*\| → punto, -_ → espacio), elimina patrón '¡y]', y consolida espacios múltiples. Garantiza consistencia y calidad de datos mediante saneamiento automático.</value>
+  </data>
+  <data name="Desc_JsScriptNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador de Script JavaScript** - Normaliza valores usando un script JavaScript personalizado. Este normalizador proporciona máxima flexibilidad permitiendo que la lógica de normalización personalizada se implemente a través de código JavaScript.</value>
+  </data>
+  <data name="Desc_JsScriptNormalizer_NotifyChanges" xml:space="preserve">
+    <value>**Notificar Cambios** - Indica si los cambios realizados por el normalizador deben ser notificados a otros componentes. Cuando está habilitado, el sistema transmitirá notificaciones sobre las modificaciones de valores realizadas por este normalizador.</value>
+  </data>
+  <data name="Desc_RequiredFieldValidator_Description" xml:space="preserve">
+    <value>**Validador de Campo Requerido** - Valida que el campo tenga un valor y no esté vacío. Este validador asegura que los campos obligatorios contengan datos significativos antes del procesamiento o almacenamiento.</value>
+  </data>
+  <data name="Desc_ListValidator_Description" xml:space="preserve">
+    <value>**Validador de Lista** - Valida que el valor esté dentro de una lista de valores permitidos o no esté en una lista de valores prohibidos. Este validador proporciona validación flexible basada en listas para controlar los valores de entrada aceptables.</value>
+  </data>
+  <data name="Desc_ListValidator_AllowedValues_Description" xml:space="preserve">
+    <value>**Valores Permitidos** - Lista separada por comas de valores permitidos. Solo los valores presentes en esta lista serán considerados válidos. Dejar vacío para deshabilitar la verificación de valores permitidos.</value>
+  </data>
+  <data name="Desc_ListValidator_ForbiddenValues_Description" xml:space="preserve">
+    <value>**Valores Prohibidos** - Lista separada por comas de valores prohibidos. Los valores presentes en esta lista serán rechazados como inválidos. Dejar vacío para deshabilitar la verificación de valores prohibidos.</value>
+  </data>
+  <data name="Desc_TextLengthValidator_Description" xml:space="preserve">
+    <value>**Validador de Longitud de Texto** - Valida que la longitud del texto esté dentro del rango especificado. Este validador asegura que las entradas de texto cumplan con los requisitos mínimos y máximos de longitud para el manejo adecuado de datos.</value>
+  </data>
+  <data name="Desc_TextLengthValidator_MinLength_Description" xml:space="preserve">
+    <value>**Longitud Mínima** - La longitud mínima permitida para el texto. El texto más corto que este valor será considerado inválido. Establecer en 0 para deshabilitar la verificación de longitud mínima.</value>
+  </data>
+  <data name="Desc_TextLengthValidator_MaxLength_Description" xml:space="preserve">
+    <value>**Longitud Máxima** - La longitud máxima permitida para el texto. El texto más largo que este valor será considerado inválido. Establecer en un número grande para deshabilitar efectivamente la verificación de longitud máxima.</value>
+  </data>
+  <data name="Desc_CountValidator_Description" xml:space="preserve">
+    <value>**Validador de Conteo** - Valida que el número de elementos esté dentro del rango especificado. Este validador asegura que las colecciones o arrays contengan un número apropiado de elementos.</value>
+  </data>
+  <data name="Desc_CountValidator_MinCount_Description" xml:space="preserve">
+    <value>**Conteo Mínimo** - El número mínimo de elementos permitidos. Las colecciones con menos elementos serán consideradas inválidas.</value>
+  </data>
+  <data name="Desc_CountValidator_MaxCount_Description" xml:space="preserve">
+    <value>**Conteo Máximo** - El número máximo de elementos permitidos. Las colecciones con más elementos serán consideradas inválidas.</value>
+  </data>
+  <data name="Desc_RangeDateValidator_Description" xml:space="preserve">
+    <value>**Validador de Rango de Fechas** - Valida que la fecha esté dentro del rango especificado. Este validador asegura que los valores de fecha caigan entre fechas mínimas y máximas aceptables. Soporta fechas fijas (DateTime) y expresiones dinámicas como `Today-40y`, `StartOfYear+3M`, `Now+7d`. Las expresiones permiten crear rangos relativos al momento actual usando formatos como: `[Base]±N[Unit]` donde Base puede ser `Today`, `Now`, `StartOfYear/Month/Week`, `EndOfYear/Month/Week` y las unidades pueden ser `y`(años), `M`(meses), `w`(semanas), `d`(días), `h`(horas), `m`(minutos), `s`(segundos).</value>
+  </data>
+  <data name="Desc_RangeDateValidator_MinValue_Description" xml:space="preserve">
+    <value>**Fecha Mínima** -**Fecha Mínima** - La fecha más temprana permitida. Las fechas anteriores a este valor serán consideradas inválidas. Acepta valores DateTime fijos o expresiones dinámicas. Ejemplos de expresiones: `Today-18y` (18 años atrás), `StartOfYear` (inicio del año actual), `Now-7d` (7 días atrás), `Today-3M` (3 meses atrás). Las expresiones permiten crear validaciones contextuales que se ajustan automáticamente al momento de ejecución.</value>
+  </data>
+  <data name="Desc_RangeDateValidator_MaxValue_Description" xml:space="preserve">
+    <value>**Fecha Máxima** - La fecha más tardía permitida. Las fechas posteriores a este valor serán consideradas inválidas. Acepta valores DateTime fijos o expresiones dinámicas. Ejemplos de expresiones: `Today+5y` (5 años desde hoy), `EndOfYear` (final del año actual), `Now+30d` (30 días desde ahora), `StartOfMonth+1M` (inicio del próximo mes). Las expresiones se evalúan en tiempo real permitiendo rangos adaptativos.</value>
+  </data>
+  <data name="Desc_RangeDecimalValidator_Description" xml:space="preserve">
+    <value>**Validador de Rango Decimal** - Valida que el número decimal esté dentro del rango especificado. Este validador asegura que los valores decimales caigan entre límites mínimos y máximos aceptables.</value>
+  </data>
+  <data name="Desc_RangeDecimalValidator_MinValue_Description" xml:space="preserve">
+    <value>**Valor Decimal Mínimo** - El valor decimal más pequeño permitido. Los números por debajo de este valor serán considerados inválidos.</value>
+  </data>
+  <data name="Desc_RangeDecimalValidator_MaxValue_Description" xml:space="preserve">
+    <value>**Valor Decimal Máximo** - El valor decimal más grande permitido. Los números por encima de este valor serán considerados inválidos.</value>
+  </data>
+  <data name="Desc_RangeNumberValidator_Description" xml:space="preserve">
+    <value>**Validador de Rango Numérico** - Valida que el número esté dentro del rango especificado. Este validador asegura que los valores numéricos caigan entre límites mínimos y máximos aceptables.</value>
+  </data>
+  <data name="Desc_RangeNumberValidator_MinValue_Description" xml:space="preserve">
+    <value>**Valor Numérico Mínimo** - El valor numérico más pequeño permitido. Los números por debajo de este valor serán considerados inválidos.</value>
+  </data>
+  <data name="Desc_RangeNumberValidator_MaxValue_Description" xml:space="preserve">
+    <value>**Valor Numérico Máximo** - El valor numérico más grande permitido. Los números por encima de este valor serán considerados inválidos.</value>
+  </data>
+  <data name="Desc_NullOrMinus99IntValidator_Description" xml:space="preserve">
+    <value>**Validador Nulo o -99 Entero** - Valida que el valor sea nulo o exactamente -99. Este validador especializado se usa para lógica de negocio específica donde solo valores nulos o el valor centinela -99 son aceptables.</value>
+  </data>
+  <data name="Desc_JsScriptValidator_Description" xml:space="preserve">
+    <value>**Validador de Script JavaScript** - Valida valores usando un script JavaScript personalizado. Este validador proporciona máxima flexibilidad permitiendo que la lógica de validación personalizada se implemente a través de código JavaScript.</value>
+  </data>
+  <data name="Desc_RegexValidator_Description" xml:space="preserve">
+    <value>**Validador de Expresión Regular** - Valida que el valor coincida con el patrón de expresión regular especificado. Este validador proporciona validación poderosa basada en patrones para requisitos complejos de formato de texto.</value>
+  </data>
+  <data name="Desc_RegexValidator_Pattern" xml:space="preserve">
+    <value>**Patrón de Expresión Regular** - El patrón regex usado para validación. El valor de entrada debe coincidir con este patrón para ser considerado válido. Use sintaxis estándar de expresiones regulares.</value>
+  </data>
+  <data name="Desc_InvalidDateValidator_Description" xml:space="preserve">
+    <value>**Validador de Fecha Inválida** - Valida que la fecha no sea inválida o mal formada. Este validador asegura que los valores de fecha estén correctamente formateados y representen fechas de calendario válidas.</value>
+  </data>
+  <data name="Desc_NullOrEmptyStringValidator_Description" xml:space="preserve">
+    <value>**Validador de Cadena Nula o Vacía** - Valida que la cadena no sea nula o vacía. Este validador asegura que los campos de cadena contengan contenido significativo y no sean solo valores vacíos o nulos.</value>
+  </data>
+  <data name="Desc_JsScriptRule_Description" xml:space="preserve">
+    <value>**Regla Personalizada JavaScript** - Una regla personalizada implementada usando JavaScript. Este tipo de regla proporciona máxima flexibilidad para implementar lógica de negocio compleja que no se puede lograr con validadores estándar.</value>
+  </data>
+  <data name="Desc_JsScriptRule_Expression" xml:space="preserve">
+    <value>**Expresión JavaScript** - La expresión JavaScript que define la lógica de la regla. Este código será ejecutado para determinar si la regla pasa o falla. Retornar true para éxito, false para falla.</value>
+  </data>
+  <data name="Desc_JsScriptRule_Name" xml:space="preserve">
+    <value>**Nombre de la Regla** - Un nombre identificador único para esta regla. Este nombre se usa para identificación de reglas, logging y propósitos de depuración. Elija un nombre descriptivo que refleje el propósito de la regla.</value>
+  </data>
+  <data name="Desc_JsScriptRule_ErrorMessage" xml:space="preserve">
+    <value>**Mensaje de Error** - El mensaje que se mostrará cuando esta regla falle. Este debe ser una descripción clara y amigable al usuario de lo que salió mal y cómo solucionarlo.</value>
+  </data>
+  <data name="Desc_JsScriptRule_ErrorSeverityLevel" xml:space="preserve">
+    <value>**Nivel de Severidad del Error** - El nivel de severidad del error cuando esta regla falla. Las opciones son: **Info** (informativo), **Warning** (problema no crítico), **Error** (falla crítica que debe ser abordada).</value>
+  </data>
+  <data name="Desc_JsScriptRule_RuleName_Description" xml:space="preserve">
+    <value>**Descripción del Nombre de la Regla** - Un nombre descriptivo para la regla usado para propósitos de identificación y documentación. Esto ayuda a desarrolladores y usuarios a entender el propósito de la regla.</value>
+  </data>
+  <data name="Desc_JsScriptRule_Expression_Description" xml:space="preserve">
+    <value>**Descripción del Código JavaScript** - El código JavaScript que implementa la lógica de validación. Este código debe retornar un valor booleano indicando si la validación pasa (true) o falla (false).</value>
+  </data>
+  <data name="Desc_HpptNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador HTTP** - Normaliza valores realizando una llamada a un servicio HTTP externo.</value>
+  </data>
+  <data name="Desc_JSTransformation_Description" xml:space="preserve">
+    <value>**Transformación JS** - Transforma un objeto de entrada a un objeto de salida utilizando un script JavaScript.</value>
+  </data>
+  <data name="Desc_JSTransformation_OutputType_Description" xml:space="preserve">
+    <value>**Tipo de Salida** - Esquema JSON que define la estructura del objeto resultante de la transformación.</value>
+  </data>
+  <data name="Desc_DatabaseValidator_SQLSmtp_Description" xml:space="preserve">
+    <value>**Consulta SQL** - Consulta SQL para validar el valor. Soporta parámetros @Value, {oldValue.Propiedad}, {newValue.Propiedad}.</value>
+  </data>
+  <data name="Desc_DatabaseNormalizer_SQLSmtp_Description" xml:space="preserve">
+    <value>**Consulta SQL** - Consulta SQL para normalizar el valor. Soporta parámetros @Value, {oldValue.Propiedad}, {newValue.Propiedad}.</value>
+  </data>
+  <data name="Desc_Database_DataBaseName_Description" xml:space="preserve">
+    <value>**Nombre de Base de Datos** - Nombre o alias de la base de datos configurada donde se ejecutará la consulta SQL.</value>
+  </data>
+  <data name="Log_AdvancedCleanNormalizer_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del AdvancedCleanNormalizer** - El normalizador de limpieza avanzada está comenzando su proceso de saneamiento de texto</value>
+  </data>
+  <data name="Log_AdvancedCleanNormalizer_Processing" xml:space="preserve">
+    <value>**Procesando campo con AdvancedCleanNormalizer** - Aplicando reglas de limpieza avanzada al campo actual</value>
+  </data>
+  <data name="Log_AdvancedCleanNormalizer_Success" xml:space="preserve">
+    <value>**Ejecución del AdvancedCleanNormalizer completada exitosamente** - El proceso de limpieza avanzada finalizó sin errores</value>
+  </data>
+  <data name="Log_TrimSpacesNormalizer_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del TrimSpacesNormalizer** - El normalizador de espacios está comenzando el proceso de eliminación de espacios</value>
+  </data>
+  <data name="Log_TrimSpacesNormalizer_Processing" xml:space="preserve">
+    <value>**Procesando campo con TrimSpacesNormalizer** - Eliminando espacios en blanco del inicio y final del campo</value>
+  </data>
+  <data name="Log_TrimSpacesNormalizer_Success" xml:space="preserve">
+    <value>**Ejecución del TrimSpacesNormalizer completada exitosamente** - Los espacios fueron eliminados correctamente</value>
+  </data>
+  <data name="Log_TrimSpacesNormalizer_Error" xml:space="preserve">
+    <value>**Error en la ejecución del TrimSpacesNormalizer** - Ocurrió un problema durante la eliminación de espacios</value>
+  </data>
+  <data name="Log_NullIfEmptyNormalizer_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del NullIfEmptyNormalizer** - El normalizador está comenzando la conversión de cadenas vacías a nulo</value>
+  </data>
+  <data name="Log_NullIfEmptyNormalizer_Processing" xml:space="preserve">
+    <value>**Procesando campo con NullIfEmptyNormalizer** - Evaluando si el campo vacío debe convertirse a nulo</value>
+  </data>
+  <data name="Log_NullIfEmptyNormalizer_Success" xml:space="preserve">
+    <value>**Ejecución del NullIfEmptyNormalizer completada exitosamente** - La conversión de vacío a nulo finalizó correctamente</value>
+  </data>
+  <data name="Log_NullIfEmptyNormalizer_Error" xml:space="preserve">
+    <value>**Error en la ejecución del NullIfEmptyNormalizer** - Ocurrió un problema durante la conversión a nulo</value>
+  </data>
+  <data name="Log_ToUpperNormalizer_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del ToUpperNormalizer** - El normalizador está comenzando la conversión a mayúsculas</value>
+  </data>
+  <data name="Log_ToUpperNormalizer_Processing" xml:space="preserve">
+    <value>**Procesando campo con ToUpperNormalizer** - Convirtiendo el texto del campo a letras mayúsculas</value>
+  </data>
+  <data name="Log_ToUpperNormalizer_Success" xml:space="preserve">
+    <value>**Ejecución del ToUpperNormalizer completada exitosamente** - La conversión a mayúsculas finalizó correctamente</value>
+  </data>
+  <data name="Log_ToUpperNormalizer_Error" xml:space="preserve">
+    <value>**Error en la ejecución del ToUpperNormalizer** - Ocurrió un problema durante la conversión a mayúsculas</value>
+  </data>
+  <data name="Log_HashCharNormalizer_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del HashCharNormalizer** - El normalizador está comenzando el reemplazo de caracteres especiales</value>
+  </data>
+  <data name="Log_HashCharNormalizer_Processing" xml:space="preserve">
+    <value>**Procesando campo con HashCharNormalizer** - Reemplazando caracteres especiales con símbolos hash</value>
+  </data>
+  <data name="Log_HashCharNormalizer_Success" xml:space="preserve">
+    <value>**Ejecución del HashCharNormalizer completada exitosamente** - El reemplazo de caracteres especiales finalizó correctamente</value>
+  </data>
+  <data name="Log_HashCharNormalizer_Error" xml:space="preserve">
+    <value>**Error en la ejecución del HashCharNormalizer** - Ocurrió un problema durante el reemplazo de caracteres</value>
+  </data>
+  <data name="Log_DefaultValueNormalizer_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del DefaultValueNormalizer** - El normalizador está comenzando la asignación de valores por defecto</value>
+  </data>
+  <data name="Log_DefaultValueNormalizer_Processing" xml:space="preserve">
+    <value>**Procesando campo con DefaultValueNormalizer** - Evaluando si el campo necesita un valor por defecto</value>
+  </data>
+  <data name="Log_DefaultValueNormalizer_Success" xml:space="preserve">
+    <value>**Ejecución del DefaultValueNormalizer completada exitosamente** - La asignación de valor por defecto finalizó correctamente</value>
+  </data>
+  <data name="Log_DefaultValueNormalizer_Error" xml:space="preserve">
+    <value>**Error en la ejecución del DefaultValueNormalizer** - Ocurrió un problema durante la asignación del valor por defecto</value>
+  </data>
+  <data name="Log_CountValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del CountValidator** - El validador está comenzando la verificación del conteo de elementos</value>
+  </data>
+  <data name="Log_CountValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con CountValidator** - Validando que el número de elementos esté en el rango permitido</value>
+  </data>
+  <data name="Log_CountValidator_Success" xml:space="preserve">
+    <value>**Ejecución del CountValidator completada exitosamente** - La validación del conteo finalizó sin errores</value>
+  </data>
+  <data name="Log_CountValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del CountValidator** - Ocurrió un problema durante la validación del conteo</value>
+  </data>
+  <data name="Log_NullOrEmptyStringValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del NullOrEmptyStringValidator** - El validador está comenzando la verificación de cadenas nulas o vacías</value>
+  </data>
+  <data name="Log_NullOrEmptyStringValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con NullOrEmptyStringValidator** - Validando que la cadena no sea nula ni vacía</value>
+  </data>
+  <data name="Log_NullOrEmptyStringValidator_Success" xml:space="preserve">
+    <value>**Ejecución del NullOrEmptyStringValidator completada exitosamente** - La validación de cadena finalizó sin errores</value>
+  </data>
+  <data name="Log_NullOrEmptyStringValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del NullOrEmptyStringValidator** - Ocurrió un problema durante la validación de cadena</value>
+  </data>
+  <data name="Log_RequiredFieldValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del RequiredFieldValidator** - El validador está comenzando la verificación de campos requeridos</value>
+  </data>
+  <data name="Log_RequiredFieldValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con RequiredFieldValidator** - Validando que el campo requerido tenga un valor</value>
+  </data>
+  <data name="Log_RequiredFieldValidator_Success" xml:space="preserve">
+    <value>**Ejecución del RequiredFieldValidator completada exitosamente** - La validación de campo requerido finalizó sin errores</value>
+  </data>
+  <data name="Log_RequiredFieldValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del RequiredFieldValidator** - Ocurrió un problema durante la validación del campo requerido</value>
+  </data>
+  <data name="Log_RangeDecimalValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del RangeDecimalValidator** - El validador está comenzando la verificación del rango decimal</value>
+  </data>
+  <data name="Log_RangeDecimalValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con RangeDecimalValidator** - Validando que el valor decimal esté en el rango permitido</value>
+  </data>
+  <data name="Log_RangeDecimalValidator_Success" xml:space="preserve">
+    <value>**Ejecución del RangeDecimalValidator completada exitosamente** - La validación del rango decimal finalizó sin errores</value>
+  </data>
+  <data name="Log_RangeDecimalValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del RangeDecimalValidator** - Ocurrió un problema durante la validación del rango decimal</value>
+  </data>
+  <data name="Log_RangeDateValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del RangeDateValidator** - El validador está comenzando la verificación del rango de fechas</value>
+  </data>
+  <data name="Log_RangeDateValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con RangeDateValidator** - Validando que la fecha esté en el rango permitido</value>
+  </data>
+  <data name="Log_RangeDateValidator_Success" xml:space="preserve">
+    <value>**Ejecución del RangeDateValidator completada exitosamente** - La validación del rango de fechas finalizó sin errores</value>
+  </data>
+  <data name="Log_RangeDateValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del RangeDateValidator** - Ocurrió un problema durante la validación del rango de fechas</value>
+  </data>
+  <data name="Log_InvalidDateValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del InvalidDateValidator** - El validador está comenzando la verificación de fechas inválidas</value>
+  </data>
+  <data name="Log_InvalidDateValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con InvalidDateValidator** - Validando que la fecha no sea inválida o mal formada</value>
+  </data>
+  <data name="Log_InvalidDateValidator_Success" xml:space="preserve">
+    <value>**Ejecución del InvalidDateValidator completada exitosamente** - La validación de fecha inválida finalizó sin errores</value>
+  </data>
+  <data name="Log_InvalidDateValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del InvalidDateValidator** - Ocurrió un problema durante la validación de fecha inválida</value>
+  </data>
+  <data name="Log_NullOrMinus99IntValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del NullOrMinus99IntValidator** - El validador está comenzando la verificación de valores nulos o -99</value>
+  </data>
+  <data name="Log_NullOrMinus99IntValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con NullOrMinus99IntValidator** - Validando que el valor sea nulo o exactamente -99</value>
+  </data>
+  <data name="Log_NullOrMinus99IntValidator_Success" xml:space="preserve">
+    <value>**Ejecución del NullOrMinus99IntValidator completada exitosamente** - La validación de nulo o -99 finalizó sin errores</value>
+  </data>
+  <data name="Log_NullOrMinus99IntValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del NullOrMinus99IntValidator** - Ocurrió un problema durante la validación de nulo o -99</value>
+  </data>
+  <data name="Log_RegexValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del RegexValidator** - El validador está comenzando la verificación de expresión regular</value>
+  </data>
+  <data name="Desc_DatabaseValidator_Description" xml:space="preserve">
+    <value>**Validador de Base de Datos** - Valida valores ejecutando una consulta SQL personalizada contra la base de datos. Este validador proporciona validación flexible basada en datos almacenados en la base de datos.</value>
+  </data>
+  <data name="Desc_DatabaseNormalizer_Description" xml:space="preserve">
+    <value>**Normalizador de Base de Datos** - Normaliza valores ejecutando una consulta SQL personalizada contra la base de datos. Este normalizador permite transformar datos basándose en información almacenada en la base de datos.</value>
+  </data>
+  <data name="Log_DatabaseValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del DatabaseValidator** - El validador está comenzando la ejecución de la consulta SQL de validación</value>
+  </data>
+  <data name="Log_DatabaseValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con DatabaseValidator** - Ejecutando consulta SQL para validar el valor del campo</value>
+  </data>
+  <data name="Log_DatabaseValidator_Success" xml:space="preserve">
+    <value>**Ejecución del DatabaseValidator completada exitosamente** - La validación por base de datos finalizó sin errores</value>
+  </data>
+  <data name="Log_DatabaseValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del DatabaseValidator** - Ocurrió un problema durante la validación por base de datos</value>
+  </data>
+  <data name="Log_DatabaseNormalizer_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del DatabaseNormalizer** - El normalizador está comenzando la ejecución de la consulta SQL de normalización</value>
+  </data>
+  <data name="Log_DatabaseNormalizer_Processing" xml:space="preserve">
+    <value>**Procesando campo con DatabaseNormalizer** - Ejecutando consulta SQL para normalizar el valor del campo</value>
+  </data>
+  <data name="Log_DatabaseNormalizer_Success" xml:space="preserve">
+    <value>**Ejecución del DatabaseNormalizer completada exitosamente** - La normalización por base de datos finalizó sin errores</value>
+  </data>
+  <data name="Log_DatabaseNormalizer_Error" xml:space="preserve">
+    <value>**Error en la ejecución del DatabaseNormalizer** - Ocurrió un problema durante la normalización por base de datos</value>
+  </data>
+  <data name="Log_DatabaseTranslator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del DatabaseTranslator** - El traductor está comenzando la ejecución de la consulta SQL de traducción</value>
+  </data>
+  <data name="Log_DatabaseTranslator_Processing" xml:space="preserve">
+    <value>**Procesando campo con DatabaseTranslator** - Ejecutando consulta SQL para traducir el valor del campo</value>
+  </data>
+  <data name="Log_DatabaseTranslator_Success" xml:space="preserve">
+    <value>**Ejecución del DatabaseTranslator completada exitosamente** - La traducción por base de datos finalizó sin errores</value>
+  </data>
+  <data name="Log_DatabaseTranslator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del DatabaseTranslator** - Ocurrió un problema durante la traducción por base de datos</value>
+  </data>
+  <data name="Log_RegexValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con RegexValidator** - Validando que el valor coincida con el patrón de expresión regular</value>
+  </data>
+  <data name="Log_RegexValidator_Success" xml:space="preserve">
+    <value>**Ejecución del RegexValidator completada exitosamente** - La validación de expresión regular finalizó sin errores</value>
+  </data>
+  <data name="Log_RegexValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del RegexValidator** - Ocurrió un problema durante la validación de expresión regular</value>
+  </data>
+  <data name="Log_RangeNumberValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del RangeNumberValidator** - El validador está comenzando la verificación del rango numérico</value>
+  </data>
+  <data name="Log_RangeNumberValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con RangeNumberValidator** - Validando que el número esté en el rango permitido</value>
+  </data>
+  <data name="Log_RangeNumberValidator_Success" xml:space="preserve">
+    <value>**Ejecución del RangeNumberValidator completada exitosamente** - La validación del rango numérico finalizó sin errores</value>
+  </data>
+  <data name="Log_RangeNumberValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del RangeNumberValidator** - Ocurrió un problema durante la validación del rango numérico</value>
+  </data>
+  <data name="Log_ListValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del ListValidator** - El validador está comenzando la verificación de lista de valores</value>
+  </data>
+  <data name="Log_ListValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con ListValidator** - Validando que el valor esté en la lista permitida o no en la prohibida</value>
+  </data>
+  <data name="Log_ListValidator_NotInAllowed" xml:space="preserve">
+    <value>**Validación del ListValidator falló: el valor no está en la lista permitida** - El valor proporcionado no se encuentra en los valores permitidos</value>
+  </data>
+  <data name="Log_ListValidator_InForbidden" xml:space="preserve">
+    <value>**Validación del ListValidator falló: el valor está en la lista prohibida** - El valor proporcionado se encuentra en los valores prohibidos</value>
+  </data>
+  <data name="Log_ListValidator_ValidValue" xml:space="preserve">
+    <value>**Validación del ListValidator exitosa: el valor es válido** - El valor proporcionado cumple con las restricciones de la lista</value>
+  </data>
+  <data name="Log_ListValidator_NullValue" xml:space="preserve">
+    <value>**Validación del ListValidator exitosa: el valor es nulo** - Se acepta el valor nulo según la configuración del validador</value>
+  </data>
+  <data name="Log_ListValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del ListValidator** - Ocurrió un problema durante la validación de lista</value>
+  </data>
+  <data name="HpptNormalizer_Starting" xml:space="preserve">
+    <value>Hppt Normalizer: Starting normalization.</value>
+  </data>
+  <data name="HpptNormalizer_Processing" xml:space="preserve">
+    <value>Hppt Normalizer: Processing value.</value>
+  </data>
+  <data name="HpptNormalizer_Success" xml:space="preserve">
+    <value>Hppt Normalizer: Normalization successful.</value>
+  </data>
+  <data name="HpptNormalizer_Error" xml:space="preserve">
+    <value>Hppt Normalizer: An error occurred during normalization.</value>
+  </data>
+  <data name="HpptValidator_Starting" xml:space="preserve">
+    <value>Hppt Validator: Starting validation.</value>
+  </data>
+  <data name="HpptValidator_Processing" xml:space="preserve">
+    <value>Hppt Validator: Processing value for validation.</value>
+  </data>
+  <data name="HpptValidator_Success" xml:space="preserve">
+    <value>Hppt Validator: Validation successful.</value>
+  </data>
+  <data name="HpptValidator_Error" xml:space="preserve">
+    <value>Hppt Validator: An error occurred during validation.</value>
+  </data>
+  <data name="HpptTransformation_Starting" xml:space="preserve">
+    <value>Hppt Transformation: Starting transformation.</value>
+  </data>
+  <data name="HpptTransformation_Processing" xml:space="preserve">
+    <value>Hppt Transformation: Processing value for transformation.</value>
+  </data>
+  <data name="HpptTransformation_Success" xml:space="preserve">
+    <value>Hppt Transformation: Transformation successful.</value>
+  </data>
+  <data name="HpptTransformation_Error" xml:space="preserve">
+    <value>Hppt Transformation: An error occurred during transformation.</value>
+  </data>
+  <data name="Desc_HpptNormalizer_Url_Description" xml:space="preserve">
+    <value>The URL of the external HTTP API for normalization.</value>
+  </data>
+  <data name="Desc_HpptNormalizer_Headers_Description" xml:space="preserve">
+    <value>Additional HTTP headers to include in the normalization request (JSON format).</value>
+  </data>
+  <data name="Desc_HpptValidator_Url_Description" xml:space="preserve">
+    <value>The URL of the external HTTP API for validation.</value>
+  </data>
+  <data name="Desc_HpptValidator_Headers_Description" xml:space="preserve">
+    <value>Additional HTTP headers to include in the validation request (JSON format).</value>
+  </data>
+  <data name="Desc_HpptTransformation_Url_Description" xml:space="preserve">
+    <value>The URL of the external HTTP API for transformation.</value>
+  </data>
+  <data name="Desc_HpptTransformation_Headers_Description" xml:space="preserve">
+    <value>Additional HTTP headers to include in the transformation request (JSON format).</value>
+  </data>
+  <data name="Log_EmailValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del EmailValidator** - El validador está comenzando la verificación del correo electrónico</value>
+  </data>
+  <data name="Log_EmailValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con EmailValidator** - Validando que el correo tenga un formato correcto</value>
+  </data>
+  <data name="Log_EmailValidator_Success" xml:space="preserve">
+    <value>**Ejecución del EmailValidator completada exitosamente** - La validación del correo electrónico finalizó sin errores</value>
+  </data>
+  <data name="Log_EmailValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del EmailValidator** - Ocurrió un problema durante la validación del correo electrónico</value>
+  </data>
+  <data name="Desc_EmailValidator_Description" xml:space="preserve">
+    <value>Valida que el valor proporcionado sea un correo electrónico con formato válido. Acepta nulos/vacíos (use RequiredFieldValidator para obligatoriedad).</value>
+  </data>
+  <data name="Desc_EmailValidator_Strict_Description" xml:space="preserve">
+    <value>Si está en true, aplica validación estricta basada en normalización/regex; si está en false, usa comprobación heurística básica.</value>
+  </data>
+  <data name="Log_PhoneValidator_Starting" xml:space="preserve">
+    <value>**Iniciando ejecución del PhoneValidator** - El validador está comenzando la verificación del número de teléfono</value>
+  </data>
+  <data name="Log_PhoneValidator_Processing" xml:space="preserve">
+    <value>**Procesando campo con PhoneValidator** - Validando que el número de teléfono sea posible y válido</value>
+  </data>
+  <data name="Log_PhoneValidator_Success" xml:space="preserve">
+    <value>**Ejecución del PhoneValidator completada exitosamente** - La validación del número de teléfono finalizó sin errores</value>
+  </data>
+  <data name="Log_PhoneValidator_Error" xml:space="preserve">
+    <value>**Error en la ejecución del PhoneValidator** - Ocurrió un problema durante la validación del número de teléfono</value>
+  </data>
+  <data name="Desc_PhoneValidator_Description" xml:space="preserve">
+    <value>Valida que el valor proporcionado sea un número de teléfono válido. Acepta nulos/vacíos (use RequiredFieldValidator para obligatoriedad).</value>
+  </data>
+  <data name="Desc_PhoneValidator_RegionIso_Description" xml:space="preserve">
+    <value>Código ISO de la región (por ejemplo, ES, US) usado para el parseo cuando el número no incluye prefijo internacional.</value>
+  </data>
+  <data name="Desc_PhoneValidator_Strict_Description" xml:space="preserve">
+    <value>Si está en true, requiere que el número sea válido según libphonenumber; si está en false, acepta sanitización básica.</value>
+  </data>  <data name="Desc_Validator_AllowNull_Description" xml:space="preserve">
+    <value>Indica si se permite valor null. Si es false (por defecto), un valor null fallará la validación. Si es true, un valor null pasará la validación.</value>
+  </data>
+
+</root>
+

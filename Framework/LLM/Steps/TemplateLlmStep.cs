@@ -20,8 +20,7 @@ public class TemplateLlmStep<TIn, TOut>(
     string name,
     LlmProviderConfig profile,
     string promptTemplateName,
-    string? systemPromptTemplateName = null,
-    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null)
+    string? systemPromptTemplateName = null)
     : BaseLlmStep<TIn, TOut>(
         llmService,
         name,
@@ -30,8 +29,7 @@ public class TemplateLlmStep<TIn, TOut>(
         systemPromptTemplateName != null
             ? BuildPromptBuilder(templateProvider, systemPromptTemplateName)
             : null,
-        null, // tools
-        resultValidator)
+        null) // tools
     where TIn : IStepResult
     where TOut : ILlmStepResult
 {

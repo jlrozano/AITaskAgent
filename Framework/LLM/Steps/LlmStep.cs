@@ -47,7 +47,6 @@ public class LlmStep<TOut>(
     Func<StepResult, PipelineContext, Task<string>> promptBuilder,
     string? systemPrompt = null,
     List<ITool>? tools = null,
-    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null,
     int maxToolIterations = 5,
     List<IStreamingTagHandler>? streamingHandlers = null)
     : BaseLlmStep<StepResult, TOut>(
@@ -57,7 +56,6 @@ public class LlmStep<TOut>(
         promptBuilder,
         systemPrompt != null ? (_, _) => Task.FromResult(systemPrompt) : null,
         tools,
-        resultValidator,
         maxToolIterations,
         streamingHandlers)
     where TOut : LlmStepResult
@@ -79,7 +77,6 @@ public sealed class LlmStep<TIn, TOut>(
     Func<TIn, PipelineContext, Task<string>> promptBuilder,
     string? systemPrompt = null,
     List<ITool>? tools = null,
-    Func<TOut, Task<(bool IsValid, string? Error)>>? resultValidator = null,
     int maxToolIterations = 5,
     List<IStreamingTagHandler>? streamingHandlers = null)
     : BaseLlmStep<TIn, TOut>(
@@ -89,7 +86,6 @@ public sealed class LlmStep<TIn, TOut>(
         promptBuilder,
         systemPrompt != null ? (_, _) => Task.FromResult(systemPrompt) : null,
         tools,
-        resultValidator,
         maxToolIterations,
         streamingHandlers)
     where TIn : StepResult

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Authors></Authors>
+    <Company></Company>
+    <Description>Core engine for BRMS (Business Rules Management System) - JSON validation and normalization engine with plugin support</Description>
+    <PackageTags>validation;normalization;json;rules;engine;plugin;brms;business-rules</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/BRMS/BRMS</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <!-- Generar documentación XML -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
+    <!-- Generar paquete NuGet automáticamente -->
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Cambiar ProjectReference por PackageReference -->
+    <!-- Mantener dependencias externas -->
+    <PackageReference Include="JsonSchema.Net" Version="9.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.9" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.2" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="NJsonSchema" Version="11.5.2" />
+    <PackageReference Include="NJsonSchema.NewtonsoftJson" Version="11.5.2" />
+    <PackageReference Include="NuGet.Protocol" Version="7.0.1" />
+    <PackageReference Include="McMaster.NETCore.Plugins" Version="2.0.0" />
+  </ItemGroup>
+  <!-- Incluir README en el paquete -->
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\BRMS.Core\BRMS.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Update="Properties\Resources.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Resources.resx</DependentUpon>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Update="Properties\Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>

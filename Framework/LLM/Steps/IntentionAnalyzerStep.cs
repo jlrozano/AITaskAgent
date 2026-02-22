@@ -30,8 +30,7 @@ public sealed class IntentionAnalyzerStep<TIn, TEnum>(
         profile,
         promptBuilder ?? DefaultPromptBuilder,
         (_, _) => Task.FromResult(systemPrompt ?? "You are an expert at understanding user intentions and classifying them accurately."),
-        tools: null,
-        resultValidator: null)
+        tools: null)
     where TIn : IStepResult
     where TEnum : struct, Enum
 {

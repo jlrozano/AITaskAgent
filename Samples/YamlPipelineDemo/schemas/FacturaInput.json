@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "FacturaInput",
+  "properties": {
+    "proveedor": { "type": "string" },
+    "monto": { "type": "number" },
+    "concepto": { "type": "string" },
+    "fecha": { "type": "string" }
+  },
+  "required": ["proveedor", "monto", "concepto"]
+}

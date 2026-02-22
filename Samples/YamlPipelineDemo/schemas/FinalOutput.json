@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "FinalOutput",
+  "properties": {
+    "summary": { "type": "string" },
+    "document_type": { "type": "string" },
+    "key_insights": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "recommendation": { "type": "string" }
+  },
+  "required": ["summary", "document_type"]
+}

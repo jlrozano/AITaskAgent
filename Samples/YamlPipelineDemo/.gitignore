@@ -1,0 +1,24 @@
+# Development configuration with secrets
+appsettings.development.json
+appsettings.development.*.json
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build and runtime
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+
+# Runtime log output
+logs/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo

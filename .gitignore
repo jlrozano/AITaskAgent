@@ -42,6 +42,7 @@ Samples/AdvancedLlmPipeline/bin/
 Samples/AdvancedLlmPipeline/obj/
 Samples/AdvancedLlmPipeline/logs/
 Samples/AdvancedLlmPipeline/conversations/
+Samples/YamlPipelineDemo/logs/
 
 *.log
 *.tmp

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+    <!-- Configuración del Package NuGet -->
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>BRMS.Core</PackageId>
+    <Version>1.0.6</Version>
+    <Authors>BRMS Team</Authors>
+    <Description>Core abstractions and interfaces for BRMS Engine with embedded resources (Spanish default)</Description>
+    <PackageTags>brms;business-rules;engine;abstractions;resources;spanish</PackageTags>
+    <RepositoryUrl>https://github.com/tu-repo/BRMS</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!-- Configuración de idioma por defecto -->
+    <NeutralLanguage>es</NeutralLanguage>
+    <AssemblyDefaultAlias>BRMS.Core</AssemblyDefaultAlias>
+    <!-- Asegurar que los recursos embebidos se incluyan en el paquete -->
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>true</IncludeBuildOutput>
+  </PropertyGroup>
+  <!-- Archivo de recursos principal (español por defecto) -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\ConsolidatedResources.resx"></EmbeddedResource>
+  </ItemGroup>
+  <!-- Archivos de recursos localizados (anidados bajo el principal) -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\ConsolidatedResources.en.resx">
+      <!--<DependentUpon>ConsolidatedResources.resx</DependentUpon>-->
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="BRMS.StdRules.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="McMaster.NETCore.Plugins" Version="2.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.2" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="NJsonSchema" Version="11.5.2" />
+    <PackageReference Include="NJsonSchema.NewtonsoftJson" Version="11.5.2" />
+    <PackageReference Include="NuGet.Common" Version="7.0.1" />
+    <PackageReference Include="NuGet.Configuration" Version="7.0.1" />
+    <PackageReference Include="NuGet.Packaging" Version="7.0.1" />
+    <PackageReference Include="NuGet.Protocol" Version="7.0.1" />
+    <PackageReference Include="NuGet.Resolver" Version="7.0.1" />
+    <!-- Actualizamos a 8.13.0 para evitar NU1603 y alinear con la versión disponible en NuGet -->
+    <PackageReference Include="libphonenumber-csharp" Version="9.0.23" />
+    <PackageReference Include="Serilog.Extensions.Logging" Version="10.0.0" />
+  </ItemGroup>
+</Project>

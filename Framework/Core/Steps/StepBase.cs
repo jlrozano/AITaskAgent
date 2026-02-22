@@ -16,13 +16,15 @@ namespace AITaskAgent.Core.Steps;
 public abstract class StepBase(string name, Type inputType, Type outputType) : IStep, IEnrichableStep
 {
     private ILogger? _logger;
-    private readonly Lazy<StepResultFactory.StepActivatorInfo> _activatorInfo =
-       new(() => StepResultFactory.GetStepActivatorInfo(outputType));
+    private Lazy<StepResultFactory.StepActivatorInfo>? activatorInfo = null;
+       
 
-    public string Name { get; } = name;
+
+    private Lazy<StepResultFactory.StepActivatorInfo> _activatorInfo => activatorInfo ??= new(() => StepResultFactory.GetStepActivatorInfo(OutputType));
+    public string Name { get; protected set; } = name;
     public int MaxRetries { get; set; } = 3;
-    public Type InputType { get; internal set; } = inputType;
-    public Type OutputType { get; internal set; } = outputType;
+    public Type InputType { get; protected internal set; } = inputType;
+    public Type OutputType { get; protected internal set; } = outputType;
     protected ILogger Logger => _logger ??= Pipeline.LoggerFactory.CreateLogger(GetType());
     /// <summary>
     /// Optional timeout for this step. If null, uses Pipeline.DefaultStepTimeout.

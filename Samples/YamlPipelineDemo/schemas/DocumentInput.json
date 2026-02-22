@@ -1,0 +1,10 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "DocumentInput",
+  "properties": {
+    "content": { "type": "string" },
+    "source": { "type": "string" }
+  },
+  "required": ["content"]
+}

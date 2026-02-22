@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(set DOTNET_ENVIRONMENT=Development:*)",
+      "Bash(dotnet run:*)"
+    ]
+  }
+}
