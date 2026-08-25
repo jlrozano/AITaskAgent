@@ -18,11 +18,11 @@ var configuration = new ConfigurationBuilder()
 
 // Get provider config
 var providerConfig = configuration.GetSection("AITaskAgent:LlmProviders:Providers:Gemini")
-    .Get<LlmProviderConfig>()
+    .Get<GeminiSettings>()
     ?? throw new InvalidOperationException("Gemini provider configuration not found");
 
 Console.WriteLine($"Model: {providerConfig.Model}");
-Console.WriteLine($"Provider: {providerConfig.Provider}\n");
+Console.WriteLine($"BaseUrl: {providerConfig.BaseUrl}\n");
 
 // Validate API key
 if (string.IsNullOrEmpty(providerConfig.ApiKey) || providerConfig.ApiKey.Contains("<YOUR_"))
@@ -97,7 +97,7 @@ async Task ListModelsAsync(GeminiLlmService.GeminiLlmService svc, string apiKey,
 }
 
 // ============ Demo: Google Search Grounding ============
-async Task DemoGoogleSearchAsync(GeminiLlmService.GeminiLlmService svc, LlmProviderConfig config)
+async Task DemoGoogleSearchAsync(GeminiLlmService.GeminiLlmService svc, GeminiSettings config)
 {
     Console.WriteLine("\n" + new string('=', 50));
     Console.WriteLine("🌐 GOOGLE SEARCH GROUNDING DEMO (STREAMING)");
@@ -115,7 +115,10 @@ async Task DemoGoogleSearchAsync(GeminiLlmService.GeminiLlmService svc, LlmProvi
     {
         Conversation = conversation,
         SystemPrompt = "Eres un redactor de noticias de última hora. Tu prioridad es la ACTUALIDAD. Busca noticias publicadas en las últimas 24 horas. Para cada noticia, DEBES indicar el TÍTULO, la FUENTE y la FECHA/HORA de publicación. Si una noticia no es de hoy, indícalo claramente.",
-        Profile = config,
+        Model = config.Model,
+        ApiKey = config.ApiKey,
+        BaseUrl = config.BaseUrl,
+        ApiVersion = config.ApiVersion,
         UseStreaming = true // Enable streaming
     };
 
@@ -177,7 +180,7 @@ async Task DemoGoogleSearchAsync(GeminiLlmService.GeminiLlmService svc, LlmProvi
 }
 
 // ============ Demo: Context Caching ============
-async Task DemoContextCachingAsync(GeminiLlmService.GeminiLlmService svc, LlmProviderConfig config, ILogger log)
+async Task DemoContextCachingAsync(GeminiLlmService.GeminiLlmService svc, GeminiSettings config, ILogger log)
 {
     Console.WriteLine("\n" + new string('=', 50));
     Console.WriteLine("🔥 CONTEXT CACHING DEMO");
@@ -191,7 +194,10 @@ async Task DemoContextCachingAsync(GeminiLlmService.GeminiLlmService svc, LlmPro
     {
         Conversation = initConversation,
         SystemPrompt = "Di 'hola' brevemente",
-        Profile = config
+        Model = config.Model,
+        ApiKey = config.ApiKey,
+        BaseUrl = config.BaseUrl,
+        ApiVersion = config.ApiVersion,
     };
 
     Console.WriteLine("\n⏳ Inicializando cliente...");
@@ -262,7 +268,10 @@ async Task DemoContextCachingAsync(GeminiLlmService.GeminiLlmService svc, LlmPro
             {
                 Conversation = qaConversation,
                 SystemPrompt = null, // System prompt is in the cache
-                Profile = config
+                Model = config.Model,
+                ApiKey = config.ApiKey,
+                BaseUrl = config.BaseUrl,
+                ApiVersion = config.ApiVersion
             };
 
             var answer = await svc.InvokeAsync(qaRequest);
@@ -292,4 +301,19 @@ async Task DemoContextCachingAsync(GeminiLlmService.GeminiLlmService svc, LlmPro
 
         Console.ResetColor();
     }
+}
+
+
+/// <summary>
+/// Connection settings for this test app, bound straight from configuration.
+///
+/// Declared locally rather than reusing a framework type: this app drives the Gemini SDK
+/// directly, without pipelines or DI, so it has no LlmEnvironment to resolve a role from.
+/// </summary>
+internal sealed class GeminiSettings
+{
+    public string Model { get; set; } = "";
+    public string ApiKey { get; set; } = "";
+    public string? BaseUrl { get; set; }
+    public string? ApiVersion { get; set; }
 }

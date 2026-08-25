@@ -1,4 +1,4 @@
-using AITaskAgent.LLM.Conversation.Models;
+using AITaskAgent.LLM.Conversation;
 using System.Collections.Concurrent;
 
 namespace PipelineVisualizer.Services;
