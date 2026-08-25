@@ -12,7 +12,29 @@ Execution order (outer to inner):
 User Middlewares → ObservabilityMiddleware → TimeoutMiddleware → RetryMiddleware → Step.ExecuteAsync
 ```
 
-![Middleware Execution Flow](../assets/images/middleware_onion_architecture.png)
+```mermaid
+flowchart TB
+    pipe["Pipeline"]
+    user["User middlewares<br/><i>await next()</i>"]
+    obs["ObservabilityMiddleware<br/><i>await next()</i>"]
+    timeout["TimeoutMiddleware<br/><i>await next() under a linked token</i>"]
+
+    subgraph terminal ["RetryMiddleware · terminal, never calls next()"]
+        loop["attempt loop, up to MaxRetries"]
+        exec["step.ExecuteAsync"]
+        loop --> exec
+        exec -- "recoverable error or failed validation" --> loop
+    end
+
+    back["result unwinds: Timeout, Observability, user middlewares"]
+
+    pipe --> user --> obs --> timeout --> loop
+    exec -- "valid result, or fatal error" --> back --> pipe
+```
+
+Retry is not a layer of the onion: it calls the step directly instead of `next()`, so the whole
+attempt loop lives inside Observability's single call. That is why the timeout is global across
+attempts, and why retries have to emit their own `StepStartedEvent`.
 
 ## IPipelineMiddleware
 

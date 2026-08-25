@@ -5,7 +5,23 @@ Tools are functions that LLMs can call to perform actions or get information. Th
 1. **`LlmTool` (Recommended)** - Abstract base class with automatic observability
 2. **`ITool`** - Interface for full control
 
-![Tool Execution Flow](../assets/images/tool_execution_flow.png)
+```mermaid
+flowchart TB
+    step["BaseLlmStep<br/><i>Tools = the tools it may call</i>"]
+    llm["LLM"]
+    done(["final response"])
+    dispatch["the step matches each call by Name<br/><i>and runs them one after another</i>"]
+    tool1["<b>LlmTool</b><br/><i>traces, metrics and events around your InternalExecuteAsync</i>"]
+    tool2["<b>ITool</b><br/><i>your ExecuteAsync only; nothing is observed unless you emit it</i>"]
+    msg["each result appended to the conversation as a tool message"]
+
+    step --> llm
+    llm -- "no tool calls" --> done
+    llm -- "tool calls" --> dispatch
+    dispatch --> tool1 --> msg
+    dispatch --> tool2 --> msg
+    msg --> llm
+```
 
 > [!TIP]
 > For advanced topics including recursive execution, observability enrichment, and best practices, see the [Tools Advanced Guide](tools-advanced.md).
@@ -42,6 +58,8 @@ public class WeatherTool : LlmTool
     
     protected override async Task<string> InternalExecuteAsync(
         string argumentsJson,
+        PipelineContext context,
+        ILogger logger,
         CancellationToken cancellationToken)
     {
         var args = JsonSerializer.Deserialize<WeatherArgs>(argumentsJson);

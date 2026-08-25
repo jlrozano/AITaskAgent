@@ -26,7 +26,21 @@ Prevents cascading failures by tracking consecutive errors.
 
 ### States
 
-![Resilience Patterns](../assets/images/resilience_circuit_breaker.png)
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Closed: call succeeds, failure counter resets
+    Closed --> Open: consecutive failures reach failureThreshold
+    Open --> Open: call rejected with CircuitBreakerOpenException
+    Open --> HalfOpen: first call attempted after openDuration
+    HalfOpen --> Closed: that call succeeds
+    HalfOpen --> Open: that call fails
+    note right of Open
+        The transition out of Open is lazy: it happens
+        when a call arrives, not on a timer.
+        Reset() forces Closed from any state.
+    end note
+```
 
 ### Usage
 

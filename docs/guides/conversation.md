@@ -68,7 +68,27 @@ if (!validated)
 
 Manage context size by keeping recent messages:
 
-![Conversation Sliding Window](../assets/images/conversation_sliding_window.png)
+```mermaid
+flowchart TB
+    start["GetMessagesWithSlidingWindow<br/><i>keepFirstN, maxTokens</i>"]
+    small{"history shorter<br/>than keepFirstN?"}
+    all["return every message"]
+    head["take the first N messages<br/><i>system + initial context</i>"]
+    walk["walk backwards from the newest message"]
+    fits{"does it still fit<br/>in maxTokens?"}
+    keep["prepend it to the recent block"]
+    stop["stop: everything older is dropped"]
+    out["first N + recent block"]
+
+    start --> small
+    small -- "yes" --> all
+    small -- "no" --> head --> walk --> fits
+    fits -- "yes" --> keep --> walk
+    fits -- "no" --> stop --> out
+```
+
+The first N messages are charged against `maxTokens` too, and the backwards walk stops at the
+first message that does not fit — it does not skip it and keep looking for a smaller one.
 
 ```csharp
 // Get messages with sliding window

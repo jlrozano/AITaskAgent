@@ -218,7 +218,30 @@ var result = await pipeline.ExecuteAsync(
     input: "How do I return an item?");
 ```
 
-![Intention Router Flow](../assets/images/intention_router_flow.png)
+```mermaid
+flowchart TB
+    user["User message"]
+    analyzer["IntentionAnalyzerStep<br/><i>catalog of IntentionOption Ids in the prompt</i>"]
+    intention["Intention<br/><i>SelectedOption, DetailedPrompt, UserFeedback</i>"]
+    known{"is SelectedOption in the catalog?<br/><i>LlmIntentionResult.ValidateAsync</i>"}
+    feedback["error text fed back to the model<br/><i>'Valid options are: ...'</i>"]
+    router["RouterStep<br/><i>Routes, matched ignoring case</i>"]
+    match{"route found?"}
+    next["target step appended to NextSteps"]
+    fallback["DefaultRoute"]
+    boom["InvalidOperationException"]
+
+    user --> analyzer --> intention --> known
+    known -- "no" --> feedback --> analyzer
+    known -- "yes" --> router --> match
+    match -- "yes" --> next
+    match -- "no, DefaultRoute set" --> fallback --> next
+    match -- "no, no DefaultRoute" --> boom
+```
+
+Options are plain strings, not an enum: the catalog lives in `IntentionOption`, and an unknown
+option is a *validation* failure, so the retry loop hands the error back to the model instead of
+failing the step.
 
 > [!TIP]
 > Keep the `IntentionOption.Id` values and the `RouterStep` keys in sync. Deriving both from the

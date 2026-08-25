@@ -6,7 +6,30 @@ AITaskAgent includes a real-time event system for observability. Events flow thr
 `IEventChannel` to subscribers, and are **routed by `CorrelationId`** so concurrent pipeline
 executions never bleed into each other.
 
-![Event Propagation System](../assets/images/event_system_hub_topology.png)
+```mermaid
+flowchart LR
+    subgraph runs ["Concurrent executions"]
+        a["Pipeline run A<br/><i>CorrelationId = A</i>"]
+        b["Pipeline run B<br/><i>CorrelationId = B</i>"]
+    end
+
+    channel["<b>IEventChannel</b><br/><i>singleton, one bounded buffer per subscriber</i>"]
+
+    subgraph consumers ["Subscribers"]
+        sa["Request handler A<br/><i>Subscribe(handler, 'A')</i>"]
+        sb["Request handler B<br/><i>CreateSubscription(correlationId: 'B')</i>"]
+        g["Logger / dashboard<br/><i>correlationId null</i>"]
+    end
+
+    a -- "SendAsync" --> channel
+    b -- "SendAsync" --> channel
+    channel -- "only CorrelationId A" --> sa
+    channel -- "only CorrelationId B" --> sb
+    channel -- "everything" --> g
+```
+
+A subscriber with a `correlationId` sees only that execution; one with `null` is global and sees
+every event. That is what makes a single channel safe for a server running many pipelines at once.
 
 ## Architecture
 
