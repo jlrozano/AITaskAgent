@@ -8,18 +8,30 @@ AITaskAgent uses a **pipeline architecture** with middleware composition, simila
 
 ### Pipeline
 
-Static executor that runs steps sequentially with middleware composition.
+`Pipeline` is a **sealed class implementing `IPipeline`**, registered as a singleton by
+`AddAITaskAgent()`. Resolve it from DI — it is no longer a static executor.
 
 ```csharp
-await Pipeline.ExecuteAsync(
+var pipeline = serviceProvider.GetRequiredService<IPipeline>();
+
+await pipeline.ExecuteAsync(
     name: "MyPipeline",
     steps: [step1, step2],
     input: initialInput,
     context: pipelineContext,
-    userMiddlewares: [myMiddleware],
-    pipelineTimeout: TimeSpan.FromMinutes(5)
+    pipelineTimeout: TimeSpan.FromMinutes(5),
+    cancellationToken: ct,
+    subscribers: [async (evt, ct) => Console.WriteLine(evt.EventType)]
 );
 ```
+
+There is a single `ExecuteAsync` overload. Its defaults come from `PipelineOptions`
+(configuration section `"Pipeline"`, itself seeded from `AITaskAgent:Timeouts`), exposed as
+`DefaultPipelineTimeout` and `DefaultStepTimeout`.
+
+Global middlewares are **not** passed per call: register them once with
+`PipelineMiddlewareRegistry.Register(...)` or
+`serviceProvider.RegisterPipelineMiddleware<TMiddleware>()`.
 
 ### PipelineContext
 
@@ -28,8 +40,13 @@ Shared state passed through all steps:
 - `Conversation` - LLM conversation with history
 - `CorrelationId` - For distributed tracing
 - `Metadata` - Custom data (thread-safe)
-- `StepResults` - Cached results (thread-safe)
-- `SendEventAsync()` - Emit events to observers
+- `StepResults` - Cached results (thread-safe), keyed by step path
+- `CurrentStepPath` - Current position in the execution tree
+- `ServiceProvider` - Scoped service access from inside a step
+- `EventChannel` / `SendEventAsync()` - Emit events to observers
+
+Contexts are built by `PipelineContextFactory` (`Create(...)`, `CreateFromId(...)`), which is
+resolved from DI and also exposes a static entry point initialized by `UseAITaskAgent()`.
 
 ### Steps
 
@@ -37,11 +54,15 @@ Units of work implementing `IStep`:
 
 | Step Type | Purpose |
 |-----------|---------|
-| `ActionStep` | Simple synchronous/async action |
+| `ActionStep<TIn>` | Side-effecting action, returns `ActionResult` |
+| `DelegatedStep<TIn, TOut>` | Inline transformation via a delegate |
 | `TypedStep<TIn, TOut>` | Strongly-typed base class |
-| `GroupStep` | Sequential sub-steps |
-| `ParallelStep` | Concurrent execution |
-| `SwitchStep` | Dynamic routing |
+| `GroupStep` / `GroupStep<TIn>` | Sequential sub-steps |
+| `ParallelStep` / `ParallelStep<TIn>` | Concurrent execution of `Branches` |
+| `LoopStep` | Repeats its `Steps` up to `MaxIterations` |
+| `BreakStep` | Early exit out of the enclosing `LoopStep` |
+| `SwitchStep<TIn>` | Dynamic routing |
+| `RouterStep` | String-keyed routing over an `IRouterResult` |
 | `BaseLlmStep` | LLM interaction with tools |
 
 ### Middleware Chain

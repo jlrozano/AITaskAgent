@@ -20,26 +20,55 @@ Or in your `.csproj`:
 
 ## Basic Setup
 
-Add the framework to your service collection in `Program.cs`:
+Setup has **two** steps: register the services, then initialize the framework on the built
+`IServiceProvider`.
 
 ```csharp
 using AITaskAgent.Configuration;
+using AITaskAgent.LLM.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// Add AITaskAgent services
-builder.Services.AddAITaskAgent();
-
-// Add your LLM service implementation
+// 1. Register your LLM service implementations BEFORE building the provider.
+//    They are matched against the "ServiceType" of each configured provider.
 builder.Services.AddSingleton<ILlmService, OpenAILlmService>();
 
+// 2. Register the framework services
+builder.Services.AddAITaskAgent();
+
 var host = builder.Build();
+
+// 3. Initialize the static factories (PipelineContextFactory, AvailableTools)
+host.Services.UseAITaskAgent();
+
 await host.RunAsync();
 ```
 
+> [!IMPORTANT]
+> `UseAITaskAgent()` is **not optional**. It forces creation of the `IPipeline` and
+> `PipelineContextFactory` singletons and registers every DI-registered `ITool` into
+> `AvailableTools.Instance`. Without it, the first call to `PipelineContextFactory.Create()`
+> throws `InvalidOperationException: PipelineContextFactory is not initialized.`
+
+`AddAITaskAgent()` registers, among others:
+
+| Service | Lifetime | Notes |
+|---------|----------|-------|
+| `IPipeline` → `Pipeline` | Singleton | Built from `PipelineOptions` |
+| `PipelineContextFactory` | Singleton | Also sets the static instance used by `PipelineContextFactory.Create()` |
+| `IEventChannel` → `EventChannel` | Singleton | Log level from `Observability.EventLogLevel` |
+| `IPipelineContextStorage` → `InMemoryPipelineContextStorage` | Singleton | |
+| `ITemplateRendered` → `TinyTemplateRendered` | Singleton | |
+| `ITools` → `AvailableTools.Instance` | Singleton | |
+| `ICacheService` → `MemoryCacheService` | Singleton | |
+| `IConversationStorage` → `InMemoryConversationStorage` | Singleton | |
+| `ConversationContext` | Transient | Pre-configured with `Conversation.MaxTokens` |
+
 ## Configuration (appsettings.json)
+
+Everything lives under the single `AITaskAgent` root section — **including** `LlmProviders`.
 
 ```json
 {
@@ -49,57 +78,50 @@ await host.RunAsync();
       "DefaultStepTimeout": "00:01:00"
     },
     "Conversation": {
-      "MaxTokens": 4000
+      "MaxTokens": 8192
     },
-    "CircuitBreaker": {
-      "FailureThreshold": 5,
-      "OpenDurationSeconds": 30
+    "Observability": {
+      "EventLogLevel": "Debug",
+      "EventChannelCapacity": 100
     },
-    "RateLimit": {
-      "MaxTokens": 100,
-      "RefillIntervalMs": 1000,
-      "TokensPerRefill": 10
-    }
-  },
-  "LlmProviders": {
-    "Profiles": {
-      "default": {
-        "Provider": "OpenAI",
-        "Model": "gpt-4o",
-        "Temperature": 0.7,
-        "MaxTokens": 4096
+    "LlmProviders": {
+      "Providers": {
+        "OpenRouter": {
+          "ServiceType": "openai",
+          "BaseUrl": "https://openrouter.ai/api/v1/",
+          "ApiKey": "${OPENROUTER_API_KEY}"
+        }
       },
-      "fast": {
-        "Provider": "OpenAI",
-        "Model": "gpt-4o-mini",
-        "Temperature": 0.3
-      }
+      "Roles": {
+        "default": {
+          "Provider": "OpenRouter",
+          "Model": "openai/gpt-4o-mini",
+          "Inference": { "Temperature": 0.7 }
+        }
+      },
+      "DefaultRole": "default"
     }
   }
 }
 ```
+
+See [Configuration](../guides/configuration.md) for the full schema and the startup validation rules.
 
 ## Verify Installation
 
 ```csharp
 using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Steps;
-using AITaskAgent.Core.StepResults;
+using Microsoft.Extensions.DependencyInjection;
 
-try
-{
-    var result = await Pipeline.ExecuteAsync(
-        name: "TestPipeline",
-        steps: [new EmptyStep()],
-        input: new EmptyResult()
-    );
-    
-    Console.WriteLine($"Pipeline executed successfully: {!result.HasError}");
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"Error: {ex.Message}");
-}
+var pipeline = host.Services.GetRequiredService<IPipeline>();
+
+var result = await pipeline.ExecuteAsync(
+    name: "TestPipeline",
+    steps: [new EmptyStep()],
+    input: "ping");
+
+Console.WriteLine($"Pipeline executed successfully: {!result.HasError}");
 ```
 
 ## Troubleshooting
@@ -108,9 +130,11 @@ catch (Exception ex)
 
 | Problem | Solution |
 |---------|----------|
-| `ILlmService not registered` | Add an LLM service implementation (e.g., `OpenAILlmService`) |
-| `Pipeline timeout` | Increase `DefaultPipelineTimeout` in configuration |
-| `Rate limit exceeded` | Adjust `RateLimit` settings |
+| `PipelineContextFactory is not initialized` | Call `provider.UseAITaskAgent()` after building the provider |
+| `LLM provider 'X' requests service type 'Y', but no matching ILlmService is registered` | Register the `ILlmService` whose `Name` matches `ServiceType`, or fix `ServiceType` |
+| `LLM role 'X' references provider 'Y', which is not configured` | Fix the `Provider` key in the role; it must match a key under `Providers` |
+| `Default LLM role 'default' is not configured` | Add the role named by `DefaultRole`, or change `DefaultRole` |
+| `Pipeline timeout` | Increase `Timeouts.DefaultPipelineTimeout` |
 
 ### Enable Debug Logging
 
