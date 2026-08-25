@@ -14,7 +14,9 @@ namespace AITaskAgent.Support.Template;
 /// <param name="validateTemplates">Enable strict template validation (throws on not template exists)</param>
 public sealed class FileTemplateProvider(
     string folderPath,
-    ITemplateRendered? templateEngine,
+    // Optional: the provider already falls back to TinyTemplateRendered when none is supplied, so
+    // requiring it positionally only broke every existing call site for no gain.
+    ITemplateRendered? templateEngine = null,
     bool enableCache = true,
     TimeSpan? ttl = null,
     long? maxCacheSizeBytes = null,

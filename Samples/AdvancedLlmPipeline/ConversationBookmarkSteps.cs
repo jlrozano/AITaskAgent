@@ -19,7 +19,7 @@ internal static class ConversationBookmarkSteps
     {
         return new DelegatedStep<IStepResult, IStepResult>(
             "BookmarkConversation",
-            (input, context, attempt, result) =>
+            (step, input, context, attempt, result) =>
             {
                 // Create a bookmark at current position using native system
                 var bookmarkId = context.Conversation.CreateBookmark();
@@ -38,7 +38,7 @@ internal static class ConversationBookmarkSteps
     {
         return new DelegatedStep<IStepResult, IStepResult>(
             "RestoreConversation",
-            (input, context, attempt, result) =>
+            (step, input, context, attempt, result) =>
             {
                 // Restore to bookmark position - clears only messages after bookmark
                 if (context.Metadata.TryGetValue(BookmarkIdKey, out var bookmarkObj) &&

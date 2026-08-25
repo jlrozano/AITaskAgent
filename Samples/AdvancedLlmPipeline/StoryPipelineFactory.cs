@@ -89,7 +89,7 @@ internal static class StoryPipelineFactory
 
         var saveStoryStep = new DelegatedStep<LlmStringStepResult, LlmStringStepResult>(
             "SaveToMemory",
-            (input, context, attempt, result) =>
+            (step, input, context, attempt, result) =>
             {
                 onStorySaved(input.Content ?? "");
                 return Task.FromResult(input);
@@ -117,7 +117,7 @@ internal static class StoryPipelineFactory
 
         var saveRevisedStoryStep = new DelegatedStep<LlmStringStepResult, LlmStringStepResult>(
             "SaveRevisedStory",
-            (input, context, attempt, errorresult) =>
+            (step, input, context, attempt, errorresult) =>
             {
                 onStorySaved(input.Content ?? "");
                 return Task.FromResult(input);
@@ -153,7 +153,7 @@ internal static class StoryPipelineFactory
     {
         var otherStep = new DelegatedStep<UserIntentionResponse, StepResult<string>>(
             "OutOfScopeHandler",
-            (input, context, attemt, lastResult) =>
+            (step, input, context, attemt, lastResult) =>
             {
                 var message = "Lo siento, solo puedo ayudarte con la creación y revisión de cuentos. ¿Puedo ayudarte con algo relacionado?";
                 return Task.FromResult<StepResult<string>>(new StepResult<string>(

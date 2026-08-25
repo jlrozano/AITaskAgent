@@ -148,7 +148,9 @@ serviceProvider.UseAITaskAgent();
 var eventChannel = serviceProvider.GetService<IEventChannel>() as EventChannel;
 if (eventChannel != null)
 {
-    var reader = eventChannel.Subscribe(capacity: 1000);
+    // Subscribe(handler) is the callback form now; CreateSubscription exposes the reader.
+    var subscription = eventChannel.CreateSubscription(capacity: 1000);
+    var reader = subscription.Reader;
     _ = Task.Run(async () =>
     {
         var logDir = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "logs");
@@ -338,7 +340,7 @@ while (true)
 public class GeminiProxy(ILlmService openAiService) : ILlmService
 {
     public string Name => "gemini";
-    public Task<LlmResponse> InvokeAsync(LlmRequest request, CancellationToken ct) => openAiService.InvokeAsync(request, ct);
+    public Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken ct) => openAiService.InvokeAsync(request, ct);
     public IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(LlmRequest request, CancellationToken ct) => openAiService.InvokeStreamingAsync(request, ct);
     public int EstimateTokenCount(string text) => openAiService.EstimateTokenCount(text);
     public int GetMaxContextTokens(string? model) => openAiService.GetMaxContextTokens(model);

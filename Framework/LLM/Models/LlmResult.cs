@@ -51,6 +51,9 @@ public sealed class LlmResult
     /// <summary>The reason the generation stopped.</summary>
     public FinishReason? FinishReason => Candidates.Count > 0 ? Candidates[0].FinishReason : null;
 
+    /// <summary>Convenience property to get the tool calls of the first candidate.</summary>
+    public List<ToolCall>? ToolCalls => Candidates.Count > 0 ? Candidates[0].ToolCalls : null;
+
     /// <summary>Factory for successful results.</summary>
     public static LlmResult Success(IReadOnlyList<LlmResponse> candidates, int? tokensUsed = null, int? promptTokens = null, int? completionTokens = null, decimal? costUsd = null, string? model = null, object? nativeResponse = null) =>
         new()

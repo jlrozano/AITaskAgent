@@ -115,8 +115,10 @@ class Program
         {
             try
             {
-                var subscription = eventChannel.Subscribe();
-                await foreach (var ev in subscription.ReadAllAsync())
+                // Subscribe(handler) is now the callback form; CreateSubscription is the one that
+                // exposes a reader for async enumeration.
+                await using var subscription = eventChannel.CreateSubscription();
+                await foreach (var ev in subscription.Reader.ReadAllAsync())
                 {
                     if (ev.SuppressFromUser) continue;
 

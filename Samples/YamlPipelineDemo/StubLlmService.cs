@@ -17,15 +17,16 @@ public sealed class StubLlmService : ILlmService
         }
         """;
 
-    public Task<LlmResponse> InvokeAsync(LlmRequest request, CancellationToken cancellationToken = default)
+    public string Name => "stub";
+
+    public Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken cancellationToken = default)
     {
         Console.WriteLine($"  [StubLlm] SystemPrompt: {Truncate(request.SystemPrompt)}");
-        Console.WriteLine($"  [StubLm]  UserMessage:  {Truncate(GetLastUserMessage(request))}");
+        Console.WriteLine($"  [StubLlm] UserMessage:  {Truncate(GetLastUserMessage(request))}");
 
-        return Task.FromResult(new LlmResponse
-        {
-            Content = HardcodedResponse
-        });
+        return Task.FromResult(LlmResult.Success(
+            [new LlmResponse { Content = HardcodedResponse }],
+            model: request.Model));
     }
 
     public async IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(
