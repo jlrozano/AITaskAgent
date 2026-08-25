@@ -189,15 +189,14 @@ public sealed class PipelineExecutor
         var questionsPipeline = CreateQuestionsPipeline(questionsRole);
         var otherPipeline = CreateOtherPipeline();
 
-        // Intention analysis step. The custom system prompt must render {{ context.options }}
-        // itself: supplying one replaces the step's default template, which is where the option
-        // list is normally injected.
+        // The step appends the option catalogue to whatever system prompt it is given, so this
+        // only has to say what the classifier is for.
         var intentionStep = new IntentionAnalyzerStep<StepResult>(
             "IntentionAnalyzer",
             intentionRole,
             IntentionOptions,
             systemPromptTemplateName: "You classify user intentions for a story creation system. "
-                + "Always respond in Spanish.\n\nAvailable Options:\n{{ context.options }}");
+                + "Always respond in Spanish.");
 
         // Router step. Named "Router" because nested steps address their siblings by path
         // (see StatelessRewriterStep); the comparer makes the casing the LLM returns irrelevant.

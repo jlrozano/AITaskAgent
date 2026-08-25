@@ -14,7 +14,18 @@ namespace AITaskAgent.LLM.Steps;
 public class IntentionAnalyzerStep<TIn> : TemplateLlmStep<TIn, LlmIntentionResult>, IRouterOptions
     where TIn : IStepResult
 {
-    private const string DefaultSystemTemplate = "Analyze and clarify the user's intention based on these options:\n{{ context.options }}";
+    private const string DefaultSystemTemplate = "Analyze and clarify the user's intention.";
+
+    /// <summary>
+    /// The option catalogue, appended to whatever system prompt is in force.
+    /// </summary>
+    /// <remarks>
+    /// Kept separate from <see cref="DefaultSystemTemplate"/> because the two used to be one
+    /// string: supplying a custom system prompt replaced the default and took the catalogue with
+    /// it, leaving the model to guess options it had never been shown while the step went on
+    /// validating its answer against them.
+    /// </remarks>
+    private const string OptionsTemplate = "\n\nChoose one of these options:\n{{ context.options }}";
     private const string DefaultUserTemplate = "{{ input }}";
 
     private readonly IEnumerable<IntentionOption> _options;
@@ -29,7 +40,7 @@ public class IntentionAnalyzerStep<TIn> : TemplateLlmStep<TIn, LlmIntentionResul
         IList<string>? tools = null)
         : base(name, role, templateProvider, tools,
                promptTemplateName ?? DefaultUserTemplate,
-               (role.SystemPrompt ?? "") + "\n\n" + (systemPromptTemplateName ?? DefaultSystemTemplate))
+               (role.SystemPrompt ?? "") + "\n\n" + (systemPromptTemplateName ?? DefaultSystemTemplate) + OptionsTemplate)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
 
