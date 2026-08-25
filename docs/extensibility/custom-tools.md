@@ -39,8 +39,13 @@ public class WeatherTool : LlmTool
     }
     """);
     
+    // A tool that only reads state should say so - see "Read-only tools" below.
+    public override bool IsReadOnly => true;
+    
     protected override async Task<string> InternalExecuteAsync(
         string argumentsJson,
+        PipelineContext context,
+        ILogger logger,
         CancellationToken cancellationToken)
     {
         var args = JsonSerializer.Deserialize<WeatherArgs>(argumentsJson);
@@ -53,6 +58,61 @@ public class WeatherTool : LlmTool
     
     private record WeatherArgs(string Location, string? Units = "celsius");
 }
+```
+
+`LlmTool.ExecuteAsync` is the Template Method: it opens the OpenTelemetry activity, emits
+`tool.started` / `tool.completed`, records metrics, and calls `InternalExecuteAsync` in between.
+Exceptions thrown from `InternalExecuteAsync` are logged and re-thrown, after the completed event
+has been emitted with `Success = false`.
+
+---
+
+## Read-only tools
+
+`ITool.IsReadOnly` defaults to `false`: assume a tool has side effects unless it declares
+otherwise. Declaring it matters because the tool-calling loop uses it to decide how much repetition
+to tolerate.
+
+When the model asks for exactly the same set of calls (same names, same arguments) in consecutive
+iterations, `BaseLlmStep` counts the repeats and cuts the loop once a threshold is passed:
+
+| All calls in the iteration are read-only | Identical repeats tolerated |
+|---|---|
+| yes | 3 |
+| no | 1 |
+
+Re-reading the same file is often legitimate exploration; repeating a write with identical
+arguments means the model is stuck. When the threshold is crossed the step does not fail — the
+tool calls are dropped and the model is told why, so it answers with what it already has.
+
+```csharp
+public class ReadFileTool : LlmTool
+{
+    public override string Name => "read_file";
+    public override string Description => "Reads a text file";
+    public override bool IsReadOnly => true;    // three identical reads are tolerated
+    // ...
+}
+
+public class WriteFileTool : LlmTool
+{
+    public override string Name => "write_file";
+    public override string Description => "Writes a text file";
+    // IsReadOnly stays false: one identical repeat and the loop stops
+}
+```
+
+The decision is per tool, not per name list, so the framework stays independent of any particular
+tool package.
+
+### UsageGuidelines
+
+`ITool.UsageGuidelines` is optional behavioural guidance injected into the **system prompt**, as
+opposed to `Description`, which travels in the `ToolDefinition` handed to the model.
+
+```csharp
+public override string? UsageGuidelines =>
+    "Call read_file before proposing an edit. Never guess file contents.";
 ```
 
 ### With Observability Enrichment
@@ -94,7 +154,7 @@ public class WeatherTool : LlmTool
     {
         return baseEvent with
         {
-            AdditionalData = new Dictionary<string, object?>
+            AdditionalData = new Dictionary<string, object>
             {
                 ["location"] = JsonSerializer.Deserialize<WeatherArgs>(argumentsJson).Location
             }
@@ -118,30 +178,27 @@ public class WeatherTool : ITool
 {
     public string Name => "get_weather";
     public string Description => "Gets current weather for a location";
+    public bool IsReadOnly => true;
     
+    // ParametersJsonSchema is a JSON Schema *string*, not an object graph.
     public ToolDefinition GetDefinition() => new()
     {
         Name = Name,
         Description = Description,
-        Parameters = new
+        ParametersJsonSchema = """
         {
-            type = "object",
-            properties = new
-            {
-                location = new 
-                { 
-                    type = "string", 
-                    description = "City name, e.g., 'London'" 
-                },
-                units = new 
-                { 
-                    type = "string", 
-                    @enum = new[] { "celsius", "fahrenheit" },
-                    description = "Temperature units"
+            "type": "object",
+            "properties": {
+                "location": { "type": "string", "description": "City name, e.g., 'London'" },
+                "units": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "description": "Temperature units"
                 }
             },
-            required = new[] { "location" }
+            "required": ["location"]
         }
+        """
     };
     
     public async Task<string> ExecuteAsync(
@@ -183,19 +240,21 @@ public class DatabaseTool(IDbConnection db, ILogger<DatabaseTool> logger) : IToo
     public string Name => "query_database";
     public string Description => "Executes SQL SELECT queries";
     
+    public bool IsReadOnly => true;   // SELECT only, enforced below
+    
     public ToolDefinition GetDefinition() => new()
     {
         Name = Name,
         Description = Description,
-        Parameters = new
+        ParametersJsonSchema = """
         {
-            type = "object",
-            properties = new
-            {
-                query = new { type = "string", description = "SQL SELECT query" }
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "SQL SELECT query" }
             },
-            required = new[] { "query" }
+            "required": ["query"]
         }
+        """
     };
     
     public async Task<string> ExecuteAsync(
@@ -225,29 +284,54 @@ public class DatabaseTool(IDbConnection db, ILogger<DatabaseTool> logger) : IToo
 
 ### Manual
 
+Any `BaseLlmStep` exposes a settable `Tools` collection:
+
 ```csharp
-var tools = new List<ITool>
+var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>("Assistant", role, prompt)
 {
-    new WeatherTool(),
-    new DatabaseTool(db, logger)
+    Tools = [new WeatherTool(), new DatabaseTool(db, logger)]
 };
-
-var step = new LlmStep<In, Out>(..., tools: tools);
 ```
 
-### Via Registry
+An `LlmRole` can also carry `Tools`, in which case a step built from it starts with those.
+
+### Via the registry
+
+`IToolRegistry`/`ToolRegistry` were replaced by `ITools`/`AvailableTools`. `AvailableTools` is
+registered as `ITools` by `AddAITaskAgent()`, using the process-wide `AvailableTools.Instance`, and
+`UseAITaskAgent()` registers into it every `ITool` resolvable from DI.
 
 ```csharp
-// Registration
-services.AddSingleton<IToolRegistry, ToolRegistry>();
+services.AddSingleton<ITool, WeatherTool>();
+services.AddSingleton<ITool, DatabaseTool>();
+services.AddAITaskAgent();
 
-var registry = services.GetRequiredService<IToolRegistry>();
-registry.Register(new WeatherTool());
-registry.Register(services.GetRequiredService<DatabaseTool>());
-
-// Usage
-var tools = registry.GetAll().ToList();
+var provider = services.BuildServiceProvider();
+provider.UseAITaskAgent();     // copies the ITool registrations into AvailableTools.Instance
 ```
+
+Or register directly:
+
+```csharp
+AvailableTools.Instance.Register(new WeatherTool());
+```
+
+Reading back:
+
+```csharp
+var tools = serviceProvider.GetRequiredService<ITools>();
+
+ITool? one           = tools.GetTool("get_weather");         // case-insensitive
+IReadOnlyList<ITool> some = tools.GetTools("get_weather", "query_database");
+IReadOnlyList<ITool> all  = tools.GetAllTools();
+IReadOnlyList<ITool> mine = tools.GetAllTools("MyApp.Tools"); // filter by declaring assembly
+```
+
+`GetAllTools(moduleName)` matches the assembly name of the tool's own type, which is how tool packs
+such as `FileTools` or `McpIntegration` are selected as a group.
+
+Steps that take tool **names** (`TemplateLlmStep`, `IntentionAnalyzerStep`) resolve them through
+`AvailableTools.Instance`, so those tools must be registered before the step is constructed.
 
 ## Testing Tools
 

@@ -180,11 +180,14 @@ Executes multiple steps **concurrently** (not branching, but parallelism):
 ![ParallelStep Concurrency](../assets/images/parallel_step_concurrency.png)
 
 **Key behaviors:**
-- Each task gets a **cloned** `ConversationContext` (isolated LLM history)
+- Branches live in `ParallelStep.Branches` (not `Steps`)
+- Each branch runs on a `CloneForBranch()` context: **cloned** `ConversationContext` and its own
+  step path, so results never collide
 - `Metadata` and `StepResults` are **shared** (thread-safe)
-- All tasks execute simultaneously
-- Results aggregated into `ParallelResult.Results` dictionary
-- After all tasks complete, flow continues with the aggregated result
+- All branches execute simultaneously and emit `BranchStartedEvent` / `BranchCompletedEvent`
+- Results are aggregated into a `ParallelResult`, read via `Value["StepName"]` or
+  `GetResult<T>("StepName")`
+- After all branches complete, flow continues with the aggregated result
 
 ---
 
@@ -211,23 +214,32 @@ var router = new SwitchStep<MyInput>("Router", (input, ctx) =>
 
 ---
 
-### IntentionRouterStep (LLM-Based Routing)
+### RouterStep (LLM-Based Routing)
 
-Combines LLM intent analysis with SwitchStep:
+Combines LLM intent analysis with `SwitchStep`. Options are **strings**, described at runtime by
+an `IntentionOption` catalogue — there is no enum type parameter.
 
 ![Intention Router Flow](../assets/images/intention_router_flow.png)
 
 ```csharp
-enum UserIntent { Sales, Support, FAQ }
-
-var analyzer = new IntentionAnalyzerStep<StringResult, UserIntent>(llmService, profile);
-var router = new IntentionRouterStep<UserIntent>(new Dictionary<UserIntent, IStep>
+var options = new List<IntentionOption>
 {
-    [UserIntent.Sales] = salesPipeline,
-    [UserIntent.Support] = supportPipeline,
-    [UserIntent.FAQ] = faqPipeline
+    new() { Id = "Sales",   Description = "User wants to buy something" },
+    new() { Id = "Support", Description = "User needs help with an issue" },
+    new() { Id = "FAQ",     Description = "User is asking a general question" }
+};
+
+var analyzer = new IntentionAnalyzerStep<LlmStringStepResult>("Analyze", role, options);
+
+var router = new RouterStep("Route", new Dictionary<string, IStep>
+{
+    ["Sales"]   = salesPipeline,
+    ["Support"] = supportPipeline,
+    ["FAQ"]     = faqPipeline
 });
 ```
+
+See [Intention Routing](../guides/intention-routing.md) for the full contract.
 
 ## Design Patterns
 

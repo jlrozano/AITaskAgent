@@ -8,10 +8,15 @@ AITaskAgent includes built-in resilience patterns to handle transient failures a
 
 | Component | Pattern | Purpose |
 |-----------|---------|---------|
-| `RetryMiddleware` | Retry | Automatic retries with backoff |
+| `RetryMiddleware` | Retry | Automatic retries with validation feedback |
+| `IFallbackable` | Fallback | Switch a step to its next provider/model |
 | `TimeoutMiddleware` | Timeout | Step execution time limits |
 | `CircuitBreaker` | Circuit Breaker | Prevent cascading failures |
 | `RateLimiter` | Token Bucket | Rate limit API calls |
+
+> [!NOTE]
+> `CircuitBreaker` and `RateLimiter` are standalone classes. `AddAITaskAgent()` does **not**
+> register them in DI — instantiate them yourself, or register them in your own composition root.
 
 ---
 
@@ -120,50 +125,115 @@ Built-in middleware for automatic retries with validation.
 
 ### Behavior
 
-1. Executes step
-2. If exception → retry (up to `MaxRetries`)
-3. If `IStepResult.HasError` with `IsRecoverable` → retry
-4. Runs structural validation → retry if failed
-5. Runs semantic validation → retry if failed
-6. Final failure → return error result
+1. Executes the step (emitting a `StepStartedEvent` for every attempt after the first)
+2. If it **throws** → the exception is fatal. No retry: the step is finalized and an error result
+   is returned. A fallback switch is attempted first if the step implements `IFallbackable`
+3. If the result has an error **carrying an `OriginalException`** → same treatment as an exception
+4. If the result has an error **without** an exception → recoverable (invalid JSON, bad option
+   name…). Retry so the model can self-correct
+5. Runs structural validation (`result.ValidateAsync`) → retry if failed
+6. Runs semantic validation (`step.Validators`) → retry if failed
+7. Attempts exhausted → return an error result: `Validation failed after N attempts`
+
+There is no backoff delay between attempts: the feedback loop, not waiting, is what is expected to
+fix the failure.
 
 ### Configuration
 
-Retries are configured per-step:
+Retries are configured per step. `MaxRetries` is a plain settable property on `StepBase`
+(default `3`), not a virtual member:
 
 ```csharp
 public class MyStep : StepBase
 {
-    public override int MaxRetries => 3;
-    public override int MillisecondsBetweenRetries => 500;
+    public MyStep() : base("MyStep", typeof(IStepResult), typeof(IStepResult))
+    {
+        MaxRetries = 3;
+    }
+}
+
+// or from the outside
+var step = new MyStep { MaxRetries = 1 };
+```
+
+---
+
+## IFallbackable
+
+```csharp
+public interface IFallbackable
+{
+    bool SwitchToNextFallback(IStepResult error, int attempt);
 }
 ```
+
+`StepBase` implements it, and `BaseLlmStep` gives it meaning: it advances through
+`role.Fallbacks` (or the global `FallbackProviders` list), so `LlmService`, `Model`, `Provider` and
+`Inference` all point at the next entry.
+
+The important detail is in `RetryMiddleware`: **when a fallback switch succeeds, the attempt
+counter resets to 1**. A fresh provider therefore gets its full retry budget instead of inheriting
+the exhausted one from the provider that just failed.
+
+```json
+"Roles": {
+  "default": {
+    "Provider": "Gemini",
+    "Model": "gemini-2.5-flash",
+    "Fallbacks": [
+      { "Provider": "OpenRouter", "Model": "openai/gpt-4o-mini" },
+      { "Provider": "Groq",       "Model": "qwen/qwen3-32b" }
+    ]
+  }
+}
+```
+
+A role with no `Fallbacks` inherits the environment-level `FallbackProviders` list. Both are
+validated at startup — see [Configuration](configuration.md).
 
 ---
 
 ## TimeoutMiddleware
 
-Enforces execution time limits per step.
+Enforces execution time limits per step. Because Timeout wraps Retry in the chain, the limit is
+**global across all retry attempts**, not per attempt.
 
 ### Configuration
 
 ```csharp
-public class SlowStep : StepBase
+// StepBase.Timeout is a virtual get/set property
+var step = new SlowStep { Timeout = TimeSpan.FromSeconds(30) };
+```
+
+Resolution order is `step.Timeout ?? IPipeline.DefaultStepTimeout`. **A null result is valid and
+means no timeout** — the step runs with the incoming cancellation token untouched.
+
+On expiry the middleware emits a `StepTimeoutEvent`:
+
+```csharp
+public sealed record StepTimeoutEvent : ProgressEventBase
 {
-    public override TimeSpan? Timeout => TimeSpan.FromSeconds(30);
+    public override string EventType => "step.timeout";
+    public string? StepPath { get; init; }
+    public TimeSpan ConfiguredTimeout { get; init; }
 }
 ```
 
 Pipeline-level timeout:
 
 ```csharp
-await Pipeline.ExecuteAsync(
+var pipeline = provider.GetRequiredService<IPipeline>();
+
+await pipeline.ExecuteAsync(
     name: "TimedPipeline",
     steps: [step1, step2],
-    input: new EmptyResult(),
+    input: "start",
     pipelineTimeout: TimeSpan.FromMinutes(5)
 );
 ```
+
+Defaults come from `PipelineOptions` (`DefaultPipelineTimeout`, `DefaultStepTimeout`), seeded from
+`AITaskAgent:Timeouts`.
 
 ---
 
@@ -176,14 +246,23 @@ public class ResilientLlmService : ILlmService
 {
     private readonly ILlmService _inner;
     private readonly CircuitBreaker _circuitBreaker;
-    
-    public async Task<LlmResponse> InvokeAsync(LlmRequest request, CancellationToken ct)
+
+    public string Name => _inner.Name;
+
+    public async Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken ct = default)
     {
-        return await _circuitBreaker.ExecuteAsync(async () =>
+        try
         {
-            return await _inner.InvokeAsync(request, ct);
-        });
+            return await _circuitBreaker.ExecuteAsync(() => _inner.InvokeAsync(request, ct));
+        }
+        catch (CircuitBreakerOpenException ex)
+        {
+            // Result pattern: a retriable failure, not an exception the step has to catch
+            return LlmResult.Failure(ex, isRetriable: true);
+        }
     }
+
+    // ... InvokeStreamingAsync, EstimateTokenCount, GetMaxContextTokens delegate to _inner
 }
 ```
 
@@ -194,8 +273,10 @@ public class RateLimitedLlmService : ILlmService
 {
     private readonly ILlmService _inner;
     private readonly RateLimiter _rateLimiter;
-    
-    public async Task<LlmResponse> InvokeAsync(LlmRequest request, CancellationToken ct)
+
+    public string Name => _inner.Name;
+
+    public async Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken ct = default)
     {
         await _rateLimiter.WaitAsync(ct);
         return await _inner.InvokeAsync(request, ct);
@@ -205,16 +286,31 @@ public class RateLimitedLlmService : ILlmService
 
 ---
 
-## Configuration via DI
+## Wiring the resilience primitives
+
+`AddAITaskAgent()` reads the `CircuitBreaker` and `RateLimit` configuration sections into
+`AITaskAgentOptions`, but it does **not** register `CircuitBreaker` or `RateLimiter` as services.
+Register them yourself from those options:
 
 ```csharp
-services.AddAITaskAgent();
+services.AddSingleton(sp =>
+{
+    var o = sp.GetRequiredService<IOptions<AITaskAgentOptions>>().Value.CircuitBreaker;
+    return new CircuitBreaker(
+        failureThreshold: o.FailureThreshold,
+        openDuration: TimeSpan.FromSeconds(o.OpenDurationSeconds),
+        logger: sp.GetService<ILogger<CircuitBreaker>>());
+});
 
-// CircuitBreaker is registered as singleton
-var circuitBreaker = services.GetRequiredService<CircuitBreaker>();
-
-// RateLimiter is registered as singleton
-var rateLimiter = services.GetRequiredService<RateLimiter>();
+services.AddSingleton(sp =>
+{
+    var o = sp.GetRequiredService<IOptions<AITaskAgentOptions>>().Value.RateLimit;
+    return new RateLimiter(
+        maxTokens: o.MaxTokens,
+        refillInterval: TimeSpan.FromMilliseconds(o.RefillIntervalMs),
+        tokensPerRefill: o.TokensPerRefill,
+        logger: sp.GetService<ILogger<RateLimiter>>());
+});
 ```
 
 ### appsettings.json
@@ -226,11 +322,15 @@ var rateLimiter = services.GetRequiredService<RateLimiter>();
       "FailureThreshold": 5,
       "OpenDurationSeconds": 60
     },
-    "RateLimiter": {
+    "RateLimit": {
       "MaxTokens": 100,
-      "RefillIntervalSeconds": 1,
+      "RefillIntervalMs": 1000,
       "TokensPerRefill": 10
     }
   }
 }
 ```
+
+> [!WARNING]
+> The section is `RateLimit`, not `RateLimiter`, and the interval key is `RefillIntervalMs`
+> (milliseconds).

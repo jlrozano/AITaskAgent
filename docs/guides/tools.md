@@ -72,6 +72,9 @@ public class CalculatorTool : ITool
 {
     public string Name => "calculator";
     public string Description => "Performs basic arithmetic operations";
+
+    // Pure computation, no side effects — see "Read-only tools" below
+    public bool IsReadOnly => true;
     
     public ToolDefinition GetDefinition() => new()
     {
@@ -126,43 +129,80 @@ public class CalculatorTool : ITool
 }
 ```
 
-## Using Tools in LLM Step
+## Read-only tools
+
+`ITool` declares:
 
 ```csharp
-var tools = new List<ITool>
-{
-    new CalculatorTool(),
-    new WebSearchTool(),
-    new WeatherTool()
-};
-
-var step = new LlmStep<QueryResult, AnswerResult>(
-    llmService,
-    "Assistant",
-    profile,
-    messageBuilder: (input, ctx) => Task.FromResult(input.Query),
-    tools: tools
-);
+bool IsReadOnly => false;   // assume side effects unless the tool says otherwise
 ```
 
-## Tool Registry
+The tool-calling loop in `BaseLlmStep` uses it to decide how much repetition to tolerate when the
+model asks for the **same tool calls** as the previous iteration:
 
-Register tools for dependency injection:
+| Batch composition | Repeats allowed before the loop is cut |
+|-------------------|----------------------------------------|
+| Every call is `IsReadOnly = true` | 3 |
+| Any call mutates state | 1 |
+
+Re-reading the same file can be legitimate exploration; repeating a write with identical arguments
+cannot. The flag is declared per tool rather than inferred from a list of known names, so the
+framework stays independent of any particular tool package.
+
+## Using Tools in an LLM Step
+
+```csharp
+var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>(
+    name: "Assistant",
+    role: env.Roles["default"],
+    prompt: "{{ input }}")
+{
+    Tools = [new CalculatorTool(), new WebSearchTool(), new WeatherTool()]
+};
+```
+
+`Tools` defaults to `role.Tools ?? []`. `TemplateLlmStep` and `IntentionAnalyzerStep` also accept an
+`IList<string>` of tool **names**, resolved through `AvailableTools.Instance.GetTools(...)`.
+
+## Tool Registry: `ITools` / `AvailableTools`
+
+`IToolRegistry` / `ToolRegistry` are gone. The registry contract is `ITools`, implemented by
+`AvailableTools`, which also exposes a process-wide `AvailableTools.Instance`.
+
+```csharp
+public interface ITools
+{
+    void Register(ITool tool);
+    ITool? GetTool(string name);
+    IReadOnlyList<ITool> GetTools(params string[] names);
+    IReadOnlyList<ITool> GetAllTools(string? moduleName = null);
+}
+```
+
+`AddAITaskAgent()` registers `ITools` as `AvailableTools.Instance`. `UseAITaskAgent()` then walks
+every `ITool` registered in DI and calls `Register` on it:
 
 ```csharp
 // Registration
-services.AddSingleton<IToolRegistry, ToolRegistry>();
-var registry = services.GetRequiredService<IToolRegistry>();
-registry.Register(new CalculatorTool());
-registry.Register(new WebSearchTool());
+services.AddSingleton<ITool, CalculatorTool>();
+services.AddSingleton<ITool, WebSearchTool>();
+services.AddAITaskAgent();
+
+var provider = services.BuildServiceProvider();
+provider.UseAITaskAgent();          // pushes both tools into AvailableTools.Instance
 
 // Retrieval
-var tools = registry.GetAll().ToList();
+var tools = provider.GetRequiredService<ITools>();
+var calculator = tools.GetTool("calculator");
+var subset = tools.GetTools("calculator", "web_search");
+var all = tools.GetAllTools();
 ```
 
 ## Observability
 
-Tools automatically emit observability data for monitoring and debugging.
+Tools that extend `LlmTool` emit observability data automatically. A type that implements `ITool`
+directly emits **nothing** — the events, metrics and traces below live in `LlmTool.ExecuteAsync`,
+so a hand-rolled `ITool` must raise them itself or go unobserved.
 
 ### Events
 
@@ -172,9 +212,13 @@ Tools automatically emit observability data for monitoring and debugging.
 | `ToolCompletedEvent` | After execution (success or error) | Success, Duration, ErrorMessage |
 
 ```csharp
-eventChannel.Subscribe<ToolCompletedEvent>(e => {
-    Console.WriteLine($"Tool {e.ToolName}: {(e.Success ? "OK" : e.ErrorMessage)}");
-    Console.WriteLine($"Duration: {e.Duration.TotalMilliseconds}ms");
+using var subscription = eventChannel.Subscribe(async (evt, ct) =>
+{
+    if (evt is ToolCompletedEvent e)
+    {
+        Console.WriteLine($"Tool {e.ToolName}: {(e.Success ? "OK" : e.ErrorMessage)}");
+        Console.WriteLine($"Duration: {e.Duration.TotalMilliseconds}ms");
+    }
 });
 ```
 

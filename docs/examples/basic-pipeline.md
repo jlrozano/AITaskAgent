@@ -9,52 +9,56 @@ using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
 using AITaskAgent.Core.StepResults;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 try
 {
     // Setup DI
-    var builder = Host.CreateApplicationBuilder(args);
-    builder.Services.AddAITaskAgent();
-    var host = builder.Build();
-    
-    Pipeline.LoggerFactory = host.Services.GetRequiredService<ILoggerFactory>();
-    
-    // Define steps
-    var step1 = new ActionStep<EmptyResult, StepResult<int>>(
+    var services = new ServiceCollection();
+    services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+    services.AddLogging(b => b.AddConsole());
+    services.AddAITaskAgent();
+
+    var provider = services.BuildServiceProvider();
+    provider.UseAITaskAgent();          // required: wires the static factories
+
+    var pipeline = provider.GetRequiredService<IPipeline>();
+
+    // Define steps.
+    // The first delegate argument is the step itself - use it to build the result.
+    var step1 = new DelegatedStep<StepResult<string>, StepResult<int>>(
         "Generate",
-        async (input, context) =>
+        (step, input, context, attempt, lastResult) =>
         {
             Console.WriteLine("Step 1: Generating number...");
-            return new StepResult<int>(42);
+            return Task.FromResult(new StepResult<int>(step, 42));
         });
-    
-    var step2 = new ActionStep<StepResult<int>, StepResult<int>>(
+
+    var step2 = new DelegatedStep<StepResult<int>, StepResult<int>>(
         "Double",
-        async (input, context) =>
+        (step, input, context, attempt, lastResult) =>
         {
             Console.WriteLine($"Step 2: Doubling {input.Value}...");
-            return new StepResult<int>(input.Value * 2);
+            return Task.FromResult(new StepResult<int>(step, input.Value * 2));
         });
-    
-    var step3 = new ActionStep<StepResult<int>, StringResult>(
+
+    var step3 = new DelegatedStep<StepResult<int>, StepResult<string>>(
         "Format",
-        async (input, context) =>
+        (step, input, context, attempt, lastResult) =>
         {
             Console.WriteLine($"Step 3: Formatting {input.Value}...");
-            return new StringResult($"Result: {input.Value}");
+            return Task.FromResult(new StepResult<string>(step, $"Result: {input.Value}"));
         });
-    
+
     // Execute pipeline
-    var result = await Pipeline.ExecuteAsync(
+    var result = await pipeline.ExecuteAsync(
         name: "BasicPipeline",
         steps: [step1, step2, step3],
-        input: new EmptyResult()
-    );
-    
-    Console.WriteLine($"Output: {((StringResult)result).Value}");
+        input: "start");
+
+    Console.WriteLine($"Output: {result.Value}");
     Console.WriteLine($"Success: {!result.HasError}");
 }
 catch (Exception ex)
@@ -72,9 +76,15 @@ Output: Result: 84
 Success: True
 ```
 
+> `input` does not have to be an `IStepResult`. When it is not, the pipeline wraps it into the
+> input type declared by the first step.
+
 ---
 
 ## Parallel Pipeline
+
+`ParallelStep` runs every entry of its `Branches` collection concurrently, each on a context cloned
+via `CloneForBranch()`. The result is a `ParallelResult` keyed by branch step name.
 
 ```csharp
 using AITaskAgent.Core.Steps;
@@ -82,52 +92,51 @@ using AITaskAgent.Core.StepResults;
 
 try
 {
-    // Define parallel branches
-    var fetchUsers = new ActionStep<EmptyResult, StepResult<List<string>>>(
+    var fetchUsers = new DelegatedStep<StepResult<string>, StepResult<List<string>>>(
         "FetchUsers",
-        async (input, context) =>
+        async (step, input, context, attempt, lastResult) =>
         {
-            await Task.Delay(100); // Simulate API call
-            return new StepResult<List<string>>(["Alice", "Bob"]);
+            await Task.Delay(100);                       // Simulate API call
+            return new StepResult<List<string>>(step, ["Alice", "Bob"]);
         });
-    
-    var fetchOrders = new ActionStep<EmptyResult, StepResult<int>>(
+
+    var fetchOrders = new DelegatedStep<StepResult<string>, StepResult<int>>(
         "FetchOrders",
-        async (input, context) =>
+        async (step, input, context, attempt, lastResult) =>
         {
-            await Task.Delay(150); // Simulate API call
-            return new StepResult<int>(42);
+            await Task.Delay(150);
+            return new StepResult<int>(step, 42);
         });
-    
-    var fetchSettings = new ActionStep<EmptyResult, StringResult>(
+
+    var fetchSettings = new DelegatedStep<StepResult<string>, StepResult<string>>(
         "FetchSettings",
-        async (input, context) =>
+        async (step, input, context, attempt, lastResult) =>
         {
-            await Task.Delay(80); // Simulate API call
-            return new StringResult("dark-mode");
+            await Task.Delay(80);
+            return new StepResult<string>(step, "dark-mode");
         });
-    
-    // Parallel execution
-    var parallel = new ParallelStep<EmptyResult>(
-        "FetchAll",
-        fetchUsers,
-        fetchOrders,
-        fetchSettings
-    );
-    
-    var result = await Pipeline.ExecuteAsync(
+
+    // The generic variant pins the input type, so the pipeline knows how to wrap a raw input.
+    // The non-generic ParallelStep accepts any IStepResult and is what YAML deserializes into.
+    var parallel = new ParallelStep<StepResult<string>>(
+        "FetchAll", fetchUsers, fetchOrders, fetchSettings);
+
+    var result = await pipeline.ExecuteAsync(
         name: "ParallelPipeline",
         steps: [parallel],
-        input: new EmptyResult()
-    );
-    
+        input: "start");
+
     if (result is ParallelResult parallelResult)
     {
         Console.WriteLine("Parallel results:");
-        foreach (var (name, stepResult) in parallelResult.Results)
+        foreach (var (name, stepResult) in parallelResult.Value)
         {
             Console.WriteLine($"  {name}: {stepResult.Value}");
         }
+
+        // Or read a single branch directly - the indexer returns its Value
+        var orders = parallelResult["FetchOrders"];
+        var users  = parallelResult.GetResult<StepResult<List<string>>>("FetchUsers");
     }
 }
 catch (Exception ex)
@@ -144,6 +153,9 @@ Parallel results:
   FetchSettings: dark-mode
 ```
 
+If any branch fails, `ParallelResult.Error` collects every branch error message; the branches
+themselves still all run to completion.
+
 ---
 
 ## Pipeline with Context
@@ -151,39 +163,66 @@ Parallel results:
 ```csharp
 try
 {
-    var contextFactory = host.Services.GetRequiredService<PipelineContextFactory>();
-    var context = contextFactory.Create();
-    
+    var context = PipelineContextFactory.Create();
+
     // Store data in context
     context.Metadata["userId"] = "user-123";
-    
-    var step1 = new ActionStep<EmptyResult, StringResult>(
+
+    var step1 = new DelegatedStep<StepResult<string>, StepResult<string>>(
         "ReadContext",
-        async (input, ctx) =>
+        (step, input, ctx, attempt, lastResult) =>
         {
             var userId = ctx.Metadata["userId"]?.ToString();
-            return new StringResult($"User: {userId}");
+            return Task.FromResult(new StepResult<string>(step, $"User: {userId}"));
         });
-    
-    var step2 = new ActionStep<StringResult, StringResult>(
+
+    var step2 = new ActionStep<StepResult<string>>(
         "WriteContext",
-        async (input, ctx) =>
+        (input, ctx, attempt, lastResult) =>
         {
             ctx.Metadata["processedAt"] = DateTime.UtcNow;
-            return input;
+            return Task.CompletedTask;
         });
-    
-    await Pipeline.ExecuteAsync(
+
+    await pipeline.ExecuteAsync(
         name: "ContextPipeline",
         steps: [step1, step2],
-        input: new EmptyResult(),
-        context: context
-    );
-    
+        input: "start",
+        context: context);
+
     Console.WriteLine($"Processed at: {context.Metadata["processedAt"]}");
 }
 catch (Exception ex)
 {
     Console.WriteLine($"Error: {ex.Message}");
 }
+```
+
+`ActionStep<TIn>` is for side effects: the delegate returns `Task`, and the step produces an
+`ActionResult` carrying a success or failure message. Pass `fireAndForget: true` to let it return
+immediately without awaiting the action.
+
+Step results accumulate in `context.StepResults`, keyed by step path
+(`context.CurrentStepPath` + `/` + step name). That dictionary is also what makes a resumed
+pipeline skip the steps that already succeeded.
+
+---
+
+## Watching a Run
+
+Handlers passed as `subscribers` get an event channel scoped to that single execution:
+
+```csharp
+var result = await pipeline.ExecuteAsync(
+    name: "BasicPipeline",
+    steps: [step1, step2, step3],
+    input: "start",
+    subscribers:
+    [
+        (evt, ct) =>
+        {
+            Console.WriteLine($"[{evt.EventType}] {evt.StepName}");
+            return Task.CompletedTask;
+        }
+    ]);
 ```

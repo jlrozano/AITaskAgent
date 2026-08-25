@@ -256,8 +256,17 @@ AITaskAgent adds these tags to traces:
 | `llm.model` | LLM model used |
 | `llm.provider` | Provider name |
 | `llm.tokens_used` | Total tokens |
+| `llm.iteration` | Tool-calling round trip index |
+| `llm.has_tools` | Whether the request offered tools |
+| `llm.finish_reason` | Normalized finish reason |
+| `tool.name` | Tool identifier |
+| `tool.count` | Tools offered to the model |
+| `step.attempt` / `step.max_retries` | Retry position |
 
-| `llm.tokens_used` | Total tokens |
+> [!NOTE]
+> `AITaskAgent:Observability:EnableTracing` and `EnableMetrics` are bound into
+> `ObservabilityOptions` but are not currently read by the framework: activities and meters are
+> always created. Control collection on the OpenTelemetry side (`AddSource` / `AddMeter`) instead.
 
 ---
 
@@ -325,19 +334,23 @@ try
             .AddConsoleExporter());
     
     var host = builder.Build();
-    Pipeline.LoggerFactory = host.Services.GetRequiredService<ILoggerFactory>();
-    
+    host.Services.UseAITaskAgent();
+
+    var pipeline = host.Services.GetRequiredService<IPipeline>();
+
     // Execute pipeline - traces will be sent automatically
-    var result = await Pipeline.ExecuteAsync(
+    var result = await pipeline.ExecuteAsync(
         name: "TracedPipeline",
         steps: [
-            new ActionStep<EmptyResult, StringResult>("Step1", 
-                (i, c) => Task.FromResult(new StringResult("Hello")))
+            new DelegatedStep<StepResult<string>, StepResult<string>>(
+                "Step1",
+                (self, input, ctx, attempt, last) =>
+                    Task.FromResult(new StepResult<string>(self, "Hello")))
         ],
-        input: new EmptyResult()
+        input: string.Empty
     );
-    
-    Console.WriteLine($"Result: {((StringResult)result).Value}");
+
+    Console.WriteLine($"Result: {result.Value}");
     
     // Allow time for export
     await Task.Delay(2000);

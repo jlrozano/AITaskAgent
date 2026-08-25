@@ -1,6 +1,7 @@
 # Custom Middleware Example
 
-Based on `ContextBroadcastMiddleware` from PipelineVisualizer.
+Based on [`ContextBroadcastMiddleware`](../../Samples/PipelineVisualizer/Middleware/ContextBroadcastMiddleware.cs)
+from PipelineVisualizer.
 
 ## Context Snapshot Middleware
 
@@ -52,7 +53,7 @@ public sealed class ContextBroadcastMiddleware(
             {
                 StepName = step.Name,
                 CorrelationId = context.CorrelationId,
-                CurrentPath = context.CurrentPath,
+                CurrentPath = context.CurrentStepPath,
                 StepResults = SerializeStepResults(context),
                 Metadata = SerializeMetadata(context)
             };
@@ -120,38 +121,45 @@ public sealed class ContextBroadcastMiddleware(
 }
 ```
 
+Serializing `IStepResult` is now viable precisely because a result carries `StepName` and
+`StepType` strings instead of a reference to the `IStep` instance.
+
 ## Usage
 
+Middlewares are registered on the built service provider, not passed per execution.
+
 ```csharp
+using AITaskAgent.Core.Execution;
 using MyApp.Middleware;
 
 try
 {
-    var logger = host.Services.GetRequiredService<ILogger<ContextBroadcastMiddleware>>();
-    var eventChannel = host.Services.GetRequiredService<IEventChannel>();
-    
-    // Subscribe to snapshots
-    eventChannel.Subscribe<ContextSnapshotEvent>(async snapshot =>
+    var provider = services.BuildServiceProvider();
+    provider.UseAITaskAgent();
+
+    // Resolved from DI, or constructed with ActivatorUtilities when not registered
+    provider.RegisterPipelineMiddleware<ContextBroadcastMiddleware>();
+
+    var eventChannel = provider.GetRequiredService<IEventChannel>();
+    var pipeline = provider.GetRequiredService<IPipeline>();
+
+    // Subscribe to snapshots. Handlers receive every event; filter by type.
+    using var subscription = eventChannel.Subscribe((evt, ct) =>
     {
-        Console.WriteLine($"[Snapshot] Step: {snapshot.StepName}");
-        Console.WriteLine($"  Path: {snapshot.CurrentPath}");
-        Console.WriteLine($"  Results: {string.Join(", ", snapshot.StepResults.Keys)}");
-        Console.WriteLine($"  Metadata: {string.Join(", ", snapshot.Metadata.Keys)}");
+        if (evt is ContextSnapshotEvent snapshot)
+        {
+            Console.WriteLine($"[Snapshot] Step: {snapshot.StepName}");
+            Console.WriteLine($"  Path: {snapshot.CurrentPath}");
+            Console.WriteLine($"  Results: {string.Join(", ", snapshot.StepResults.Keys)}");
+            Console.WriteLine($"  Metadata: {string.Join(", ", snapshot.Metadata.Keys)}");
+        }
+        return Task.CompletedTask;
     });
-    
-    // Create middleware
-    var middlewares = new IPipelineMiddleware[]
-    {
-        new ContextBroadcastMiddleware(logger)
-    };
-    
-    // Execute with middleware
-    var result = await Pipeline.ExecuteAsync(
+
+    var result = await pipeline.ExecuteAsync(
         name: "MonitoredPipeline",
         steps: [step1, step2, step3],
-        input: new EmptyResult(),
-        userMiddlewares: middlewares
-    );
+        input: "start");
 }
 catch (Exception ex)
 {
@@ -177,19 +185,47 @@ catch (Exception ex)
   Metadata: startTime, endTime
 ```
 
-## Real-Time Dashboard
+## Seeing every attempt, not just every step
 
-Use with SignalR or SSE for live updates:
+This middleware wraps `next()`, so it fires **once per step** — not once per retry.
+`RetryMiddleware` is terminal: it calls `step.ExecuteAsync` directly instead of `next()`, so its
+whole retry loop happens inside the single `next()` call above.
+
+To observe individual attempts, listen for `StepStartedEvent`. `RetryMiddleware` emits one for
+every attempt after the first, carrying `AttemptNumber`, for exactly this reason.
 
 ```csharp
-public class DashboardHub : Hub
+using var retryWatch = eventChannel.Subscribe((evt, ct) =>
 {
-    public async Task StreamSnapshots(IEventChannel eventChannel)
+    if (evt is StepStartedEvent started && started.AttemptNumber > 1)
     {
-        eventChannel.Subscribe<ContextSnapshotEvent>(async snapshot =>
+        Console.WriteLine($"[Retry {started.AttemptNumber}] {started.StepName} @ {started.StepPath}");
+    }
+    return Task.CompletedTask;
+});
+```
+
+## Real-Time Dashboard
+
+Use with SignalR or SSE for live updates. Scope the subscription to a single execution by passing
+its correlation id, so concurrent runs do not bleed into each other:
+
+```csharp
+public class DashboardHub(IEventChannel eventChannel) : Hub
+{
+    public async Task StreamSnapshots(string correlationId, CancellationToken cancellationToken)
+    {
+        await using var subscription = eventChannel.CreateSubscription(
+            capacity: 500,
+            correlationId: correlationId);
+
+        await foreach (var evt in subscription.Reader.ReadAllAsync(cancellationToken))
         {
-            await Clients.All.SendAsync("ContextSnapshot", snapshot);
-        });
+            if (evt is ContextSnapshotEvent snapshot)
+            {
+                await Clients.All.SendAsync("ContextSnapshot", snapshot, cancellationToken);
+            }
+        }
     }
 }
 ```

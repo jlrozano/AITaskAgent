@@ -2,144 +2,317 @@
 
 ## Service Registration
 
+Registration is a **two-phase** operation:
+
 ```csharp
 using AITaskAgent.Configuration;
 
+// Phase 1 - register services on the collection
+services.AddSingleton<ILlmService, OpenAILlmService>();   // one or more providers
 services.AddAITaskAgent();
+
+// Phase 2 - initialize static factories on the built provider
+var provider = services.BuildServiceProvider();
+provider.UseAITaskAgent();
 ```
 
-This registers:
-- `AITaskAgentOptions` from configuration
-- `PipelineContextFactory`
-- `IEventChannel`
-- `IToolRegistry`
-- `ITemplateEngine`
-- `ICacheService`
-- `CircuitBreaker`
-- `RateLimiter`
-- `IConversationStorage`
+`AddAITaskAgent()` registers:
 
-## Configuration Options
+| Service | Implementation | Lifetime |
+|---------|----------------|----------|
+| `IPipeline` | `Pipeline` | Singleton |
+| `PipelineContextFactory` | `PipelineContextFactory` | Singleton |
+| `IPipelineContextStorage` | `InMemoryPipelineContextStorage` | Singleton |
+| `IEventChannel` | `EventChannel` | Singleton |
+| `ITemplateRendered` | `TinyTemplateRendered` | Singleton |
+| `ITools` | `AvailableTools.Instance` | Singleton |
+| `ICacheService` | `MemoryCacheService` | Singleton |
+| `IConversationStorage` | `InMemoryConversationStorage` | Singleton |
+| `ConversationContext` | factory using `Conversation.MaxTokens` | Transient |
+| `IOptions<AITaskAgentOptions>` | bound from `AITaskAgent` | Singleton |
+| `IOptions<LlmEnvironment>` | built from `AITaskAgent:LlmProviders` | Singleton |
+| `IOptions<PipelineOptions>` | derived from `AITaskAgent:Timeouts` | Singleton |
 
-### appsettings.json
+`UseAITaskAgent()` resolves `IPipeline` and `PipelineContextFactory` (arming the static
+`PipelineContextFactory.Create()` entry point) and registers every DI-registered `ITool` into
+`AvailableTools.Instance`.
+
+> [!WARNING]
+> `CircuitBreaker` and `RateLimiter` are **not** registered by `AddAITaskAgent()`. They are plain
+> classes you instantiate yourself — see [Resilience](resilience.md).
+
+---
+
+## The LLM configuration model
+
+The old `LlmProviderConfig` / `LlmProvidersConfig` / `ILlmProviderResolver` "profiles" model is
+gone. Configuration is now a **provider × role** matrix:
+
+| Type | Answers | Key members |
+|------|---------|-------------|
+| `LlmProvider` | *where* do I connect? | `BaseUrl`, `ApiKey`, `ApiVersion`, `Inference`, `Models`, `Service`, `CalculateCost(...)` |
+| `LlmRole` | *how* should this step behave? | `Provider`, `Model`, `SystemPrompt`, `Inference`, `Fallbacks`, `Tools` |
+| `LlmEnvironment` | the root section | `Providers`, `Roles`, `DefaultRole`, `FallbackProviders` |
+| `LlmInferenceSettings` | inference parameters | typed facades + free-form `Options` |
+
+A provider is a connection target. A role is the behaviour of one step: which provider, which
+model, which system prompt, which fallbacks. Several roles can share one provider, and a role can
+fall back onto a different provider entirely.
+
+---
+
+## appsettings.json
+
+Everything lives under the single `AITaskAgent` root section. `LlmProviders` is a **child** of it.
 
 ```json
 {
   "AITaskAgent": {
+    "Observability": {
+      "EventLogLevel": "Trace",
+      "EventChannelCapacity": 1000,
+      "EnableTracing": true,
+      "EnableMetrics": false
+    },
     "Timeouts": {
-      "DefaultPipelineTimeout": "00:10:00",
-      "DefaultStepTimeout": "00:01:00"
+      "DefaultPipelineTimeout": "03:00:00",
+      "DefaultStepTimeout": "01:00:00"
     },
     "Conversation": {
-      "MaxTokens": 4000
+      "MaxTokens": 8192,
+      "UseSlidingWindow": true,
+      "SlidingWindowMaxTokens": 8192,
+      "KeepFirstNMessages": 2,
+      "UseBookmarks": true
     },
-    "CircuitBreaker": {
-      "FailureThreshold": 5,
-      "OpenDurationSeconds": 30
-    },
-    "RateLimit": {
-      "MaxTokens": 100,
-      "RefillIntervalMs": 1000,
-      "TokensPerRefill": 10
-    },
-    "Observability": {
-      "EventLogLevel": "Information"
-    }
-  },
-  "LlmProviders": {
-    "Profiles": {
-      "default": {
-        "Provider": "OpenAI",
-        "Model": "gpt-4o",
-        "Temperature": 0.7,
-        "MaxTokens": 4096,
-        "JsonCapability": "JsonSchema"
+    "LlmProviders": {
+      "Providers": {
+        "OpenRouter": {
+          "ServiceType": "openai",
+          "BaseUrl": "https://openrouter.ai/api/v1/",
+          "ApiKey": "${OPENROUTER_API_KEY}"
+        },
+        "Groq": {
+          "ServiceType": "openai",
+          "BaseUrl": "https://api.groq.com/openai/v1",
+          "ApiKey": "${GROQ_API_KEY}"
+        },
+        "Ollama": {
+          "ServiceType": "openai",
+          "BaseUrl": "http://localhost:11434/v1",
+          "ApiKey": "ollama"
+        },
+        "Gemini": {
+          "ServiceType": "gemini",
+          "BaseUrl": "https://generativelanguage.googleapis.com/",
+          "ApiKey": "${GEMINI_API_KEY}",
+          "ApiVersion": "v1beta",
+          "Models": [
+            {
+              "Name": "gemini-2.5-flash",
+              "InputPricePerMillion": 0.30,
+              "OutputPricePerMillion": 2.50,
+              "Inference": { "Temperature": 0.7 }
+            }
+          ]
+        }
       },
-      "fast": {
-        "Provider": "OpenAI",
-        "Model": "gpt-4o-mini",
-        "Temperature": 0.3,
-        "MaxTokens": 1024
-      },
-      "reasoning": {
-        "Provider": "OpenAI",
-        "Model": "o1-preview",
-        "MaxTokens": 8192
+      "FallbackProviders": [
+        { "Provider": "OpenRouter", "Model": "openai/gpt-4o-mini" }
+      ],
+      "DefaultRole": "default",
+      "Roles": {
+        "default": {
+          "Provider": "Gemini",
+          "Model": "gemini-2.5-flash",
+          "SystemPrompt": "You are a helpful assistant.",
+          "Inference": {
+            "Temperature": 0.7,
+            "UseStreaming": true,
+            "Options": {
+              "ThinkingConfig": {
+                "IncludeThoughts": true,
+                "ThinkingBudget": 2048
+              }
+            }
+          }
+        },
+        "thinking": {
+          "Provider": "OpenRouter",
+          "Model": "minimax/minimax-m2.5:free",
+          "Inference": {
+            "Temperature": 0.7,
+            "Options": { "enable_thinking": true }
+          },
+          "Fallbacks": [
+            { "Provider": "Groq", "Model": "qwen/qwen3-32b" }
+          ]
+        }
       }
     }
   }
 }
 ```
 
-## Options Classes
+### Provider keys
 
-### AITaskAgentOptions
+| Key | Type | Notes |
+|-----|------|-------|
+| `BaseUrl` | `string` | **Required.** Startup fails if missing or blank. |
+| `ApiKey` | `string?` | Supports `${VAR}` environment-variable expansion. |
+| `ApiVersion` | `string?` | Passed through to the service (e.g. Gemini's `v1beta`). |
+| `ServiceType` | `string?` | Which registered `ILlmService` to bind. Defaults to the provider key itself. |
+| `Inference` | `LlmInferenceSettings?` | Provider-wide inference defaults. |
+| `Models` | `LlmModelSettings[]` | `Name`, `InputPricePerMillion`, `OutputPricePerMillion`, `Inference`. Drives `CalculateCost`. |
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `Timeouts.DefaultPipelineTimeout` | `TimeSpan` | 10 min | Max pipeline duration |
-| `Timeouts.DefaultStepTimeout` | `TimeSpan` | 1 min | Max step duration |
-| `Conversation.MaxTokens` | `int` | 4000 | Context window limit |
-| `CircuitBreaker.FailureThreshold` | `int` | 5 | Failures before open |
-| `CircuitBreaker.OpenDurationSeconds` | `int` | 30 | Time before half-open |
-| `RateLimit.MaxTokens` | `int` | 100 | Bucket capacity |
-| `RateLimit.RefillIntervalMs` | `int` | 1000 | Refill interval |
-| `RateLimit.TokensPerRefill` | `int` | 10 | Tokens per refill |
+`ServiceType` is matched against `ILlmService.Name`, first by exact case-insensitive equality and
+then by `Contains`. Several providers may share the same service (all four OpenAI-compatible
+endpoints above use `"openai"`).
 
-### LlmProviderConfig
+### Role keys
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `Provider` | `string` | Provider name (OpenAI, Azure, etc.) |
-| `Model` | `string` | Model identifier |
-| `Temperature` | `float?` | Randomness (0.0-2.0) |
-| `MaxTokens` | `int?` | Max output tokens |
-| `TopP` | `float?` | Nucleus sampling |
-| `TopK` | `int?` | Top-K sampling |
-| `FrequencyPenalty` | `float?` | Repetition penalty |
-| `PresencePenalty` | `float?` | Topic diversity |
-| `JsonCapability` | `JsonResponseCapability` | JSON support level |
+| Key | Type | Notes |
+|-----|------|-------|
+| `Provider` | `string` | **Required.** Must be a key under `Providers`. |
+| `Model` | `string` | **Required.** |
+| `SystemPrompt` | `string?` | Default system prompt for steps using this role. |
+| `Inference` | `LlmInferenceSettings?` | Overrides the provider's inference settings. |
+| `Fallbacks` | `[{ Provider, Model, Inference? }]` | When absent, the global `FallbackProviders` list is used instead. |
 
-### JsonResponseCapability
+> [!NOTE]
+> `LlmRole.Tools` exists on the object model but is **not** bound from configuration. Assign tools
+> programmatically (`step.Tools = [...]`) or through the step's `tools` constructor argument.
+
+### Environment variables in `ApiKey`
+
+Any string value matching `${NAME}` is replaced with the value of the environment variable `NAME`
+while the section is being reconstructed. When the variable is not set the literal `${NAME}` is
+left in place — so a missing key surfaces as an authentication failure from the provider, not as a
+silent empty string.
+
+---
+
+## Startup validation
+
+Binding `LlmEnvironment` is strict and **fails fast** at startup with an explicit message. There is
+no silent fallback to "whatever service happens to be registered".
+
+| Mistake | Exception message (abridged) |
+|---------|------------------------------|
+| `ServiceType` with no matching `ILlmService` | `LLM provider 'X' requests service type 'Y', but no matching ILlmService is registered. Registered services: ...` |
+| Provider without `BaseUrl` | `LLM provider 'X' has no BaseUrl configured.` |
+| Role without `Provider` | `LLM role 'X' does not declare a Provider.` |
+| Role pointing at an unknown provider | `LLM role 'X' references provider 'Y', which is not configured. Available providers: ...` |
+| Role without `Model` | `LLM role 'X' does not declare a Model.` |
+| Fallback naming an unknown provider | `Fallback in role 'X' references provider 'Y', which is not configured.` |
+| Fallback without `Model` | `Fallback in FallbackProviders for provider 'Y' does not declare a Model.` |
+| `DefaultRole` not present in `Roles` | `Default LLM role 'default' is not configured. Available roles: ...` |
+
+The rationale is deliberate: a typo in a fallback provider only shows up as an outage when the
+primary provider is already failing, and routing a prompt to a different vendor than the one
+configured is worse than refusing to start.
+
+---
+
+## LlmInferenceSettings
+
+`LlmInferenceSettings` is a **facade over a `JObject`**. The properties below are the ones the
+framework itself understands; every other knob goes into `Options`.
+
+| Property | Type | Default |
+|----------|------|---------|
+| `Temperature` | `float?` | – |
+| `TopP` | `float?` | – |
+| `MaxTokens` | `int?` | – |
+| `UseStreaming` | `bool` | `false` |
+| `JsonSupport` | `bool` | `false` |
+| `ToolSupport` | `bool` | `true` |
+| `Stop` | `IList<string>?` | – |
+| `Options` | `JObject` | `{}` — the single source of truth |
+
+Vendor-specific parameters (Gemini's `ThinkingConfig`, a gateway's `enable_thinking`, routing
+hints, `TopK`, penalties…) live in `Options` and are read by the `ILlmService` implementation:
 
 ```csharp
-public enum JsonResponseCapability
-{
-    None,        // No native JSON support
-    JsonObject,  // JSON mode without schema
-    JsonSchema   // Full structured output
-}
+var thinking = request.GetOption<JObject>("ThinkingConfig");
+var topK = request.GetOption<int?>("TopK");
 ```
 
-## Resolving LLM Profiles
+`GetOption<T>(key)` resolves keys case-insensitively. Setting a typed property writes into the same
+`Options` object, so `Temperature` and `Options["temperature"]` are the same entry.
+
+`LlmRequest` derives from `LlmInferenceSettings`, so the same accessors are available inside a
+service implementation.
+
+---
+
+## Cost calculation
+
+Pricing is configuration, not protocol, so it lives on the provider:
 
 ```csharp
-var resolver = services.GetRequiredService<ILlmProviderResolver>();
-
-// Get profile by name
-var defaultProfile = resolver.Resolve("default");
-var fastProfile = resolver.Resolve("fast");
-
-// Use in step
-var step = new LlmStep<In, Out>(llmService, "Step", fastProfile, ...);
+decimal? cost = provider.CalculateCost(model, promptTokens, completionTokens);
 ```
 
-## Programmatic Configuration
+It looks the model up in `Provider.Models` (case-insensitive) and returns `null` when the model has
+no pricing configured. `BaseLlmStep` calls it after each request and stores the value in
+`LlmResult.CostUsd`, which surfaces on the step result as `CostUsd`.
 
-```csharp
-services.Configure<AITaskAgentOptions>(options =>
-{
-    options.Timeouts.DefaultStepTimeout = TimeSpan.FromSeconds(30);
-    options.Conversation.MaxTokens = 8000;
-});
+---
 
-services.Configure<LlmProvidersConfig>(options =>
-{
-    options.Profiles["custom"] = new LlmProviderConfig
-    {
-        Provider = "OpenAI",
-        Model = "gpt-4-turbo",
-        Temperature = 0.5f
-    };
-});
-```
+## AITaskAgentOptions
+
+| Property | Type | Default | Consumed by the framework |
+|----------|------|---------|---------------------------|
+| `Observability.EventLogLevel` | `LogLevel` | `Debug` | Yes — `EventChannel` |
+| `Observability.EventChannelCapacity` | `int` | `100` | No |
+| `Observability.EnableMetrics` | `bool` | `true` | No |
+| `Observability.EnableTracing` | `bool` | `true` | No |
+| `Timeouts.DefaultPipelineTimeout` | `TimeSpan` | `00:10:00` | Yes — `PipelineOptions` |
+| `Timeouts.DefaultStepTimeout` | `TimeSpan` | `00:01:00` | Yes — `PipelineOptions` |
+| `Timeouts.DefaultToolTimeout` | `TimeSpan` | `00:00:30` | No |
+| `Timeouts.StreamingActivityTimeout` | `TimeSpan` | `00:00:30` | No |
+| `Conversation.MaxTokens` | `int` | `8192` | Yes — the transient `ConversationContext` |
+| `Conversation.UseBookmarks` | `bool` | `true` | No |
+| `Conversation.UseSlidingWindow` | `bool` | `true` | No |
+| `Conversation.KeepFirstNMessages` | `int` | `2` | No |
+| `Conversation.SlidingWindowMaxTokens` | `int` | `8192` | No |
+| `CircuitBreaker.FailureThreshold` | `int` | `5` | No |
+| `CircuitBreaker.OpenDurationSeconds` | `int` | `60` | No |
+| `RateLimit.MaxTokens` | `int` | `100` | No |
+| `RateLimit.RefillIntervalMs` | `int` | `1000` | No |
+| `RateLimit.TokensPerRefill` | `int` | `10` | No |
+
+> [!WARNING]
+> The options marked "No" are bound and readable through `IOptions<AITaskAgentOptions>`, but the
+> framework does not act on them today. `CircuitBreaker` and `RateLimit` in particular exist so
+> that *you* can construct the corresponding primitives (see [Resilience](resilience.md)); setting
+> them alone changes nothing. Sliding-window behaviour is currently decided per request by
+> `LlmRequest.UseSlidingWindow` / `SlidingWindowMaxTokens`, not by these settings.
+
+All of these are `init`-only records: they are bound from configuration, not mutated at runtime.
+To change them programmatically, supply the values through a configuration source (for example
+`AddInMemoryCollection`) rather than `services.Configure<AITaskAgentOptions>(o => ...)`.
+
+### PipelineOptions
+
+`PipelineOptions` (section name `"Pipeline"`) carries the two timeouts the `Pipeline` singleton is
+built with. `AddAITaskAgent()` seeds it from `AITaskAgent:Timeouts`:
+
+| Property | Type | Default |
+|----------|------|---------|
+| `DefaultPipelineTimeout` | `TimeSpan` | 60 min (overwritten by `Timeouts`) |
+| `DefaultStepTimeout` | `TimeSpan` | 30 min (overwritten by `Timeouts`) |
+
+---
+
+## Configuration binding notes
+
+The framework binds configuration through `BindEx` / `GetEx`, which rebuild the section as a
+`JToken` before deserializing with Newtonsoft.Json. Consequences worth knowing:
+
+- Numeric-only child keys are reconstructed as a **JSON array**, so array syntax works as expected.
+- Scalars are parsed to their natural type: `bool`, `int`/`long`, `decimal`, `double`, `TimeSpan`
+  (`"03:00:00"`), `DateTimeOffset`/`DateTime` (ISO 8601), and finally `string`.
+- Only values that end up as strings get `${VAR}` expansion.
+- `JObject`-typed members such as `LlmInferenceSettings.Options` accept arbitrary nested JSON.

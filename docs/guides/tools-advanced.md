@@ -27,12 +27,12 @@ You have two options when creating tools:
 
 ### Template Method Pattern
 
-The `ExecuteAsync()` method is **sealed** (you cannot override it). It controls the execution flow and calls your implementation at the right time:
+The `ExecuteAsync()` method is **non-virtual** (you cannot override it). It controls the execution flow and calls your implementation at the right time:
 
 ```csharp
 public abstract class LlmTool : ITool
 {
-    // ❌ SEALED - You cannot override this
+    // ❌ NON-VIRTUAL - You cannot override this
     public async Task<string> ExecuteAsync(
         string argumentsJson,
         PipelineContext context,
@@ -104,6 +104,14 @@ public class WeatherTool : LlmTool
 
 record WeatherArgs(string Location, string? Unit = "celsius");
 ```
+
+### Optional overrides
+
+| Member | Default | Why override |
+|--------|---------|--------------|
+| `IsReadOnly` | `false` | Set `true` for observation-only tools; buys the model 3 identical repetitions instead of 1 before the tool loop is cut |
+| `UsageGuidelines` | `null` | Behavioural guidance injected into the **system prompt**, separate from `Description` |
+| `GetDefinition()` | built from `Name`/`Description`/`ParametersSchema` | Full control over the emitted `ToolDefinition` |
 
 ---
 
@@ -248,7 +256,7 @@ Iteration 1:
 Prevent infinite loops by limiting iterations:
 
 ```csharp
-var llmStep = new LlmStep<In, Out>(...)
+var llmStep = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>("Agent", role, prompt)
 {
     MaxToolIterations = 5  // Default: 5
 };
@@ -263,21 +271,37 @@ InvalidOperationException: Maximum tool iterations (5) exceeded - possible infin
 
 ## Protection Mechanisms
 
-### 1. Loop Detection
+### 1. Loop Detection (repeat tolerance depends on `IsReadOnly`)
 
-Detects if the LLM requests the **exact same tools** as the previous iteration:
+Each iteration's tool calls are compared against the previous one. How many identical repetitions
+are tolerated depends on whether the batch mutates anything:
+
+| Batch composition | Repeats allowed |
+|-------------------|-----------------|
+| Every call's tool declares `IsReadOnly = true` | 3 |
+| Any call's tool mutates state (`IsReadOnly = false`, the default) | 1 |
 
 ```csharp
-// Iteration 1: LLM requests ["calculator", "weather"]
-// Iteration 2: LLM requests ["calculator", "weather"] again
-// → Loop detected! Force final response without tools
+// All read-only: re-reading the same file can be legitimate exploration
+// Iteration 1..3: ["read_file", "list_dir"]  → tolerated
+// Iteration 4:    ["read_file", "list_dir"]  → loop cut, final response forced
+
+// Mutating: repeating a write with identical arguments cannot be progress
+// Iteration 1: ["write_file"]
+// Iteration 2: ["write_file"]  → loop cut immediately
 ```
 
-**Log message:**
+`MaxToolIterations` still bounds the loop, but waiting for it wastes round-trips and tells the
+model nothing; cutting on repetition ends the loop as soon as progress stops.
+
+**Log messages:**
 ```
-Detected potential tool loop: LLM requested same tools as previous iteration.
-Forcing final response without tools.
+Step {StepName} repeated the same tool calls ({Count}/{Threshold} before stopping)
+Step {StepName} stopped: tool calls [{Tools}] repeated {Count} times without progress
 ```
+
+Declare `IsReadOnly => true` on any tool that only observes state — it directly buys the model
+more room to explore.
 
 ### 2. Deduplication
 
@@ -303,7 +327,7 @@ Deduplicated 1 duplicate tool calls from batch of 3
 
 ### 3. Tool Not Found Handling
 
-If a tool doesn't exist in the registry:
+If the requested tool is not in the step's `Tools` collection:
 
 ```csharp
 // LLM requests: unknown_tool()
@@ -572,27 +596,36 @@ protected override async Task<string> InternalExecuteAsync(
 **Symptoms**: LLM doesn't use your tool even though it should
 
 **Possible causes**:
-1. Tool not registered in `IToolRegistry`
-2. Tool not passed to `BaseLlmStep` constructor
+1. Tool not registered in `AvailableTools` (`ITools`)
+2. Tool not assigned to the step's `Tools` collection
 3. Tool name/description unclear to LLM
 4. JSON schema too complex
+5. The role's inference settings have `ToolSupport = false`
 
 **Solutions**:
 ```csharp
 // 1. Verify registration
-var tool = registry.GetTool("my_tool");
-if (tool == null)
-    throw new Exception("Tool not registered!");
+var tools = provider.GetRequiredService<ITools>();
+if (tools.GetTool("my_tool") is null)
+    throw new InvalidOperationException("Tool not registered!");
 
-// 2. Verify passed to step
-var tools = new List<ITool> { myTool };
-var step = new LlmStep(..., tools: tools);
+// 2. Verify assigned to the step
+var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>("Agent", role, prompt)
+{
+    Tools = [myTool]
+};
 
-// 3. Improve description
-public override string Description => 
-    "Gets current weather for ANY city in the world. " +
-    "Use this when user asks about temperature, conditions, or forecast.";
+// 3. Improve description, and add behavioural guidance
+public override string Description =>
+    "Gets current weather for ANY city in the world.";
+
+public override string? UsageGuidelines =>
+    "Use this whenever the user asks about temperature, conditions, or forecast.";
 ```
+
+`UsageGuidelines` is an optional `ITool` member injected into the **system prompt** (unlike
+`Description`, which goes into the `ToolDefinition`), so it is the right place for "when should I
+reach for this" guidance.
 
 ### Infinite Loop / Max Iterations Exceeded
 
@@ -620,7 +653,10 @@ else
     return $"ERROR: {errorMessage}";
 
 // 3. Increase limit temporarily for debugging
-var step = new LlmStep(...) { MaxToolIterations = 10 };
+var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>("Agent", role, prompt)
+{
+    MaxToolIterations = 10
+};
 ```
 
 ### Tool Called Multiple Times with Same Arguments

@@ -8,8 +8,12 @@ AITaskAgent provides persistence for conversation history through the `IConversa
 
 | Implementation | Storage | Use Case |
 |----------------|---------|----------|
-| `InMemoryConversationStorage` | Memory | Testing, short sessions |
+| `InMemoryConversationStorage` | Memory | Testing, short sessions. **Registered by default** |
 | `FileConversationStorage` | JSON files | Simple persistence, debugging |
+| `YamlFileConversationStorage` | YAML files | Human-readable transcripts |
+
+`AddAITaskAgent()` registers `InMemoryConversationStorage` with `AddSingleton` (not `TryAdd`), so a
+registration you add **after** it wins when a single `IConversationStorage` is resolved.
 
 ---
 
@@ -63,6 +67,11 @@ var ids = await storage.ListConversationsAsync();
 await storage.DeleteConversationAsync(context.ConversationId);
 ```
 
+> [!NOTE]
+> `ListConversationsAsync` and `DeleteConversationAsync` are **not** on `IConversationStorage` —
+> they are extra members of `FileConversationStorage`. Depend on the concrete type when you need
+> them.
+
 ---
 
 ## InMemoryConversationStorage
@@ -72,6 +81,20 @@ Stores conversations in a thread-safe dictionary. Data is lost on restart.
 ```csharp
 services.AddSingleton<IConversationStorage, InMemoryConversationStorage>();
 ```
+
+---
+
+## YamlFileConversationStorage
+
+Same contract as `FileConversationStorage`, serializing to YAML instead of JSON, which makes saved
+transcripts readable and diffable. It also understands a legacy session format on load.
+
+```csharp
+services.AddSingleton<IConversationStorage>(
+    new YamlFileConversationStorage("./data/conversations"));
+```
+
+The `basePath` is required — there is no default.
 
 ---
 
@@ -100,26 +123,30 @@ public class RedisConversationStorage : IConversationStorage
 
 ## Integration with Pipeline
 
+Persist around a step by overriding `FinalizeAsync`, which runs once after all retries. The storage
+comes from `context.ServiceProvider`, so the step needs no constructor injection:
+
 ```csharp
-public class ConversationalStep : BaseLlmStep<StringResult, LlmStepResult<string>>
+public sealed class ConversationalStep(string name, LlmRole role, string prompt)
+    : BaseLlmStep<LlmStringStepResult, LlmStringStepResult>(name, role, prompt)
 {
-    private readonly IConversationStorage _storage;
-    
-    protected override async Task<LlmStepResult<string>> ExecuteAsync(...)
+    protected override async Task FinalizeAsync(
+        IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {
-        // Load existing conversation
-        var existing = await _storage.GetConversationAsync(context.CorrelationId);
-        if (existing != null)
-        {
-            context.Conversation.History.CopyFrom(existing.History);
-        }
-        
-        var result = await base.ExecuteAsync(...);
-        
-        // Save conversation after step
-        await _storage.SaveConversationAsync(context.Conversation);
-        
-        return result;
+        await base.FinalizeAsync(result, context, cancellationToken);
+
+        var storage = context.ServiceProvider.GetRequiredService<IConversationStorage>();
+        await storage.SaveConversationAsync(context.Conversation, cancellationToken);
     }
 }
 ```
+
+To rehydrate a conversation before the pipeline starts, load it and hand it to the context factory:
+
+```csharp
+var existing = await storage.GetConversationAsync(conversationId);
+var context = PipelineContextFactory.Create(existing ?? new ConversationContext());
+```
+
+`MessageHistory.CopyFrom(other)` is available when you need to merge into an existing history
+instead of replacing the context.

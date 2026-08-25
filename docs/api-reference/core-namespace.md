@@ -224,6 +224,11 @@ public class ParallelStep : StepBase
     public List<IStep> Branches { get; init; }                // NOT "Steps"
 }
 
+public sealed class ParallelStep<TIn> : ParallelStep where TIn : StepResult
+{
+    public ParallelStep(string name, params IStep[] branches);
+}
+
 public class GroupStep : StepBase
 {
     public GroupStep();

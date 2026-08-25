@@ -84,7 +84,8 @@ public class PrometheusMiddleware(Counter stepCounter, Histogram stepDuration)
 
 ## Example: Context Snapshot Middleware
 
-From PipelineVisualizer - emits context state after each step:
+From [PipelineVisualizer](../../Samples/PipelineVisualizer/Middleware/ContextBroadcastMiddleware.cs)
+— emits context state after each step:
 
 ```csharp
 public sealed class ContextBroadcastMiddleware(
@@ -106,7 +107,7 @@ public sealed class ContextBroadcastMiddleware(
             {
                 StepName = step.Name,
                 CorrelationId = context.CorrelationId,
-                CurrentPath = context.CurrentPath,
+                CurrentPath = context.CurrentStepPath,
                 StepResults = context.StepResults
                     .ToDictionary(k => k.Key, v => (object?)v.Value.Value),
                 Metadata = context.Metadata
@@ -126,22 +127,27 @@ public sealed class ContextBroadcastMiddleware(
 }
 ```
 
-## Using Custom Middlewares
+## Registering Custom Middlewares
+
+`ExecuteAsync` no longer takes a `userMiddlewares` argument. Middlewares are registered once on the
+built service provider and apply to **every** pipeline execution in the process, in registration
+order.
 
 ```csharp
-var middlewares = new IPipelineMiddleware[]
-{
-    new PerformanceMiddleware(logger),
-    new PrometheusMiddleware(counter, histogram)
-};
+var provider = services.BuildServiceProvider();
+provider.UseAITaskAgent();
 
-await Pipeline.ExecuteAsync(
-    name: "MyPipeline",
-    steps: [step1, step2],
-    input: input,
-    userMiddlewares: middlewares  // Runs BEFORE internal middlewares
-);
+provider.RegisterPipelineMiddleware<PerformanceMiddleware>();
+provider.RegisterPipelineMiddleware<PrometheusMiddleware>();
+
+// or, by type:
+provider.RegisterPipelineMiddlewares(typeof(PerformanceMiddleware), typeof(PrometheusMiddleware));
 ```
+
+The middleware is resolved from DI when registered there, and otherwise constructed with
+`ActivatorUtilities`, so constructor injection works either way. Registrations land in the static
+`PipelineMiddlewareRegistry`; duplicate instances are ignored, and `PipelineMiddlewareRegistry.Clear()`
+exists for tests.
 
 ## Middleware Order
 
@@ -153,10 +159,37 @@ Your middlewares see:
 - Raw input before any processing
 - Result after all internal middleware processing
 
+Because `TimeoutMiddleware` wraps `RetryMiddleware`, the step timeout is global across all retry
+attempts, not per attempt.
+
+### RetryMiddleware is terminal
+
+`RetryMiddleware` does **not** call `next()`. It calls `step.ExecuteAsync` directly, in a loop, and
+runs structural and semantic validation between attempts. Two consequences:
+
+1. Nothing can be chained after it — it is always the innermost middleware.
+2. Its whole retry loop happens **inside** the single `next()` call made by the middlewares above
+   it. A middleware wrapping `next` sees one invocation covering all attempts, not one per attempt.
+
+If your middleware needs per-attempt visibility, subscribe to the `step.started` events instead:
+`RetryMiddleware` emits one for every attempt after the first, with `AttemptNumber` set, precisely
+because `ObservabilityMiddleware` cannot see them.
+
+```csharp
+eventChannel.Subscribe(async (evt, ct) =>
+{
+    if (evt is StepStartedEvent started && started.AttemptNumber > 1)
+    {
+        logger.LogWarning("Retry {N} of {Step}", started.AttemptNumber, started.StepName);
+    }
+});
+```
+
 ## Best Practices
 
 1. **Always call `next()`** - Unless intentionally short-circuiting
 2. **Use try/finally** - Ensure cleanup
-3. **Keep stateless** - Middlewares are reused across steps
+3. **Keep stateless** - Middlewares are singletons shared across every step and every pipeline
 4. **Don't swallow exceptions** - Unless intentional
-5. **Handle cancellation** - Pass token through
+5. **Handle cancellation** - `next` takes a `CancellationToken`; pass yours through so downstream
+   middlewares can replace it (this is how `TimeoutMiddleware` imposes the step timeout)

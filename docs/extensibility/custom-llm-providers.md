@@ -2,175 +2,332 @@
 
 ## Overview
 
-Create custom LLM providers by implementing `ILlmService`.
+A provider is an implementation of `ILlmService`. It is a **protocol adapter**: it turns an
+`LlmRequest` into an HTTP call and the answer back into an `LlmResult`. It holds no configuration
+of its own — connection details arrive on every request — and it does not price the call.
+
+Two implementations ship with the repository and are the best reference material:
+
+- [`OpenAILlmService`](../../OpenAILLmService/OpenAILlmService.cs) — raw HTTP against any
+  OpenAI-compatible chat-completions endpoint (OpenAI, OpenRouter, Groq, NVIDIA, Ollama, LM Studio).
+- [`GeminiLlmService`](../../GeminiLlmService/GeminiLlmService.cs) — the Google GenAI SDK, with
+  rate limiting, retry policy, file and cache managers.
 
 ## ILlmService Interface
 
 ```csharp
 public interface ILlmService
 {
-    Task<LlmResponse> InvokeAsync(
+    string Name { get; }
+
+    Task<LlmResult> InvokeAsync(
         LlmRequest request,
         CancellationToken cancellationToken = default);
-    
+
     IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(
         LlmRequest request,
         CancellationToken cancellationToken = default);
-    
+
     int EstimateTokenCount(string text);
-    
+
     int GetMaxContextTokens(string? model = null);
 }
 ```
 
-## Basic Implementation
+### `Name` is load-bearing
+
+`Name` is how configuration finds the service. When binding `AITaskAgent:LlmProviders`, each
+provider's `ServiceType` (defaulting to the provider key when absent) is matched — case-insensitively,
+exact match first, then substring — against the `Name` of every registered `ILlmService`. No match
+means the binder throws at startup rather than silently sending the prompt to another vendor.
+
+```csharp
+public sealed class OpenAILlmService : ILlmService, IDisposable
+{
+    public string Name => "openai";
+    // ...
+}
+```
+
+```json
+"Providers": {
+  "OpenRouter": { "ServiceType": "openai", "BaseUrl": "https://openrouter.ai/api/v1/", "ApiKey": "${OPENROUTER_API_KEY}" },
+  "Gemini":     { "ServiceType": "gemini", "BaseUrl": "https://generativelanguage.googleapis.com/", "ApiKey": "${GEMINI_API_KEY}", "ApiVersion": "v1beta" }
+}
+```
+
+### Cost is not your job
+
+`LlmResult.CostUsd` has an assembly-internal setter. A service reports token counts; it never sees
+the model catalogue, so it cannot price them. `BaseLlmStep` fills the value in after the call:
+
+```csharp
+result.CostUsd = Provider.CalculateCost(result.Model ?? Model, result.PromptTokens, result.CompletionTokens);
+```
+
+`LlmProvider.CalculateCost` reads `InputPricePerMillion` / `OutputPricePerMillion` from the
+provider's `Models` list. Report `PromptTokens` and `CompletionTokens` accurately and pricing takes
+care of itself.
+
+### Errors are results, not exceptions
+
+`LlmResult` implements the Result pattern. Return `LlmResult.Failure(exception, isRetriable)`
+instead of throwing, so the step's retry and fallback machinery can decide what to do:
+
+```csharp
+if (!httpResponse.IsSuccessStatusCode)
+{
+    var statusCode = (int)httpResponse.StatusCode;
+    var ex = new HttpRequestException($"HTTP {statusCode}: {rawJson}");
+    return LlmResult.Failure(ex, IsRetriable(statusCode));   // 429, 500, 502, 503, 504
+}
+```
+
+## Reading the request
+
+Everything the call needs is on `LlmRequest`, which itself derives from `LlmInferenceSettings`:
+
+```csharp
+request.Model            // string, required
+request.BaseUrl          // from LlmProvider
+request.ApiKey
+request.ApiVersion
+request.SystemPrompt
+request.Conversation     // ConversationContext
+request.Tools            // IList<ToolDefinition>?
+request.ResponseFormat
+request.Temperature, request.MaxTokens, request.TopP, request.Stop, request.UseStreaming
+request.Options          // JObject: everything vendor-specific
+```
+
+Vendor-specific parameters are read from `Options` with `GetOption<T>` (case-insensitive):
+
+```csharp
+var topK           = request.GetOption<int?>("TopK");
+var enableThinking = request.GetOption<bool?>("EnableThinking");
+var budget         = request.GetOption<int?>("ThinkingBudget");
+```
+
+`OpenAILlmService` takes the simpler route for an OpenAI-compatible body: it copies every property
+of `Options` straight into the JSON payload.
+
+```csharp
+if (request.Options != null)
+    foreach (var prop in request.Options.Properties())
+        body[prop.Name] = prop.Value.DeepClone();
+```
+
+## Basic implementation
 
 ```csharp
 using AITaskAgent.LLM.Abstractions;
+using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Models;
+using Microsoft.Extensions.Logging;
+using System.Runtime.CompilerServices;
 
-public class CustomLlmService(HttpClient httpClient, ILogger<CustomLlmService> logger) 
-    : ILlmService
+public sealed class CustomLlmService(ILogger<CustomLlmService> logger) : ILlmService
 {
-    public async Task<LlmResponse> InvokeAsync(
+    public string Name => "custom";
+
+    public async Task<LlmResult> InvokeAsync(
         LlmRequest request,
         CancellationToken cancellationToken = default)
     {
+        var client = GetOrCreateClient(request.BaseUrl, request.ApiKey);
+
         var messages = request.Conversation.GetMessagesForRequest(
             maxTokens: request.SlidingWindowMaxTokens,
             useSlidingWindow: request.UseSlidingWindow);
-        
+
         var payload = new
         {
-            model = request.Profile.Model,
-            messages = messages.Select(m => new { role = m.Role, content = m.Content }),
+            model       = request.Model,
+            system      = request.SystemPrompt,
+            messages    = messages.Select(m => new { role = m.Role, content = m.Content }),
             temperature = request.Temperature,
-            max_tokens = request.MaxTokens
+            max_tokens  = request.MaxTokens
         };
-        
-        var response = await httpClient.PostAsJsonAsync(
-            "/v1/chat/completions", 
-            payload, 
-            cancellationToken);
-        
-        var result = await response.Content.ReadFromJsonAsync<ApiResponse>(cancellationToken);
-        
-        return new LlmResponse
+
+        HttpResponseMessage httpResponse;
+        string rawJson;
+        try
         {
-            Content = result.Choices[0].Message.Content,
-            TokensUsed = result.Usage.TotalTokens,
-            PromptTokens = result.Usage.PromptTokens,
-            CompletionTokens = result.Usage.CompletionTokens,
-            FinishReason = result.Choices[0].FinishReason,
-            Model = result.Model
-        };
+            httpResponse = await client.PostAsJsonAsync("/v1/chat", payload, cancellationToken);
+            rawJson = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not TaskCanceledException)
+        {
+            logger.LogError(ex, "HTTP request failed");
+            return LlmResult.Failure(ex, isRetriable: true);
+        }
+
+        if (!httpResponse.IsSuccessStatusCode)
+        {
+            var status = (int)httpResponse.StatusCode;
+            return LlmResult.Failure(
+                new HttpRequestException($"HTTP {status}: {rawJson}"),
+                isRetriable: status is 429 or 500 or 502 or 503 or 504);
+        }
+
+        var api = JsonConvert.DeserializeObject<ApiResponse>(rawJson)!;
+
+        // One LlmResponse per candidate; usage belongs to the call as a whole.
+        var candidates = api.Choices.Select(c =>
+        {
+            var (finishReason, rawFinishReason) = FinishReasonExtensions.Parse(c.FinishReason);
+            return new LlmResponse
+            {
+                Index           = c.Index,
+                Content         = c.Message.Content ?? string.Empty,
+                Reasoning       = c.Message.Reasoning,
+                FinishReason    = finishReason,
+                RawFinishReason = rawFinishReason,
+                ToolCalls       = c.Message.ToolCalls?.Select(tc => new ToolCall
+                {
+                    Id        = tc.Id,
+                    Name      = tc.Function.Name,
+                    Arguments = tc.Function.Arguments
+                }).ToList()
+            };
+        }).ToList();
+
+        return LlmResult.Success(
+            candidates,
+            tokensUsed:       api.Usage?.TotalTokens,
+            promptTokens:     api.Usage?.PromptTokens,
+            completionTokens: api.Usage?.CompletionTokens,
+            model:            api.Model ?? request.Model,
+            nativeResponse:   api);
     }
-    
+
     public async IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(
         LlmRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Implement streaming...
+        await foreach (var delta in ReadServerSentEventsAsync(request, cancellationToken))
+        {
+            yield return new LlmStreamChunk
+            {
+                Delta       = delta.Text,
+                IsThinking  = delta.IsReasoning,
+                IsComplete  = false,
+                ChoiceIndex = delta.Index
+            };
+        }
+
+        // Final chunk carries the usage; without it TokensUsed stays at zero.
         yield return new LlmStreamChunk
         {
-            Delta = "chunk content",
-            IsComplete = false
+            Delta            = string.Empty,
+            IsComplete       = true,
+            FinishReason     = FinishReason.Stop,
+            TokensUsed       = totalTokens,
+            PromptTokens     = promptTokens,
+            CompletionTokens = completionTokens
         };
     }
-    
-    public int EstimateTokenCount(string text) => text.Length / 4;
-    
-    public int GetMaxContextTokens(string? model = null) => 128000;
+
+    public int EstimateTokenCount(string text) => (int)Math.Ceiling(text.Length / 4.0);
+
+    public int GetMaxContextTokens(string? model = null) => 128_000;
 }
 ```
 
-## Extending BaseLlmService
+Both shipped services estimate tokens as `ceil(length / 4)`. `GeminiLlmService` additionally exposes
+`CountTokensExactAsync` for when an exact number matters.
 
-For providers with common patterns:
+## Streaming
+
+`InvokeStreamingAsync` yields `LlmStreamChunk`. Points that bite in practice:
+
+- `Delta` is the increment, never the accumulated text.
+- Set `IsThinking` for reasoning traces so the consumer can render them separately.
+- Token counts only arrive on the final chunk. On OpenAI-compatible endpoints you have to ask for
+  them: `body["stream_options"] = new JObject { ["include_usage"] = true }`. Without it,
+  `total_tokens` never arrives.
+- Use `ToolCallUpdates` (`IReadOnlyList<ToolCallUpdate>`) for incremental tool-call fragments and
+  `ChoiceIndex` to keep multiple candidates apart.
+
+## Tool calls
+
+Tools reach the service as `IList<ToolDefinition>`, with the schema already serialized as a JSON
+string:
 
 ```csharp
-public class AzureOpenAIService : BaseLlmService
+public sealed record ToolDefinition
 {
-    public AzureOpenAIService(HttpClient httpClient, ILogger<AzureOpenAIService> logger)
-        : base(httpClient, logger)
-    {
-    }
-    
-    protected override string GetEndpoint(LlmRequest request)
-        => $"openai/deployments/{request.Profile.Model}/chat/completions?api-version=2024-02-15-preview";
-    
-    protected override void ConfigureRequest(HttpRequestMessage request, LlmRequest llmRequest)
-    {
-        request.Headers.Add("api-key", _apiKey);
-    }
+    public required string Name { get; init; }
+    public required string Description { get; init; }
+    public required string ParametersJsonSchema { get; init; }
+    public NativeObject? Native { get; init; }
 }
 ```
+
+Translate them into the vendor's shape, and translate the model's answer back into `ToolCall`
+(`Id`, `Name`, `Arguments` as a JSON string). Models served on open-weight endpoints often emit tool
+calls as text rather than structured fields; `OpenAILlmService` handles that with a normalization
+plugin chain rather than in the transport code — see
+[Open-weight models](../guides/open-weight-models.md).
 
 ## Registration
 
+Register every implementation as `ILlmService`. Multiple registrations are expected: the
+configuration binder picks per provider by `Name`.
+
 ```csharp
-// Single provider
+services.AddSingleton<ILlmService, GeminiLlmService.GeminiLlmService>();
+services.AddSingleton<ILlmService, OpenAILLmService.OpenAILlmService>();
 services.AddSingleton<ILlmService, CustomLlmService>();
 
-// Named providers
-services.AddKeyedSingleton<ILlmService, OpenAILlmService>("openai");
-services.AddKeyedSingleton<ILlmService, AnthropicLlmService>("anthropic");
+services.AddAITaskAgent();
 
-// Factory pattern
-services.AddSingleton<ILlmServiceFactory, LlmServiceFactory>();
+var provider = services.BuildServiceProvider();
+provider.UseAITaskAgent();
 ```
 
-## Provider Configuration
+There is no keyed registration and no `ILlmServiceFactory`: selection happens through
+`LlmProvider.ServiceType` in configuration.
+
+## Provider configuration
 
 ```json
 {
-  "LlmProviders": {
-    "Profiles": {
-      "custom": {
-        "Provider": "Custom",
-        "Model": "my-model",
-        "Temperature": 0.7,
-        "Endpoint": "https://my-api.com/v1"
+  "AITaskAgent": {
+    "LlmProviders": {
+      "DefaultRole": "default",
+      "Providers": {
+        "MyGateway": {
+          "ServiceType": "custom",
+          "BaseUrl": "https://my-api.com/v1/",
+          "ApiKey": "${MY_API_KEY}",
+          "Models": [
+            {
+              "Name": "my-model-large",
+              "InputPricePerMillion": 3.0,
+              "OutputPricePerMillion": 15.0,
+              "Inference": { "MaxTokens": 8192 }
+            }
+          ]
+        }
+      },
+      "Roles": {
+        "default": {
+          "Provider": "MyGateway",
+          "Model": "my-model-large",
+          "SystemPrompt": "You are a helpful assistant.",
+          "Inference": {
+            "Temperature": 0.7,
+            "UseStreaming": true,
+            "Options": { "my_vendor_flag": true }
+          }
+        }
       }
     }
   }
 }
 ```
 
-## Handling Tool Calls
-
-```csharp
-public async Task<LlmResponse> InvokeAsync(LlmRequest request, CancellationToken ct)
-{
-    // Include tools in request
-    var payload = new
-    {
-        model = request.Profile.Model,
-        messages = BuildMessages(request),
-        tools = request.Tools?.Select(t => new
-        {
-            type = "function",
-            function = new
-            {
-                name = t.Name,
-                description = t.Description,
-                parameters = t.Parameters
-            }
-        })
-    };
-    
-    // ... call API ...
-    
-    // Parse tool calls from response
-    return new LlmResponse
-    {
-        Content = result.Content,
-        ToolCalls = result.ToolCalls?.Select(tc => new ToolCall
-        {
-            Id = tc.Id,
-            Name = tc.Function.Name,
-            Arguments = tc.Function.Arguments
-        }).ToList()
-    };
-}
-```
+Binding fails at startup — deliberately, and loudly — when `ServiceType` matches no registered
+service, when `BaseUrl` is missing, when a role names an unknown provider, when a role omits
+`Model`, or when `DefaultRole` is not among the configured roles.

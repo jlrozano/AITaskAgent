@@ -78,14 +78,18 @@ public class DynamicStep : StepBase
 }
 ```
 
-## Implementing IEnrichableStep
+## Enriching observability
 
-Add observability hooks:
+`IEnrichableStep` no longer exists. Enrichment is `IEnrichable`, and it is **composition, not
+inheritance**: `StepBase` already implements `IEnrichable` and exposes the hooks as
+`protected virtual` methods, so a step just overrides what it needs.
 
 ```csharp
-public class ObservableStep : TypedStep<In, Out>, IEnrichableStep
+public class ObservableStep : TypedStep<In, Out>
 {
-    protected override void EnrichActivityBefore(
+    public ObservableStep() : base("Observable") { }
+    
+    protected internal override void EnrichActivityBefore(
         Activity? activity, 
         IStepResult input, 
         PipelineContext context)
@@ -93,7 +97,7 @@ public class ObservableStep : TypedStep<In, Out>, IEnrichableStep
         activity?.SetTag("custom.input_size", input.Value?.ToString().Length);
     }
     
-    protected override void EnrichActivityAfter(
+    protected internal override void EnrichActivityAfter(
         Activity? activity, 
         IStepResult result, 
         PipelineContext context)
@@ -106,27 +110,44 @@ public class ObservableStep : TypedStep<In, Out>, IEnrichableStep
         IStepResult result, 
         PipelineContext context)
     {
-        return baseEvent with
-        {
-            AdditionalData = new Dictionary<string, object?>
-            {
-                ["customMetric"] = CalculateMetric(result)
-            }
-        };
+        return baseEvent is StepCompletedEvent completed
+            ? completed with
+              {
+                  AdditionalData = new Dictionary<string, object?>
+                  {
+                      ["customMetric"] = CalculateMetric(result)
+                  }
+              }
+            : baseEvent;
     }
 }
 ```
 
-## Custom StepResult
+Alternatively, attach an external enricher without touching the step's class:
 
 ```csharp
-public record MyStepResult : StepResult
+step.Enrichable = new MyEnricher();   // StepBase's default hooks delegate to it
+```
+
+## Custom StepResult
+
+Step results are classes, not records, and their constructor takes the `IStep` that produced them —
+that is where `StepName` and `StepType` come from.
+
+```csharp
+public class MyStepResult(IStep step, string? value = null) : StepResult<string>(step, value)
 {
-    public required string ProcessedData { get; init; }
     public int ItemCount { get; init; }
     public TimeSpan ProcessingTime { get; init; }
+
+    public override Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
+        => Task.FromResult(ItemCount > 0 ? (true, (string?)null) : (false, "No items produced"));
 }
 ```
+
+`ValidateAsync` on the result is the **structural** check; `IStep.ValidateAsync` (via
+`StepBase.Validate`) is the **semantic** one. `RetryMiddleware` runs both, and a failure in either
+consumes an attempt and feeds the error message back to the step's next attempt.
 
 ## Finalization Hook
 
@@ -146,3 +167,58 @@ protected override Task FinalizeAsync(
     return Task.CompletedTask;
 }
 ```
+
+## Attachable Validators
+
+Instead of overriding `Validate`, semantic checks can be attached as `IStepValidator` instances.
+`StepBase.Validate` runs them in order and short-circuits on the first failure, so this is also the
+mechanism YAML pipelines use.
+
+```csharp
+public sealed class NonEmptyValidator : IStepValidator
+{
+    public string Id => "non-empty";
+
+    public Task<(bool IsValid, string? Error)> ValidateAsync(
+        IStepResult result, PipelineContext context, CancellationToken cancellationToken)
+        => Task.FromResult(string.IsNullOrWhiteSpace(result.Value?.ToString())
+            ? (false, "Result is empty")
+            : (true, (string?)null));
+}
+
+step.AddValidator(new NonEmptyValidator());
+```
+
+## Fallbacks
+
+Implement `SwitchToNextFallback` to give a step a second chance with a different backing resource.
+`RetryMiddleware` calls it when an attempt fails; returning `true` resets the attempt counter to 1
+and runs again. `BaseLlmStep` uses this to walk `LlmRole.Fallbacks`.
+
+```csharp
+protected override bool SwitchToNextFallback(IStepResult error, int attempt)
+{
+    if (_endpointIndex + 1 >= _endpoints.Count) return false;
+    _endpointIndex++;
+    return true;
+}
+```
+
+## Suspension
+
+`IStep.Resume` is what makes a step suspendable. `StepBase` returns itself, so overriding
+`SaveStateAsync` / `RestoreStateAsync` is enough:
+
+```csharp
+protected override Task<object?> SaveStateAsync() => Task.FromResult<object?>(_partialWork);
+
+protected override Task RestoreStateAsync(object? state, object? hitlResponse)
+{
+    _partialWork = state as PartialWork;
+    _approval = hitlResponse as ApprovalDecision;
+    return Task.CompletedTask;
+}
+```
+
+Returning a result with `SuspendInfo` set while `Resume` is `null` throws. The full flow is in
+[Human in the loop](../guides/human-in-the-loop.md).

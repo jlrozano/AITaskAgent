@@ -29,12 +29,18 @@ public sealed record DataProcessedEvent : ProgressEventBase
 ```csharp
 public abstract record ProgressEventBase : IProgressEvent
 {
-    public required string StepName { get; init; }
+    public string StepName { get; init; } = string.Empty;
     public abstract string EventType { get; }
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
     public string? CorrelationId { get; init; }
+    public bool SuppressFromUser { get; init; }
+    public string SchemaVersion { get; init; } = "1.0";
 }
 ```
+
+`SuppressFromUser = true` means the event is logged but never routed to subscribers — use it for
+diagnostics you do not want surfacing in a UI. `SchemaVersion` lets consumers cope with payload
+changes; set it explicitly if your event ever gains or loses fields.
 
 ## Emitting Events from Steps
 
@@ -104,11 +110,16 @@ public class AuditMiddleware : IPipelineMiddleware
 
 ## Subscribing to Custom Events
 
+There is no generic `Subscribe<TEvent>`. The handler receives every event as `IProgressEvent` and
+filters by type; an optional `correlationId` narrows the subscription to one pipeline execution.
+
 ```csharp
 var eventChannel = services.GetRequiredService<IEventChannel>();
 
-eventChannel.Subscribe<DataProcessedEvent>(async e =>
+using var subscription = eventChannel.Subscribe(async (evt, ct) =>
 {
+    if (evt is not DataProcessedEvent e) return;
+
     Console.WriteLine($"Processed {e.RecordsProcessed} records");
     Console.WriteLine($"Throughput: {e.ThroughputPerSecond:F2}/sec");
     
@@ -120,6 +131,42 @@ eventChannel.Subscribe<DataProcessedEvent>(async e =>
         correlation_id = e.CorrelationId
     });
 });
+```
+
+`Subscribe` returns an `IDisposable`; disposing it unsubscribes and drains the handler's buffer.
+Each subscription has its own bounded channel (200 items, drop-oldest), so a slow handler never
+blocks the pipeline — it loses the oldest events instead.
+
+### Reader form
+
+For SSE, WebSockets or anything that wants to pull rather than be pushed:
+
+```csharp
+await using var subscription = eventChannel.CreateSubscription(
+    capacity: 500,
+    correlationId: context.CorrelationId);
+
+await foreach (var evt in subscription.Reader.ReadAllAsync(cancellationToken))
+{
+    if (evt is DataProcessedEvent e)
+    {
+        await response.WriteAsync($"data: {JsonConvert.SerializeObject(e)}\n\n", cancellationToken);
+    }
+}
+```
+
+### Per-execution subscribers
+
+`IPipeline.ExecuteAsync` also accepts a `subscribers` argument. Those handlers get an
+`EventChannel` created for that run alone, which is the cleanest way to isolate concurrent
+executions:
+
+```csharp
+await pipeline.ExecuteAsync(
+    name: "MyPipeline",
+    steps: steps,
+    input: input,
+    subscribers: [async (evt, ct) => Console.WriteLine(evt.EventType)]);
 ```
 
 ## Event for Streaming Updates

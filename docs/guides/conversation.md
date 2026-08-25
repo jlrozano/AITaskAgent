@@ -13,9 +13,14 @@ var conversation = services.GetRequiredService<ConversationContext>();
 // Manual creation
 var conversation = new ConversationContext(
     maxTokens: 4000,
-    tokenCounter: text => text.Length / 4  // Approximate
+    tokenCounter: text => text.Length / 4,   // Approximate
+    logger: loggerFactory.CreateLogger<ConversationContext>()
 );
 ```
+
+The DI registration is **transient** and pre-configured with `Conversation.MaxTokens` from
+configuration plus the registered `ILlmService.EstimateTokenCount` as the token counter (falling
+back to `NullLlmService` when no provider is registered).
 
 ## Adding Messages
 
@@ -69,6 +74,7 @@ Manage context size by keeping recent messages:
 // Get messages with sliding window
 var messages = conversation.GetMessagesForRequest(
     maxTokens: 8192,
+    fromBookmark: null,      // when set, returns only the messages after that bookmark
     useSlidingWindow: true
 );
 
@@ -106,7 +112,7 @@ var clone = conversation.Clone();
 Conversation is part of `PipelineContext`:
 
 ```csharp
-var context = contextFactory.Create();
+var context = PipelineContextFactory.Create(conversation);
 
 // Access conversation
 context.Conversation.AddUserMessage("Query");
@@ -126,5 +132,5 @@ var conversation = new ConversationContext(
 );
 
 // Check token usage
-var totalTokens = conversation.History.EstimateTokenCount();
+var totalTokens = conversation.History.GetTotalTokenCount();
 ```
