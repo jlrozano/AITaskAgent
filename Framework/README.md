@@ -310,14 +310,26 @@ Pre-ejecución reciben `(argumentsJson, context)`, post-ejecución reciben `(res
 | `EnrichMetrics()` | `(ToolMetricData, string result)` | Antes de enviar métricas |
 | `EnrichCompletedEvent()` | `(ToolCompletedEvent, string result)` | Antes de enviar evento |
 
-### BaseLlmStep<TIn, TOut> - Hooks LLM Adicionales
+### BaseLlmStep - Hooks LLM Adicionales
+
+`BaseLlmStep` es **no genérico**: recibe `Type inputType` y `Type outputType` por constructor, de
+modo que un mismo paso sirve tanto al camino code-first como al declarativo en YAML, donde los tipos
+sólo se conocen al compilar los esquemas. `BaseLlmStep<TIn, TOut>` sigue existiendo como heredero
+tipado para quien escribe pasos en C#.
+
+El constructor toma `(string name, LlmRole role, Type inputType, Type outputType, string prompt,
+string? systemPrompt = null)`. No recibe `ILlmService`: el servicio sale de `role.Provider.Service`,
+y cambia solo al avanzar por la cadena de *fallbacks*.
 
 | Método | Acceso | Tipo | Descripción |
 |--------|--------|------|-------------|
-| `BuildMessageAsync()` | protected | virtual | Construye el mensaje del usuario |
-| `GetSystemPrompt()` | protected | virtual | Retorna prompt del sistema |
+| `BuildUserMessageAsync()` | protected | virtual | Construye el mensaje del usuario (por defecto, `Prompt`) |
+| `BuildSystemMessageAsync()` | protected | virtual | Construye el mensaje de sistema (por defecto, `SystemPrompt`) |
+| `GetConversationContext()` | protected | virtual | Elige la conversación del paso (por defecto, la del pipeline) |
 | `BuildLlmRequestAsync()` | protected | virtual | Personaliza completamente el request |
-| `ParseLlmResponseAsync()` | protected | virtual | Parsea respuesta del LLM |
+| `ConfigureLlmRequest()` | protected | virtual | Ajustes menores sobre el request ya construido |
+| `ParseLlmResponseAsync()` | protected | virtual | Parsea la respuesta del LLM |
+| `SwitchToNextFallback()` | protected | override | Avanza al siguiente proveedor de la cadena (`IFallbackable`) |
 | `ExecuteToolsAsync()` | protected | virtual | Ejecuta tools llamados por LLM |
 | `OnToolExecutedAsync()` | protected | virtual | Hook post-ejecución de tool |
 | `ShouldRetryAsync()` | protected | virtual | Decide si reintentar |

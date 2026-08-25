@@ -112,6 +112,9 @@ steps:
 - [Core Concepts](docs/guides/core-concepts.md)
 - [Steps](docs/guides/steps.md) - Including flow control steps
 - [LLM Steps](docs/guides/llm-steps.md)
+- [YAML Pipelines](docs/guides/yaml-pipelines.md) - Declarative pipelines with compiled schemas
+- [Human-in-the-Loop](docs/guides/human-in-the-loop.md) - Suspending and resuming a run
+- [Open-Weight Models](docs/guides/open-weight-models.md) - Tool calls and reasoning from models that ignore the protocol
 - [Tools](docs/guides/tools.md)
 - [Conversation](docs/guides/conversation.md)
 - [Conversation Storage](docs/guides/conversation-storage.md)
