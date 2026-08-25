@@ -90,13 +90,71 @@ public async Task<IStepResult> InvokeAsync(
 
 ## Execution Flow
 
-![Execution Sequence Flow](../assets/images/execution_sequence_flow.png)
+```mermaid
+sequenceDiagram
+    participant App
+    participant Pipeline as IPipeline
+    participant Obs as Observability
+    participant Timeout
+    participant Retry
+    participant Step
+
+    App->>Pipeline: ExecuteAsync(name, steps, input, context)
+    Pipeline->>Pipeline: attach itself to the context
+    loop for each step
+        Pipeline->>Obs: begin
+        Obs->>Obs: StepStartedEvent (attempt 1)
+        Obs->>Timeout: next()
+        Timeout->>Retry: next()
+        loop until valid or MaxRetries
+            Retry->>Step: ExecuteAsync(input, context, attempt)
+            Step-->>Retry: IStepResult
+            Retry->>Retry: structural then semantic validation
+            alt invalid, no exception
+                Retry->>Step: retry, feeding the error back
+            else provider failure
+                Retry->>Step: SwitchToNextFallback, attempt resets
+            end
+        end
+        Retry-->>Obs: result
+        Obs->>Obs: StepCompletedEvent
+        Pipeline->>Pipeline: cache result, then run its NextSteps
+    end
+    Pipeline-->>App: final IStepResult
+```
+
+Retry sits at the end of the chain and calls the step directly rather than `next()`, so its attempts
+happen *inside* Observability's single call — which is why retries emit their own start event.
 
 ## The Dynamic Execution Loop
 
 The AITaskAgent engine operates as a **Dynamic Stack Consumer** centered around a shared state. This architecture allows for runtime-extensible flows, self-correcting agents, and resilient execution.
 
-![Advanced Execution Flow Schematic](../assets/images/aitaskagent_architecture_v4.png)
+```mermaid
+flowchart TB
+    subgraph ctx ["PipelineContext · the shared state"]
+        direction LR
+        conv["Conversation"]
+        results["StepResults<br/><i>cache + fast-forward</i>"]
+        meta["Metadata"]
+        runtime["Runtime<br/><i>the engine itself</i>"]
+    end
+
+    stack["Step stack<br/><i>grows as steps inject NextSteps</i>"]
+    exec["Execute next step<br/>through the middleware chain"]
+    done(["done"])
+
+    stack --> exec
+    exec -- "returns NextSteps" --> stack
+    exec -- "suspends" --> susp["Persist context<br/>PipelineSuspendedEvent"]
+    susp -. "resume: skip what is cached" .-> stack
+    exec -- "stack empty" --> done
+
+    exec <--> ctx
+```
+
+The stack is consumed, not walked: a step can push more work onto it, which is what makes routing,
+iterative refinement and self-correction possible without declaring the shape in advance.
 
 ### 1. Context Activation & Setup
 Before execution, the `PipelineContextFactory` initializes the **Operational Memory (Context)**:
@@ -163,7 +221,11 @@ The Pipeline processes `NextSteps` before moving to the next configured step.
 
 Creates a **branch** in the flow by injecting sequential sub-steps. After the branch completes, execution continues with the parent flow. Groups can be **nested**.
 
-![GroupStep Branching](../assets/images/group_step_branching.png)
+```mermaid
+flowchart LR
+    prev["Step A"] --> g["GroupStep"]
+    g -- "NextSteps" --> n1["Nested 1"] --> n2["Nested 2"] --> next["Step B<br/><i>parent flow resumes</i>"]
+```
 
 **Key behaviors:**
 - Sets `input.NextSteps = [NestedStep1, NestedStep2, ...]` and returns immediately
@@ -177,7 +239,24 @@ Creates a **branch** in the flow by injecting sequential sub-steps. After the br
 
 Executes multiple steps **concurrently** (not branching, but parallelism):
 
-![ParallelStep Concurrency](../assets/images/parallel_step_concurrency.png)
+```mermaid
+flowchart LR
+    inp["input"] --> p["ParallelStep"]
+
+    p --> a["Branch A<br/><i>cloned conversation</i>"]
+    p --> b["Branch B<br/><i>cloned conversation</i>"]
+    p --> c["Branch C<br/><i>cloned conversation</i>"]
+
+    a --> agg["ParallelResult"]
+    b --> agg
+    c --> agg
+    agg --> out["next step"]
+
+    shared[("shared: Metadata<br/>StepResults")]
+    a -.-> shared
+    b -.-> shared
+    c -.-> shared
+```
 
 **Key behaviors:**
 - Branches live in `ParallelStep.Branches` (not `Steps`)
@@ -196,7 +275,13 @@ Executes multiple steps **concurrently** (not branching, but parallelism):
 
 Routes to different steps based on runtime logic:
 
-![SwitchStep Routing](../assets/images/switch_step_routing.png)
+```mermaid
+flowchart LR
+    inp["input"] --> sw{"SwitchStep<br/><i>your selector</i>"}
+    sw -- "A" --> a["Step A"]
+    sw -- "B" --> b["Step B"]
+    sw -- "otherwise" --> d["Default"]
+```
 
 **Usage pattern:**
 ```csharp
@@ -219,7 +304,17 @@ var router = new SwitchStep<MyInput>("Router", (input, ctx) =>
 Combines LLM intent analysis with `SwitchStep`. Options are **strings**, described at runtime by
 an `IntentionOption` catalogue — there is no enum type parameter.
 
-![Intention Router Flow](../assets/images/intention_router_flow.png)
+```mermaid
+flowchart LR
+    msg["user message"] --> an["IntentionAnalyzerStep<br/><i>catalogue in the system prompt</i>"]
+    an --> res["LlmIntentionResult<br/>SelectedOption"]
+    res --> val{"in the<br/>catalogue?"}
+    val -- "no" --> fb["error fed back<br/><i>model corrects itself</i>"] --> an
+    val -- "yes" --> r{"RouterStep<br/><i>case-insensitive</i>"}
+    r -- "Sales" --> s1["Sales pipeline"]
+    r -- "Support" --> s2["Support pipeline"]
+    r -- "unmatched" --> s3["Default route"]
+```
 
 ```csharp
 var options = new List<IntentionOption>

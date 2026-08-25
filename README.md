@@ -5,6 +5,60 @@
 
 A powerful .NET framework for building AI agent pipelines with LLM integration, tools, observability, and resilience.
 
+## How it fits together
+
+A pipeline is a list of steps. The engine runs them through a middleware chain, and steps can inject
+more steps as they go, so the graph takes shape while it executes. LLM steps reach a model through a
+**role**, which names a model on a **provider** — swapping GPT for Gemini is configuration, not code.
+
+```mermaid
+flowchart TB
+    subgraph define ["Defining a pipeline"]
+        direction LR
+        cs["C# steps"]
+        yaml["YAML + JSON Schema<br/><i>compiled to real types</i>"]
+    end
+
+    engine["<b>IPipeline</b><br/>runs steps, applies middleware"]
+
+    subgraph mw ["Middleware chain"]
+        direction LR
+        obs["Observability"] --> to["Timeout"] --> retry["Retry<br/><i>+ provider fallback</i>"]
+    end
+
+    subgraph steps ["Steps"]
+        direction LR
+        flow["<b>Flow control</b><br/>Group · Parallel<br/>Loop · Break<br/>Switch · Router"]
+        llm["<b>LLM steps</b><br/>prompt, tools,<br/>structured output"]
+    end
+
+    subgraph llmcfg ["Reaching a model"]
+        direction LR
+        role["<b>LlmRole</b><br/>model + behaviour<br/>+ fallback chain"] --> provider["<b>LlmProvider</b><br/>endpoint + key"]
+        provider --> svc["ILlmService"]
+        svc --> openai["OpenAI-compatible<br/><i>OpenRouter, Groq, Ollama…</i>"]
+        svc --> gemini["Gemini"]
+    end
+
+    subgraph cross ["Along the way"]
+        direction LR
+        tools["Tools"]
+        conv["Conversation<br/><i>bookmarks, sliding window</i>"]
+        events["Events<br/><i>routed by correlation id</i>"]
+        hitl["Suspend / resume"]
+    end
+
+    define --> engine
+    engine --> mw
+    mw --> steps
+    llm --> llmcfg
+    steps -.-> cross
+    steps -. "NextSteps" .-> engine
+```
+
+The dotted arrow back to the engine is the part worth noticing: a step can return more steps, which
+is how routing and iterative refinement work without the shape being known up front.
+
 ## Features
 
 - **Pipeline Architecture** - Compose steps into complex workflows
@@ -25,20 +79,44 @@ A powerful .NET framework for building AI agent pipelines with LLM integration, 
 
 Pipelines are not just linear sequences. They support complex flows:
 
-```
-Pipeline
-├── Step1 (sequential)
-├── GroupStep ────┬─ NestedStep1 (branch: sequential)
-│                 ├─ NestedStep2 (branch: sequential)
-│                 └─ ... (can nest another GroupStep)
-├── ParallelStep ─┬─ TaskA (concurrent)
-│                 ├─ TaskB (concurrent)
-│                 └─ TaskC (concurrent)
-└── SwitchStep ───┬─ RouteA (conditional)
-                  └─ RouteB (conditional)
+```mermaid
+flowchart LR
+    start(["input"]) --> s1["Step1"]
+
+    s1 --> group
+
+    subgraph group ["GroupStep · sequential, nestable"]
+        direction LR
+        n1["NestedStep1"] --> n2["NestedStep2"]
+    end
+
+    group --> par
+
+    subgraph par ["ParallelStep · concurrent"]
+        direction TB
+        a["TaskA"]
+        b["TaskB"]
+        c["TaskC"]
+    end
+
+    par --> loop
+
+    subgraph loop ["LoopStep · until BreakStep or exhausted"]
+        direction LR
+        body["Draft"] --> critic["Critic"] --> brk{"good<br/>enough?"}
+        brk -- "no" --> body
+    end
+
+    loop --> router{"RouterStep<br/><i>LLM picks a route</i>"}
+    router --> ra["RouteA"]
+    router --> rb["RouteB"]
+    ra --> done(["result"])
+    rb --> done
 ```
 
-> After GroupStep completes its nested steps, execution continues with the next step in the parent flow.
+Each branch of a `ParallelStep` runs with its own conversation and step path, so branches cannot
+disturb one another. After a `GroupStep` finishes its nested steps, execution continues with the
+next step in the parent flow.
 
 ### Flow Control Steps
 
