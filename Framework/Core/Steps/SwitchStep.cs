@@ -44,7 +44,7 @@ public class SwitchStep<TIn>(
     {
         try
         {
-            ILogger<SwitchStep<TIn>> logger = context.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<SwitchStep<TIn>>();
+            ILogger<SwitchStep<TIn>> logger = context.GetLogger<SwitchStep<TIn>>();
 
             // Execute selector to determine target step
             (IStep? targetStep, IStepResult? value) = _selector((TIn)input, context);
@@ -77,7 +77,7 @@ public class SwitchStep<TIn>(
         }
         catch (Exception ex)
         {
-            ILogger<SwitchStep<TIn>> logger = context.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<SwitchStep<TIn>>();
+            ILogger<SwitchStep<TIn>> logger = context.GetLogger<SwitchStep<TIn>>();
             logger.LogError(ex, "Selector failed in {StepName}", Name);
             throw;
         }

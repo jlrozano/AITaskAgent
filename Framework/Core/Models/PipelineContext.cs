@@ -4,6 +4,8 @@ using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Newtonsoft.Json;
 using System.Collections.Concurrent;
 
 namespace AITaskAgent.Core.Models;
@@ -47,13 +49,36 @@ public sealed record PipelineContext
     /// <summary>
     /// Event channel for sending observability events.
     /// </summary>
+    /// <remarks>
+    /// Not serialized. See <see cref="Runtime"/> for how a suspended context regains it.
+    /// </remarks>
+    [JsonIgnore]
     public IEventChannel? EventChannel { get; }
 
     /// <summary>
     /// Service provider for resolving dependencies during pipeline execution.
     /// Similar to HttpContext.RequestServices in ASP.NET Core.
     /// </summary>
+    /// <remarks>Not serialized. See <see cref="Runtime"/>.</remarks>
+    [JsonIgnore]
     public IServiceProvider ServiceProvider { get; }
+
+    /// <summary>
+    /// The engine executing this context. Assigned by the pipeline when a run starts, and
+    /// propagated to branch clones.
+    /// </summary>
+    /// <remarks>
+    /// Holding the engine directly is what lets a step log or run children without a DI container:
+    /// asking <see cref="ServiceProvider"/> for the pipeline that is already executing you is
+    /// service location, and it makes composite steps unusable outside one.
+    ///
+    /// Null until a run begins, and null again on a context just loaded from storage — this and the
+    /// two references above are live objects, not data. Suspend/resume works by deserializing
+    /// *onto an instance that already holds them*, so the persisted state supplies the data and the
+    /// freshly built context supplies the wiring.
+    /// </remarks>
+    [JsonIgnore]
+    public IPipelineRuntime? Runtime { get; internal set; }
 
     public ConversationContext Conversation { get; init; } = new();
 
@@ -109,6 +134,7 @@ public sealed record PipelineContext
     {
         PipelineContext clonedContext = new(EventChannel, ServiceProvider)
         {
+            Runtime = Runtime,
             Conversation = Conversation.Clone(),
             CorrelationId = CorrelationId,
             Metadata = Metadata,
@@ -153,23 +179,27 @@ public sealed record PipelineContext
     }
 
     /// <summary>
-    /// INTERNAL: Gets the IPipeline service from the service provider.
-    /// Used by internal steps (ParallelStep, LoopStep, etc.) to execute sub-pipelines.
+    /// Logger factory for anything running under this context.
     /// </summary>
-    internal IPipeline GetPipeline() =>
-        ServiceProvider.GetRequiredService<IPipeline>();
+    /// <remarks>
+    /// Prefers the running engine's factory, which is never null. Falls back to the container only
+    /// for a context that has not been handed to a pipeline yet, and to <c>NullLoggerFactory</c>
+    /// when there is no container either — logging must never be the reason a step cannot run.
+    /// </remarks>
+    private ILoggerFactory LoggerFactory =>
+        Runtime?.LoggerFactory
+        ?? (ServiceProvider.GetService(typeof(ILoggerFactory)) as ILoggerFactory)
+        ?? NullLoggerFactory.Instance;
 
     /// <summary>
     /// INTERNAL: Gets a logger for the specified type.
     /// </summary>
-    internal ILogger<T> GetLogger<T>() =>
-        ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<T>();
+    internal ILogger<T> GetLogger<T>() => LoggerFactory.CreateLogger<T>();
 
     /// <summary>
     /// INTERNAL: Gets a logger for the specified type.
     /// </summary>
-    internal ILogger GetLogger(Type type) =>
-        ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(type);
+    internal ILogger GetLogger(Type type) => LoggerFactory.CreateLogger(type);
 
     /// <summary>
     /// INTERNAL: Executes a sub-pipeline with NextSteps support.
@@ -182,11 +212,17 @@ public sealed record PipelineContext
         CancellationToken cancellationToken,
         bool isBranchScope = false)
     {
-        // Cast to Pipeline to access internal method
-        return ServiceProvider.GetService<IPipeline>() is Pipeline pipeline
-            ? pipeline.ExecuteStepsWithNextStepsAsync(
+        // The engine that started this run, not whatever the container happens to hold. Falling
+        // back to the container covers a context built by hand and never handed to a pipeline.
+        var runtime = Runtime ?? ServiceProvider.GetService(typeof(IPipelineRuntime)) as IPipelineRuntime;
+
+        return runtime is not null
+            ? runtime.ExecuteStepsWithNextStepsAsync(
                 steps, currentResult, this, pipelineName, cancellationToken, isBranchScope)
-            : throw new InvalidOperationException("IPipeline service not found in ServiceProvider.");
+            : throw new InvalidOperationException(
+                "This context is not attached to a pipeline, so composite steps cannot run their " +
+                "children. Execute it through IPipeline.ExecuteAsync rather than invoking the step " +
+                "directly.");
     }
 }
 

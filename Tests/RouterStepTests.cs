@@ -4,8 +4,6 @@ using AITaskAgent.Core.StepResults;
 using AITaskAgent.Core.Steps;
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Steps;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AITaskAgent.Tests;
 
@@ -22,14 +20,8 @@ public class RouterStepTests
         public string SelectedOption { get; } = selected;
     }
 
-    /// <summary>SwitchStep resolves ILoggerFactory from the container, so a bare context will not do.</summary>
-    private sealed class LoggerOnlyProvider : IServiceProvider
-    {
-        public object? GetService(Type type) =>
-            type == typeof(ILoggerFactory) ? NullLoggerFactory.Instance : null;
-    }
-
-    private static PipelineContext Context() => new(null, new LoggerOnlyProvider());
+    /// <summary>No container: a step falls back to NullLoggerFactory when nothing supplies one.</summary>
+    private static PipelineContext Context() => new();
 
     private static (RouterStep Router, IStep Target, IStep Fallback) Build()
     {

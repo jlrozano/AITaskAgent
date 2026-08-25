@@ -15,20 +15,12 @@ namespace AITaskAgent.Tests;
 public class ParallelBranchIsolationTests
 {
     /// <summary>
-    /// Minimal wiring for a pipeline run. ParallelStep executes its branches as sub-pipelines and
-    /// resolves IPipeline from the context's service provider, so a bare PipelineContext is not
-    /// enough - and PipelineContextFactory.Create throws unless it too has been registered.
+    /// No container. The pipeline attaches itself to the context, so composite steps find the
+    /// engine through it rather than through DI. An explicit context is still needed because
+    /// PipelineContextFactory.Create is a static that DI has to initialise.
     /// </summary>
     private static (Pipeline Pipeline, PipelineContext Context) Harness()
-    {
-        var pipeline = new Pipeline();
-        return (pipeline, new PipelineContext(null, new SingleServiceProvider(typeof(IPipeline), pipeline)));
-    }
-
-    private sealed class SingleServiceProvider(Type serviceType, object instance) : IServiceProvider
-    {
-        public object? GetService(Type type) => type == serviceType ? instance : null;
-    }
+        => (new Pipeline(), new PipelineContext());
 
     /// <summary>Records the step path each branch observed while running.</summary>
     private sealed class PathRecordingStep(string name, ConcurrentDictionary<string, string> observed)

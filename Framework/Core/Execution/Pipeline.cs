@@ -19,7 +19,7 @@ namespace AITaskAgent.Core.Execution;
 /// Internal middlewares (Observability, Timeout, Retry) are ALWAYS present.
 /// Registered as singleton in DI for testability and to remove static state.
 /// </summary>
-public sealed class Pipeline : IPipeline
+public sealed class Pipeline : PipelineRuntimeBase, IPipeline
 {
     private readonly ILogger<Pipeline> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -43,8 +43,9 @@ public sealed class Pipeline : IPipeline
         TimeSpan? defaultPipelineTimeout = null,
         TimeSpan? defaultStepTimeout = null,
         ILoggerFactory? loggerFactory = null)
+        : base(loggerFactory)
     {
-        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _loggerFactory = LoggerFactory;
         _logger = _loggerFactory.CreateLogger<Pipeline>();
         _options = new PipelineOptions();
 
@@ -106,6 +107,10 @@ public sealed class Pipeline : IPipeline
                 : StepResultFactory.CreateStepResult(steps[0].InputType, new EmptyStep(), input);
 
         context ??= PipelineContextFactory.Create(subscribers: subscribers);
+
+        // Attach the engine to the context it is about to run. Composite steps and step loggers
+        // reach it from here instead of resolving it from the container.
+        context.Runtime = this;
 
         var logger = _logger;
 
@@ -221,7 +226,8 @@ public sealed class Pipeline : IPipeline
     /// Executes steps with NextSteps support. Used by ParallelStep.
     /// Creates middleware chain internally (middlewares are stateless).
     /// </summary>
-    internal Task<IStepResult> ExecuteStepsWithNextStepsAsync(
+    /// <inheritdoc/>
+    public override Task<IStepResult> ExecuteStepsWithNextStepsAsync(
         IReadOnlyList<IStep> steps,
         IStepResult currentResult,
         PipelineContext context,
