@@ -73,29 +73,12 @@ public sealed class Pipeline : IPipeline
     private static string ResumeStateKey(PipelineContext context) =>
         $"__resume_state_{context.CorrelationId}__";
 
-    /// <summary>
-    /// Executes a pipeline of steps sequentially with middleware composition.
-    /// </summary>
-    public async Task<IStepResult> ExecuteAsync<T>(
-        string name,
-        IReadOnlyList<IStep> steps,
-        T input,
-        PipelineContext? context = null,
-        TimeSpan? pipelineTimeout = null)
-    {
-        var timeout = pipelineTimeout ?? DefaultPipelineTimeout;
+    // A second, shorter ExecuteAsync overload used to sit here. Because every parameter past the
+    // third had a default, the two were ambiguous for any ordinary call, making the short one
+    // unreachable - and the long one, which is the IPipeline member everyone actually resolves,
+    // never applied DefaultPipelineTimeout. Merged into one: the default is resolved below.
 
-        if (timeout.HasValue)
-        {
-            using CancellationTokenSource cts = new(timeout.Value);
-            return await ExecuteAsync(name, steps, input, context, pipelineTimeout, cts.Token);
-        }
-        else
-        {
-            return await ExecuteAsync(name, steps, input, context, pipelineTimeout, CancellationToken.None);
-        }
-    }
-
+    /// <inheritdoc/>
     public async Task<IStepResult> ExecuteAsync<T>(
         string name,
         IReadOnlyList<IStep> steps,
@@ -137,12 +120,16 @@ public sealed class Pipeline : IPipeline
         CancellationToken pipelineCancellationToken;
         CancellationTokenSource? linkedCts = null;
 
-        if (pipelineTimeout.HasValue)
+        // Falling back to the configured default here is what makes DefaultPipelineTimeout mean
+        // anything: callers reach this through IPipeline and rarely pass a timeout per run.
+        var effectiveTimeout = pipelineTimeout ?? DefaultPipelineTimeout;
+
+        if (effectiveTimeout.HasValue)
         {
-            CancellationTokenSource timeoutCts = new(pipelineTimeout.Value);
+            CancellationTokenSource timeoutCts = new(effectiveTimeout.Value);
             linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
             pipelineCancellationToken = linkedCts.Token;
-            logger.LogDebug("Pipeline {Name} timeout set to {Timeout}", name, pipelineTimeout.Value);
+            logger.LogDebug("Pipeline {Name} timeout set to {Timeout}", name, effectiveTimeout.Value);
         }
         else if (cancellationToken != CancellationToken.None)
         {

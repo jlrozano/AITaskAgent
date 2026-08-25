@@ -3,15 +3,12 @@ using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.StepResults;
 using AITaskAgent.Core.Steps;
-using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
 using AITaskAgent.LLM.Results;
 using AITaskAgent.LLM.Steps;
-using AITaskAgent.Observability;
 using AITaskAgent.Support.Template;
-using PipelineVisualizer.Middleware;
+using Microsoft.Extensions.Options;
 using PipelineVisualizer.Models;
-using System.ComponentModel;
 
 namespace PipelineVisualizer.Services;
 
@@ -21,10 +18,24 @@ namespace PipelineVisualizer.Services;
 /// </summary>
 public sealed class PipelineExecutor
 {
+    // Route names double as intention ids: the router matches the option chosen by the LLM
+    // against these strings, so options and routes must be built from the same constants.
+    private const string RouteNewStory = "NewStory";
+    private const string RouteReviewStory = "ReviewStory";
+    private const string RouteQuestions = "Questions";
+    private const string RouteOther = "Other";
+
+    private static readonly IList<IntentionOption> IntentionOptions =
+    [
+        new() { Id = RouteNewStory, Description = "User wants to create a completely new story from scratch" },
+        new() { Id = RouteReviewStory, Description = "User wants to review, modify, or improve the existing story" },
+        new() { Id = RouteQuestions, Description = "User is asking questions about the story, the creative process, or requesting clarification" },
+        new() { Id = RouteOther, Description = "User request is out of scope (not related to story creation, review, or questions)" }
+    ];
+
     private readonly ITemplateProvider _templateProvider;
-    private readonly ILlmService _llmService;
-    private readonly ILlmProviderResolver _profileResolver;
-    private readonly IEventChannel _eventChannel;
+    private readonly LlmEnvironment _llmEnvironment;
+    private readonly IPipeline _pipeline;
     private readonly ILogger<PipelineExecutor> _logger;
     private readonly ContextStore _contextStore;
     private string? _lastStory;
@@ -33,16 +44,14 @@ public sealed class PipelineExecutor
     /// Initializes a new instance of the <see cref="PipelineExecutor"/> class.
     /// </summary>
     public PipelineExecutor(
-        ILlmService llmService,
-        ILlmProviderResolver profileResolver,
-        IEventChannel eventChannel,
+        IOptions<LlmEnvironment> llmEnvironment,
+        IPipeline pipeline,
         ILogger<PipelineExecutor> logger,
         IConfiguration configuration,
         ContextStore contextStore)
     {
-        _llmService = llmService;
-        _profileResolver = profileResolver;
-        _eventChannel = eventChannel;
+        _llmEnvironment = llmEnvironment.Value;
+        _pipeline = pipeline;
         _logger = logger;
         _contextStore = contextStore;
 
@@ -75,8 +84,9 @@ public sealed class PipelineExecutor
 
         try
         {
-            // Create FRESH context with event channel
-            var context = PipelineContextFactory.Create() with { EventChannel = _eventChannel };
+            // Create FRESH context. The factory already wires the DI event channel, which is what
+            // the SSE broadcaster subscribes to.
+            var context = PipelineContextFactory.Create(conversation: null, subscribers: null);
 
             // Restore conversation history if exists
             var existingHistory = _contextStore.GetHistory(conversationId);
@@ -91,7 +101,8 @@ public sealed class PipelineExecutor
 
             // Execute
             var input = new UserInputResult(request.Message);
-            var result = await Pipeline.ExecuteAsync(request.PipelineName, pipeline, input, context);
+            var result = await _pipeline.ExecuteAsync(
+                request.PipelineName, pipeline, input, context, cancellationToken: cancellationToken);
 
             // Save updated history for next turn
             _contextStore.SaveHistory(conversationId, context.Conversation.History);
@@ -150,126 +161,142 @@ public sealed class PipelineExecutor
         };
     }
 
+    /// <summary>
+    /// Resolves a configured role, falling back to the environment default so a missing entry
+    /// degrades to the default model instead of taking the whole visualizer down.
+    /// </summary>
+    private LlmRole ResolveRole(string roleName)
+    {
+        return _llmEnvironment.Roles.TryGetValue(roleName, out var role)
+            ? role
+            : _llmEnvironment.Roles[_llmEnvironment.DefaultRole];
+    }
+
     private List<IStep> BuildStoryMachinePipeline()
     {
-        var intentionProfile = _profileResolver.GetProvider("IntentionAnalyzer");
-        var outlinerProfile = _profileResolver.GetProvider("Outliner");
-        var writersProfile = _profileResolver.GetProvider("Writers");
-        var criticProfile = _profileResolver.GetProvider("Critic");
-        var rewriterProfile = _profileResolver.GetProvider("Rewriter");
-        var publisherProfile = _profileResolver.GetProvider("Publisher");
-        var reviewerProfile = _profileResolver.GetProvider("StoryReviewer");
-        var questionsProfile = _profileResolver.GetProvider("QuestionsAssistant");
+        var intentionRole = ResolveRole("IntentionAnalyzer");
+        var outlinerRole = ResolveRole("Outliner");
+        var writersRole = ResolveRole("Writers");
+        var criticRole = ResolveRole("Critic");
+        var rewriterRole = ResolveRole("Rewriter");
+        var publisherRole = ResolveRole("Publisher");
+        var reviewerRole = ResolveRole("StoryReviewer");
+        var questionsRole = ResolveRole("QuestionsAssistant");
 
         // Create sub-pipelines
-        var newStoryPipeline = CreateNewStoryPipeline(outlinerProfile, writersProfile, criticProfile, rewriterProfile, publisherProfile);
-        var reviewPipeline = CreateReviewPipeline(reviewerProfile);
-        var questionsPipeline = CreateQuestionsPipeline(questionsProfile);
+        var newStoryPipeline = CreateNewStoryPipeline(outlinerRole, writersRole, criticRole, rewriterRole, publisherRole);
+        var reviewPipeline = CreateReviewPipeline(reviewerRole);
+        var questionsPipeline = CreateQuestionsPipeline(questionsRole);
         var otherPipeline = CreateOtherPipeline();
 
-        // Intention analysis step
-        var intentionStep = new IntentionAnalyzerStep<StepResult, UserIntention>(
-            _llmService,
-            intentionProfile,
-            name: "IntentionAnalyzer",
-            systemPrompt: "You classify user intentions for a story creation system. Always respond in Spanish.");
+        // Intention analysis step. The custom system prompt must render {{ context.options }}
+        // itself: supplying one replaces the step's default template, which is where the option
+        // list is normally injected.
+        var intentionStep = new IntentionAnalyzerStep<StepResult>(
+            "IntentionAnalyzer",
+            intentionRole,
+            IntentionOptions,
+            systemPromptTemplateName: "You classify user intentions for a story creation system. "
+                + "Always respond in Spanish.\n\nAvailable Options:\n{{ context.options }}");
 
-        // Router step
-        var routerStep = new IntentionRouterStep<UserIntention>(
-            routes: new Dictionary<UserIntention, IStep>
+        // Router step. Named "Router" because nested steps address their siblings by path
+        // (see StatelessRewriterStep); the comparer makes the casing the LLM returns irrelevant.
+        var routerStep = new RouterStep(
+            "Router",
+            routes: new Dictionary<string, IStep>(StringComparer.OrdinalIgnoreCase)
             {
-                { UserIntention.NewStory, newStoryPipeline },
-                { UserIntention.ReviewStory, reviewPipeline },
-                { UserIntention.Questions, questionsPipeline },
-                { UserIntention.Other, otherPipeline }
+                { RouteNewStory, newStoryPipeline },
+                { RouteReviewStory, reviewPipeline },
+                { RouteQuestions, questionsPipeline },
+                { RouteOther, otherPipeline }
             },
             defaultRoute: questionsPipeline);
 
         return [intentionStep, routerStep];
     }
 
-    private GroupStep<UserIntentionResponse> CreateNewStoryPipeline(
-        LlmProviderConfig outlinerProfile,
-        LlmProviderConfig writersProfile,
-        LlmProviderConfig criticProfile,
-        LlmProviderConfig rewriterProfile,
-        LlmProviderConfig publisherProfile)
+    private GroupStep<LlmIntentionResult> CreateNewStoryPipeline(
+        LlmRole outlinerRole,
+        LlmRole writersRole,
+        LlmRole criticRole,
+        LlmRole rewriterRole,
+        LlmRole publisherRole)
     {
-        var outlineStep = new StatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
-            _llmService, _templateProvider, "Outliner", outlinerProfile,
-            "outliner_prompt", "outliner_system");
+        var outlineStep = new StatelessTemplateLlmStep<LlmIntentionResult, LlmStringStepResult>(
+            "Outliner", outlinerRole, _templateProvider,
+            promtTemplateString: "outliner_prompt", systemTemplateString: "outliner_system");
 
         var writer1 = new StatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
-            _llmService, _templateProvider, "Writer1", writersProfile,
-            "writer1_prompt", "writer1_system");
+            "Writer1", writersRole, _templateProvider,
+            promtTemplateString: "writer1_prompt", systemTemplateString: "writer1_system");
 
         var writer2 = new StatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
-            _llmService, _templateProvider, "Writer2", writersProfile,
-            "writer2_prompt", "writer2_system");
+            "Writer2", writersRole, _templateProvider,
+            promtTemplateString: "writer2_prompt", systemTemplateString: "writer2_system");
 
         var writersStep = new ParallelStep<StepResult>("ParallelWriters", writer1, writer2);
 
         var criticStep = new StatelessTemplateLlmStep<ParallelResult, CriticResult>(
-            _llmService, _templateProvider, "Critic", criticProfile,
-            "critic_prompt", "critic_system");
+            "Critic", criticRole, _templateProvider,
+            promtTemplateString: "critic_prompt", systemTemplateString: "critic_system");
 
         var rewriterStep = new StatelessRewriterStep(
-            _llmService, _templateProvider, "Rewriter", rewriterProfile,
+            "Rewriter", rewriterRole, _templateProvider,
             "rewriter_prompt", "rewriter_system");
 
         var publisherStep = new StatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
-            _llmService, _templateProvider, "Publisher", publisherProfile,
-            "publisher_prompt", "publisher_system");
+            "Publisher", publisherRole, _templateProvider,
+            promtTemplateString: "publisher_prompt", systemTemplateString: "publisher_system");
 
         var saveStep = new DelegatedStep<LlmStringStepResult, LlmStringStepResult>(
             "SaveToMemory",
-            (input, _, _, _) =>
+            (_, input, _, _, _) =>
             {
                 _lastStory = input.Content;
                 return Task.FromResult(input);
             });
 
-        return new GroupStep<UserIntentionResponse>("NewStoryPhase",
+        return new GroupStep<LlmIntentionResult>("NewStoryPhase",
             [outlineStep, writersStep, criticStep, rewriterStep, publisherStep, saveStep]);
     }
 
-    private GroupStep<UserIntentionResponse> CreateReviewPipeline(LlmProviderConfig reviewerProfile)
+    private GroupStep<LlmIntentionResult> CreateReviewPipeline(LlmRole reviewerRole)
     {
-        var reviewStep = new StatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
-            _llmService, _templateProvider, "StoryReviewer", reviewerProfile,
-            "reviewer_prompt", "reviewer_system");
+        var reviewStep = new StatelessTemplateLlmStep<LlmIntentionResult, LlmStringStepResult>(
+            "StoryReviewer", reviewerRole, _templateProvider,
+            promtTemplateString: "reviewer_prompt", systemTemplateString: "reviewer_system");
 
         var saveStep = new DelegatedStep<LlmStringStepResult, LlmStringStepResult>(
             "SaveRevisedStory",
-            (input, _, _, _) =>
+            (_, input, _, _, _) =>
             {
                 _lastStory = input.Content;
                 return Task.FromResult(input);
             });
 
-        return new GroupStep<UserIntentionResponse>("ReviewPhase", [reviewStep, saveStep]);
+        return new GroupStep<LlmIntentionResult>("ReviewPhase", [reviewStep, saveStep]);
     }
 
-    private GroupStep<UserIntentionResponse> CreateQuestionsPipeline(LlmProviderConfig questionsProfile)
+    private GroupStep<LlmIntentionResult> CreateQuestionsPipeline(LlmRole questionsRole)
     {
-        var questionsStep = new StatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
-            _llmService, _templateProvider, "QuestionsAssistant", questionsProfile,
-            "questions_prompt", "questions_system");
+        var questionsStep = new StatelessTemplateLlmStep<LlmIntentionResult, LlmStringStepResult>(
+            "QuestionsAssistant", questionsRole, _templateProvider,
+            promtTemplateString: "questions_prompt", systemTemplateString: "questions_system");
 
-        return new GroupStep<UserIntentionResponse>("QuestionsPhase", [questionsStep]);
+        return new GroupStep<LlmIntentionResult>("QuestionsPhase", [questionsStep]);
     }
 
-    private static GroupStep<UserIntentionResponse> CreateOtherPipeline()
+    private static GroupStep<LlmIntentionResult> CreateOtherPipeline()
     {
-        var otherStep = new DelegatedStep<UserIntentionResponse, StepResult<string>>(
+        var otherStep = new DelegatedStep<LlmIntentionResult, StepResult<string>>(
             "OutOfScopeHandler",
-            (_, _, _, _) =>
+            (step, _, _, _, _) =>
             {
                 const string message = "Lo siento, solo puedo ayudarte con la creación y revisión de cuentos. ¿Puedo ayudarte con algo relacionado?";
-                return Task.FromResult<StepResult<string>>(new StepResult<string>(new EmptyStep("OutOfScopeHandler"), message));
+                return Task.FromResult(new StepResult<string>(step, message));
             });
 
-        return new GroupStep<UserIntentionResponse>("OtherPhase", [otherStep]);
+        return new GroupStep<LlmIntentionResult>("OtherPhase", [otherStep]);
     }
 
     private static string? ExtractFinalContent(IStepResult result)
@@ -284,27 +311,10 @@ public sealed class PipelineExecutor
 }
 
 // Internal types
-internal enum UserIntention
-{
-    [Description("User wants to create a completely new story from scratch")]
-    NewStory,
-
-    [Description("User wants to review, modify, or improve the existing story")]
-    ReviewStory,
-
-    [Description("User is asking questions about the story, the creative process, or requesting clarification")]
-    Questions,
-
-    [Description("User request is out of scope (not related to story creation, review, or questions)")]
-    Other
-}
-
 internal sealed class UserInputResult(string input) : StepResult(new EmptyStep("User"), input)
 {
     public string Message => Value?.ToString() ?? string.Empty;
 }
-
-internal sealed class UserIntentionResponse(IStep step) : LlmStepResult<Intention<UserIntention>>(step);
 
 internal sealed class CriticResult(IStep step) : LlmStepResult<CriticData>(step)
 {
@@ -320,25 +330,29 @@ internal sealed record CriticData
 }
 
 internal sealed class StatelessRewriterStep(
-    ILlmService llmService,
-    ITemplateProvider templateProvider,
     string name,
-    LlmProviderConfig profile,
+    LlmRole role,
+    ITemplateProvider templateProvider,
     string promptTemplateName,
     string? systemPromptTemplateName = null)
     : StatelessTemplateLlmStep<CriticResult, LlmStringStepResult>(
-        llmService, templateProvider, name, profile, promptTemplateName, systemPromptTemplateName)
+        name, role, templateProvider, null, promptTemplateName, systemPromptTemplateName)
 {
-    protected override async Task<LlmStringStepResult> ExecuteAsync(
-        CriticResult input,
+    protected override async Task<IStepResult> ExecuteAsync(
+        IStepResult input,
         PipelineContext context,
         int attempt,
-        LlmStringStepResult? lastStepResult,
+        IStepResult? lastStepResult,
         CancellationToken cancellationToken)
     {
-        var results = (context.StepResults["Router/NewStoryPhase/ParallelWriters"] as ParallelResult)?.Value;
-        input.Writer1 = (results?["Writer1"] as LlmStringStepResult)?.Content ?? "";
-        input.Writer2 = (results?["Writer2"] as LlmStringStepResult)?.Content ?? "";
+        // The critic only carries its verdict; the drafts it judged live in the parallel branch
+        // two steps back, so the rewriter pulls them in by path before prompting.
+        if (input is CriticResult critic)
+        {
+            var results = (context.StepResults["Router/NewStoryPhase/ParallelWriters"] as ParallelResult)?.Value;
+            critic.Writer1 = (results?["Writer1"] as LlmStringStepResult)?.Content ?? "";
+            critic.Writer2 = (results?["Writer2"] as LlmStringStepResult)?.Content ?? "";
+        }
 
         return await base.ExecuteAsync(input, context, attempt, lastStepResult, cancellationToken);
     }

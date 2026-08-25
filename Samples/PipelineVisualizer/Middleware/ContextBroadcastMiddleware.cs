@@ -29,7 +29,7 @@ public sealed class ContextBroadcastMiddleware(ILogger<ContextBroadcastMiddlewar
                 StepName = step.Name,
                 CorrelationId = context.CorrelationId,
                 Timestamp = DateTime.UtcNow,
-                CurrentPath = context.CurrentPath,
+                CurrentPath = context.CurrentStepPath,
                 StepResults = SerializeStepResults(context),
                 Metadata = SerializeMetadata(context)
             };

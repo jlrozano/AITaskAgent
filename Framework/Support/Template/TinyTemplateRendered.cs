@@ -79,13 +79,7 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
             {
                 // Convertir sintaxis Scriban dict['Key'] → JPath dict.Key
                 var jpath = ToJPath(expr);
-                var token = rootToken.SelectToken(jpath);
-
-                // El serializer baja las propiedades C# a minúsculas, así que {{Content}} no
-                // encuentra "content". Se reintenta en minúsculas sólo cuando la búsqueda exacta
-                // falla, de modo que las keys de diccionario — que conservan su caso literal —
-                // siguen resolviéndose por el camino exacto.
-                token ??= rootToken.SelectToken(jpath.ToLowerInvariant());
+                var token = rootToken.SelectToken(jpath) ?? SelectTokenIgnoreCase(rootToken, jpath);
 
                 return token is null or { Type: JTokenType.Null }
                     ? defaultVal ?? string.Empty
@@ -106,6 +100,58 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
         });
 
         return result;
+    }
+
+    /// <summary>
+    /// Resuelve un JPath descendiendo segmento a segmento, probando primero la coincidencia exacta
+    /// y luego la insensible a mayúsculas.
+    /// </summary>
+    /// <remarks>
+    /// Hace falta porque un mismo path puede mezclar dos convenciones: las propiedades C# se
+    /// serializan en minúsculas (<c>Content</c> → <c>content</c>) mientras que las claves de
+    /// diccionario conservan su literal. Ni <c>SelectToken(path)</c> ni
+    /// <c>SelectToken(path.ToLower())</c> resuelven <c>{{Data.OriginalKey}}</c>: al primero le
+    /// estorba <c>Data</c> y al segundo <c>OriginalKey</c>. Yendo por segmentos, cada tramo se
+    /// resuelve con la convención que le toque.
+    /// </remarks>
+    private static JToken? SelectTokenIgnoreCase(JToken root, string jpath)
+    {
+        JToken? current = root;
+
+        foreach (var segment in jpath.Split('.', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (current is null)
+            {
+                return null;
+            }
+
+            // Un segmento puede traer índices de array pegados: items[0][1]
+            var name = segment;
+            var bracket = segment.IndexOf('[');
+            var indices = "";
+            if (bracket >= 0)
+            {
+                name = segment[..bracket];
+                indices = segment[bracket..];
+            }
+
+            if (name.Length > 0)
+            {
+                if (current is not JObject obj)
+                {
+                    return null;
+                }
+
+                current = obj.GetValue(name, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (indices.Length > 0 && current is not null)
+            {
+                current = current.SelectToken("$" + indices);
+            }
+        }
+
+        return current;
     }
 
     /// <summary>

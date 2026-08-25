@@ -100,7 +100,7 @@ public sealed class PipelineSchemaGenerator
         return typeName switch
         {
             "BaseLlmStep" or "IntentionAnalyzerStep" or "StatelessTemplateLlmStep" or "StatelessRewriterStep" => "llm",
-            "IntentionRouterStep" or "ParallelStep" => "control-flow",
+            "RouterStep" or "ParallelStep" => "control-flow",
             "GroupStep" => "container",
             "DelegatedStep" => "utility",
             _ => "unknown"
@@ -116,7 +116,7 @@ public sealed class PipelineSchemaGenerator
         {
             "BaseLlmStep" => "Base class for LLM-powered steps",
             "IntentionAnalyzerStep" => "Analyzes user input to determine the intent",
-            "IntentionRouterStep" => "Routes execution based on analyzed intention",
+            "RouterStep" => "Routes execution based on analyzed intention",
             "StatelessTemplateLlmStep" => "Executes LLM prompt based on a template",
             "StatelessRewriterStep" => "Specialized step for rewriting content",
             "ParallelStep" => "Executes multiple steps in parallel",
@@ -172,36 +172,20 @@ public sealed class PipelineSchemaGenerator
     {
         foreach (var step in steps)
         {
-            var typeName = step.GetType().Name;
-            usedTypes.Add(typeName);
+            usedTypes.Add(step.GetType().Name);
 
             // Recursively collect from nested steps
-            if (step.GetType().IsGenericType)
+            switch (step)
             {
-                var genericDef = step.GetType().GetGenericTypeDefinition().Name;
-
-                if (genericDef.StartsWith("GroupStep") || genericDef.StartsWith("ParallelStep"))
-                {
-                    var stepsProperty = step.GetType().GetProperty("Steps");
-                    if (stepsProperty?.GetValue(step) is IReadOnlyList<IStep> nestedSteps)
-                    {
-                        CollectStepTypes(nestedSteps, usedTypes);
-                    }
-                }
-                else if (genericDef.StartsWith("IntentionRouterStep"))
-                {
-                    var routesProperty = step.GetType().GetProperty("Routes");
-                    if (routesProperty?.GetValue(step) is System.Collections.IDictionary routes)
-                    {
-                        foreach (System.Collections.DictionaryEntry route in routes)
-                        {
-                            if (route.Value is IStep routeStep)
-                            {
-                                CollectStepTypes(new[] { routeStep }, usedTypes);
-                            }
-                        }
-                    }
-                }
+                case GroupStep group:
+                    CollectStepTypes(group.Steps, usedTypes);
+                    break;
+                case ParallelStep parallel:
+                    CollectStepTypes(parallel.Branches, usedTypes);
+                    break;
+                case RouterStep router:
+                    CollectStepTypes(router.Routes.Values, usedTypes);
+                    break;
             }
         }
     }
@@ -219,48 +203,32 @@ public sealed class PipelineSchemaGenerator
             ["outputType"] = FormatTypeName(step.OutputType)
         };
 
-        // Handle GroupStep - has nested steps
-        if (step.GetType().IsGenericType && step.GetType().GetGenericTypeDefinition().Name.StartsWith("GroupStep"))
+        switch (step)
         {
-            var stepsProperty = step.GetType().GetProperty("Steps");
-            if (stepsProperty?.GetValue(step) is IReadOnlyList<IStep> groupSteps)
-            {
-                stepSchema["steps"] = new JArray(groupSteps.Select(GenerateStepSchema));
-            }
-        }
-        // Handle ParallelStep - has parallel steps
-        else if (step.GetType().IsGenericType && step.GetType().GetGenericTypeDefinition().Name.StartsWith("ParallelStep"))
-        {
-            var stepsProperty = step.GetType().GetProperty("Steps");
-            if (stepsProperty?.GetValue(step) is IReadOnlyList<IStep> parallelSteps)
-            {
-                stepSchema["steps"] = new JArray(parallelSteps.Select(GenerateStepSchema));
-            }
-        }
-        // Handle IntentionRouterStep - has routes
-        else if (step.GetType().IsGenericType && step.GetType().GetGenericTypeDefinition().Name.StartsWith("IntentionRouterStep"))
-        {
-            var routesProperty = step.GetType().GetProperty("Routes");
-            if (routesProperty?.GetValue(step) is System.Collections.IDictionary routes)
-            {
+            // GroupStep - has nested steps
+            case GroupStep group:
+                stepSchema["steps"] = new JArray(group.Steps.Select(GenerateStepSchema));
+                break;
+
+            // ParallelStep - has parallel branches
+            case ParallelStep parallel:
+                stepSchema["steps"] = new JArray(parallel.Branches.Select(GenerateStepSchema));
+                break;
+
+            // RouterStep - has routes keyed by intention id
+            case RouterStep router:
                 var routesObj = new JObject();
-                foreach (System.Collections.DictionaryEntry route in routes)
+                foreach (var route in router.Routes)
                 {
-                    var routeKey = route.Key.ToString() ?? "Unknown";
-                    var routeStep = route.Value as IStep;
-                    if (routeStep != null)
-                    {
-                        routesObj[routeKey] = GenerateStepSchema(routeStep);
-                    }
+                    routesObj[route.Key] = GenerateStepSchema(route.Value);
                 }
                 stepSchema["routes"] = routesObj;
-            }
 
-            var defaultRouteProperty = step.GetType().GetProperty("DefaultRoute");
-            if (defaultRouteProperty?.GetValue(step) is IStep defaultRoute)
-            {
-                stepSchema["defaultRoute"] = defaultRoute.Name;
-            }
+                if (router.DefaultRoute is IStep defaultRoute)
+                {
+                    stepSchema["defaultRoute"] = defaultRoute.Name;
+                }
+                break;
         }
 
         return stepSchema;
