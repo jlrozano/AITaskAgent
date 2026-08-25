@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/Framework/">
+    <Project Path="Framework/AITaskAgent.csproj" />
+    <Project Path="FileTools/FileTools.csproj" />
+    <Project Path="McpIntegration/McpIntegration.csproj" />
+  </Folder>
+  <Folder Name="/Providers/">
+    <Project Path="OpenAILLmService/OpenAILLmService.csproj" />
+    <Project Path="GeminiLlmService/GeminiLlmService.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="Tests/AITaskAgent.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Samples/">
+    <Project Path="Samples/AdvancedLlmPipeline/Samples.AdvancedLlmPipeline.csproj" />
+    <Project Path="Samples/FileToolsTestApp/FileToolsTestApp.csproj" />
+    <Project Path="Samples/GeminiTestApp/GeminiTestApp.csproj" />
+    <Project Path="Samples/McpIntegrationDemo/Samples.McpIntegrationDemo.csproj" />
+    <Project Path="Samples/PipelineVisualizer/PipelineVisualizer.csproj" />
+    <Project Path="Samples/SimpleChatDemo/SimpleChatDemo.csproj" />
+    <Project Path="Samples/YamlPipelineDemo/YamlPipelineDemo.csproj" />
+  </Folder>
+</Solution>

@@ -8,9 +8,13 @@ A powerful .NET framework for building AI agent pipelines with LLM integration, 
 ## Features
 
 - **Pipeline Architecture** - Compose steps into complex workflows
-- **Dynamic Execution Graph** - Branching (groups), parallelism, and dynamic routing
-- **LLM Integration** - Provider-agnostic LLM service with OpenAI support
-- **Intention Routing** - LLM-based intent classification and routing
+- **Dynamic Execution Graph** - Branching (groups), parallelism, loops, and dynamic routing
+- **Declarative Pipelines** - Define a whole pipeline in YAML, with JSON Schemas compiled to real C# types at startup
+- **LLM Integration** - Provider-agnostic LLM service, with OpenAI-compatible and Gemini providers
+- **Provider × Role Configuration** - Connection targets and per-step behaviour configured separately, with fallback chains
+- **Open-Weight Model Support** - Recovers tool calls from models that ignore the `tool_calls` protocol and emit them in the message text
+- **Human-in-the-Loop** - Suspend a pipeline for human input and resume it, skipping the work already done
+- **Intention Routing** - LLM-based intent classification and routing, with self-correction when the model invents a route
 - **Tool System** - Define tools that LLMs can invoke
 - **Conversation Management** - Context with bookmarks and sliding window
 - **Observability** - Built-in events, OpenTelemetry traces, and metrics
@@ -41,9 +45,11 @@ Pipeline
 | Step Type | Behavior | Use Case |
 |-----------|----------|----------|
 | `GroupStep` | Sequential branch (nestable) | Logical grouping, sub-workflows |
-| `ParallelStep` | Concurrent execution | Fetch multiple APIs simultaneously |
+| `ParallelStep` | Concurrent execution, one isolated conversation per branch | Fetch multiple APIs simultaneously |
+| `LoopStep` | Repeat a body until it breaks or exhausts its iterations | Refine a draft until a critic accepts it |
+| `BreakStep` | Leave the enclosing loop, carrying a value out | Early exit once a condition holds |
 | `SwitchStep` | Dynamic routing | Intent-based routing |
-| `IntentionRouterStep` | LLM-based routing | AI-classified routing |
+| `RouterStep` | LLM-based routing over named options | AI-classified routing |
 
 ### Key Concept: NextSteps
 
@@ -61,24 +67,38 @@ using AITaskAgent.Configuration;
 using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Steps;
 
-// Register services
+// Register services, then initialise the framework's static factories
 services.AddAITaskAgent();
+var provider = services.BuildServiceProvider();
+provider.UseAITaskAgent();
 
-// Simple linear pipeline
-var result = await Pipeline.ExecuteAsync(
+// The pipeline is a service, not a static entry point
+var pipeline = provider.GetRequiredService<IPipeline>();
+
+var result = await pipeline.ExecuteAsync(
     name: "GreetingPipeline",
-    steps: [
-        new ActionStep<EmptyResult, StringResult>("Greet", 
-            (input, ctx) => Task.FromResult(new StringResult("Hello!")))
-    ],
-    input: new EmptyResult()
+    steps: [new GreetStep()],
+    input: new StepResult<string>(new EmptyStep("Seed"), "world")
 );
 
-// Parallel execution
-var parallel = new ParallelStep<EmptyResult>("FetchAll",
+// Parallel execution: each branch runs with its own conversation and step path
+var parallel = new ParallelStep("FetchAll",
     new FetchUsersStep(),
     new FetchOrdersStep()
 );
+```
+
+Or declare the same pipeline in YAML and let the engine compile the schemas:
+
+```yaml
+name: DocumentPipeline
+steps:
+  - !LlmStep
+    stepId: Classify
+    inputSchema: DocumentInput
+    outputSchema: ClassificationOutput
+    profileName: default
+    userPrompt: "@classifier"
 ```
 
 ## Documentation
@@ -132,8 +152,15 @@ var parallel = new ParallelStep<EmptyResult>("FetchAll",
 |---------|---------|---------|
 | Microsoft.Extensions.* | 10.0.0 | DI, Logging, Options |
 | Newtonsoft.Json | 13.0.4 | JSON serialization |
-| NJsonSchema | 11.0.0 | JSON Schema for tools |
-| OpenAI | 2.7.0 | OpenAI SDK |
+| NJsonSchema | 11.6.1 | JSON Schema for tools, and code generation for YAML schemas |
+| YamlDotNet | 13.0.1 | Parsing declarative pipelines |
+| Microsoft.CodeAnalysis.CSharp | 5.0.0 | Compiling YAML schemas into real types at startup |
+| Microsoft.ClearScript.V8 | 7.5.0 | Running JavaScript validation embedded in schemas |
+| Google.GenAI | 0.10.0 | Gemini provider |
+
+The OpenAI provider talks HTTP directly rather than through the official SDK, which is what lets it
+work against any OpenAI-compatible endpoint (OpenRouter, Groq, Ollama, …) and pass vendor-specific
+parameters straight through.
 
 ## License
 

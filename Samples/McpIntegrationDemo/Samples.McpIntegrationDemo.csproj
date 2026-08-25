@@ -13,8 +13,6 @@
     <ProjectReference Include="..\..\Framework\AITaskAgent.csproj" />
     <ProjectReference Include="..\..\OpenAILLmService\OpenAILLmService.csproj" />
     <ProjectReference Include="..\..\GeminiLlmService\GeminiLlmService.csproj" />
-    <ProjectReference Include="..\..\YAML\YAML.csproj" />
-    <ProjectReference Include="..\..\Js\AITaskAgent.Js.csproj" />
   </ItemGroup>
 
   <ItemGroup>

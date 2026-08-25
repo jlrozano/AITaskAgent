@@ -60,6 +60,10 @@ builder.WebHost.UseUrls("http://localhost:5000");
 
 var app = builder.Build();
 
+// Forces creation of the framework singletons: PipelineContextFactory publishes itself statically
+// here, and PipelineExecutor builds every context through it.
+app.Services.UseAITaskAgent();
+
 app.Services.RegisterPipelineMiddleware<ContextBroadcastMiddleware>();
 
 

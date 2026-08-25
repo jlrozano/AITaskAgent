@@ -24,13 +24,17 @@ public sealed class RouterStep(
     public IStep? DefaultRoute => defaultRoute;
 
     IList<string> IRouterOptions.Options { get; } = [.. routes.Keys];
+
     /// <summary>
-    /// Provides a mapping of route names to their corresponding step implementations, using case-insensitive string
-    /// comparison for keys.
+    /// Maps route names to steps, matched without regard to letter casing.
     /// </summary>
-    /// <remarks>This dictionary enables lookup of steps by route name without regard to letter casing.
-    /// Modifying the dictionary affects the available routes for step resolution.</remarks>
-    public Dictionary<string, IStep> Routes = new(routes, StringComparer.OrdinalIgnoreCase);
+    /// <remarks>
+    /// The route name comes from an LLM, which is precisely where casing cannot be relied on, so
+    /// the comparison must be case-insensitive regardless of the dictionary the caller passed in.
+    /// This is the dictionary <see cref="SelectTargetStep"/> reads, so modifying it does change
+    /// the available routes.
+    /// </remarks>
+    public Dictionary<string, IStep> Routes { get; } = new(routes, StringComparer.OrdinalIgnoreCase);
 
 
     /// <summary>
@@ -45,8 +49,9 @@ public sealed class RouterStep(
     {
         string selectedOption = input.SelectedOption ?? throw new InvalidOperationException("No intention value selected.");
 
-        // Try to get route for the intention. 
-        IStep targetStep = (routes.TryGetValue(selectedOption, out IStep? step)
+        // Read Routes, not the constructor parameter: only Routes carries the case-insensitive
+        // comparer, and the option name was produced by a model.
+        IStep targetStep = (Routes.TryGetValue(selectedOption, out IStep? step)
             ? step
             : defaultRoute) ?? throw new InvalidOperationException($"No route for intention {selectedOption} and no default route");
 
