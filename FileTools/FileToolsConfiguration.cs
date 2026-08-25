@@ -1,4 +1,4 @@
-namespace FileTools;
+namespace AITaskAgent.FileTools;
 
 public static class FileToolsConfiguration
 {

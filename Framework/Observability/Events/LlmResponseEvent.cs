@@ -1,4 +1,5 @@
 using AITaskAgent.LLM.Constants;
+using AITaskAgent.LLM.Models;
 
 namespace AITaskAgent.Observability.Events;
 
@@ -20,6 +21,11 @@ public sealed record LlmResponseEvent : ProgressEventBase
     public FinishReason FinishReason { get; init; } = FinishReason.Streaming;
 
     /// <summary>
+    /// The index of the choice this event belongs to.
+    /// </summary>
+    public int ChoiceIndex { get; init; } = 0;
+
+    /// <summary>
     /// Raw finish reason string from LLM when FinishReason is Other.
     /// </summary>
     public string? RawFinishReason { get; init; }
@@ -35,4 +41,7 @@ public sealed record LlmResponseEvent : ProgressEventBase
 
     /// <summary>LLM provider used.</summary>
     public string? Provider { get; init; }
+
+    /// <summary>Tool calls requested by the LLM (only set on final response or tool-call chunks).</summary>
+    public List<ToolCall>? ToolCalls { get; init; }
 }

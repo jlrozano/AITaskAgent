@@ -18,6 +18,9 @@ public sealed record StepProgressEvent : IProgressEvent
     public string? CorrelationId { get; init; }
 
     /// <inheritdoc />
+    public string SchemaVersion { get; init; } = "1.0";
+
+    /// <inheritdoc />
     public bool SuppressFromUser { get; init; }
 
     /// <summary>Progress message.</summary>
@@ -32,4 +35,3 @@ public sealed record StepProgressEvent : IProgressEvent
     /// <summary>Additional metadata.</summary>
     public Dictionary<string, object?>? Metadata { get; init; }
 }
-

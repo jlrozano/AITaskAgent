@@ -39,7 +39,7 @@ public sealed class CircuitBreaker(
 
         try
         {
-            var result = await action();
+            T? result = await action();
             OnSuccess();
             return result;
         }

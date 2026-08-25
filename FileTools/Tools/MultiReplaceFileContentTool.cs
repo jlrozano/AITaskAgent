@@ -21,14 +21,14 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
             Description = Description,
             ParametersJsonSchema = """
             {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "ArtifactMetadata": {
-                        "type": "OBJECT",
+                        "type": "object",
                         "description": "Metadata updates if updating an artifact file, leave blank if not updating an artifact. Should be updated if the content is changing meaningfully.",
                         "properties": {
                             "ArtifactType": {
-                                "type": "STRING",
+                                "type": "string",
                                 "enum": [
                                     "implementation_plan",
                                     "walkthrough",
@@ -38,7 +38,7 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
                                 "description": "Type of artifact: 'implementation_plan', 'walkthrough', 'task', or 'other'."
                             },
                         "Summary": {
-                                "type": "STRING",
+                                "type": "string",
                                 "description": "Detailed multi-line summary of the artifact file, after edits have been made. Summary does not need to mention the artifact name and should focus on the contents and purpose of the artifact."
                             }
                         },
@@ -48,45 +48,45 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
                         ]
                     },
                     "CodeMarkdownLanguage": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "Markdown language for the code block, e.g 'python' or 'javascript'"
                     },
                     "Complexity": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "A 1-10 rating of how important it is for the user to review this change. Rate based on: 1-3 (routine/obvious), 4-6 (worth noting), 7-10 (critical or subtle and warrants explanation)."
                     },
                     "Description": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "Brief, user-facing explanation of what this change did. Focus on non-obvious rationale, design decisions, or important context. Don't just restate what the code does."
                     },
                     "Instruction": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "A description of the changes that you are making to the file."
                     },
                     "ReplacementChunks": {
-                        "type": "ARRAY",
+                        "type": "array",
                         "description": "A list of chunks to replace. It is best to provide multiple chunks for non-contiguous edits if possible. This must be a JSON array, not a string.",
                         "items": {
-                            "type": "OBJECT",
+                            "type": "object",
                             "properties": {
                                 "AllowMultiple": {
-                                    "type": "BOOLEAN",
+                                    "type": "boolean",
                                     "description": "If true, multiple occurrences of 'targetContent' will be replaced by 'replacementContent' if they are found. Otherwise if multiple occurences are found, an error will be returned."
                                 },
                                 "EndLine": {
-                                    "type": "INTEGER",
+                                    "type": "integer",
                                     "description": "The ending line number of the chunk (1-indexed). Should be at or after the last line containing the target content. Must satisfy StartLine <= EndLine <= number of lines in the file. The target content is searched for within the [StartLine, EndLine] range."
                                 },
                                 "ReplacementContent": {
-                                    "type": "STRING",
+                                    "type": "string",
                                     "description": "The content to replace the target content with."
                                 },
                                 "StartLine": {
-                                    "type": "INTEGER",
+                                    "type": "integer",
                                     "description": "The starting line number of the chunk (1-indexed). Should be at or before the first line containing the target content. Must satisfy 1 <= StartLine <= EndLine. The target content is searched for within the [StartLine, EndLine] range."
                                 },
                                 "TargetContent": {
-                                    "type": "STRING",
+                                    "type": "string",
                                     "description": "The exact string to be replaced. This must be the exact character-sequence to be replaced, including whitespace. Be very careful to include any leading whitespace otherwise this will not work at all. This must be a unique substring within the file, or else it will error."
                                 }
                             },
@@ -100,13 +100,13 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
                         }
                     },
                     "TargetFile": {
-                        "type": "STRING",
-                        "description": "The target file to modify. Always specify the target file as the very first argument."
+                        "type": "string",
+                        "description": "The target file to modify. Can be absolute or relative to project root. The '/workspace/' prefix is handled automatically."
                     },
                     "TargetLintErrorIds": {
-                        "type": "ARRAY",
+                        "type": "array",
                         "items": {
-                            "type": "STRING"
+                            "type": "string"
                         },
                         "description": "If applicable, IDs of lint errors this edit aims to fix (they'll have been given in recent IDE feedback). If you believe the edit could fix lints, do specify lint IDs; if the edit is wholly unrelated, do not. A rule of thumb is, if your edit was influenced by lint feedback, include lint IDs. Exercise honest judgement here."
                     }
@@ -130,7 +130,13 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        var args = ParseArguments<Arguments>(argumentsJson);
+        var (success, args, parseError) = TryParseArguments<Arguments>(
+            argumentsJson,
+            expectedSchemaHint: """{"TargetFile": "string", "ReplacementChunks": [...]}""",
+            logger: logger);
+
+        if (!success) return parseError!;
+
         if (args is null || string.IsNullOrWhiteSpace(args.TargetFile))
         {
             return "Error: TargetFile is required.";
@@ -149,41 +155,36 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
         }
 
         string originalContent = await File.ReadAllTextAsync(resolvedTargetFile, cancellationToken);
-        string currentContent = originalContent;
 
-        // Sort chunks by StartLine descending to avoid offset issues
+        // Normalise line endings once up-front; all operations stay in \n-space.
+        string currentContent = originalContent.Replace("\r\n", "\n");
+
+        // Sort chunks by StartLine descending so earlier replacements don't shift
+        // the line numbers of subsequent chunks.
         var sortedChunks = args.ReplacementChunks.OrderByDescending(c => c.StartLine).ToList();
 
         foreach (var chunk in sortedChunks)
         {
-            if (!currentContent.Contains(chunk.TargetContent))
+            string? result;
+            try
             {
-                // Fallback normalization logic could go here, for now simpler check
-                var normalizedContent = currentContent.Replace("\r\n", "\n");
-                var normalizedTarget = chunk.TargetContent.Replace("\r\n", "\n");
-                if (normalizedContent.Contains(normalizedTarget))
-                {
-                    currentContent = normalizedContent.Replace(normalizedTarget, chunk.ReplacementContent.Replace("\r\n", "\n"));
-                }
-                else
-                {
-                    return $"Error: TargetContent for chunk starting at line {chunk.StartLine} not found.";
-                }
+                result = FileToolsHelper.ApplyChunk(
+                    currentContent,
+                    chunk.TargetContent,
+                    chunk.ReplacementContent,
+                    chunk.StartLine,
+                    chunk.EndLine,
+                    chunk.AllowMultiple);
             }
-            else
+            catch (InvalidOperationException ex)
             {
-                // Replace only specific occurrence if possible? 
-                // The simple Replace replaces ALL. The robust way is to use indices or Regex.
-                // Given the prompt "AllowMultiple", simple Replace honors that if true.
-                // If false, it should ideally error on multiple, but for this implementation we will use simple String.Replace
-                // CAUTION: This simple implementation might replace unintentional matches. 
-                // A robust implementation would use line numbers to isolate the block.
+                return $"Error in chunk at line {chunk.StartLine}: {ex.Message}";
+            }
 
-                // Robust implementation utilizing StartLine/EndLine requires splitting into lines
-                // But for now, we will trust the "TargetContent" uniqueness or just replace all if AllowMultiple is okay-ish.
-                // Reverting to simple replace for "Best Effort" MVP
-                currentContent = currentContent.Replace(chunk.TargetContent, chunk.ReplacementContent);
-            }
+            if (result is null)
+                return $"Error: TargetContent for chunk at lines {chunk.StartLine}–{chunk.EndLine} was not found in the file.";
+
+            currentContent = result;
         }
 
         await File.WriteAllTextAsync(resolvedTargetFile, currentContent, cancellationToken);

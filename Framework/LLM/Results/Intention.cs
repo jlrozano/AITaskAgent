@@ -1,81 +1,61 @@
-using AITaskAgent.Core.Abstractions;
-using AITaskAgent.Core.Models;
-using AITaskAgent.Core.StepResults;
 using System.ComponentModel;
 
 namespace AITaskAgent.LLM.Results;
 
 /// <summary>
-/// Data payload for intention analysis - this is what the LLM returns.
+/// Detailed result of analyzing user intention using dynamic options.
 /// </summary>
-[Description("Result of analyzing user intention and classifying it into predefined categories.")]
-public sealed class Intention<TEnum>
-    where TEnum : struct, Enum
+[Description("Result of analyzing user intention and classifying it into dynamically provided categories.")]
+public sealed class Intention
 {
-    [Description("Select from 'Available Options' listed in the prompt. Each option has a description there - read them carefully to choose correctly. Use the exact option name.")]
-    public required TEnum Option { get; init; }
+    [Description("Select EXACTLY ONE from the 'Available Options' listed in the prompt. Use the exact option name. Do not invent new options.")]
+    public string SelectedOption { get; init; } = string.Empty;
 
     [Description("Detailed explanation of why this option was chosen based on the user's message.")]
-    public required string Reasoning { get; init; }
+    public string SelectionReason { get; init; } = string.Empty;
 
-    [Description("CRITICAL: The next step has ZERO access to conversation history. You MUST include ALL content inline. " +
-        "For 'ReviewStory': COPY THE ENTIRE CURRENT STORY TEXT here, then add the modification instruction. " +
-        "For 'Questions': COPY all relevant story text/versions/data here, then add the question. " +
-        "For 'NewStory': describe what story to create. " +
-        "WARNING: If you do not copy the story text here, the next step will fail because it cannot see the conversation.")]
-    public required string OptimizedPrompt { get; init; }
+    [Description("User-facing feedback. For AMBIGUOUS / NeedMoreInfo=true, include a single closed clarification question and a list of chip-like options the UI can render.")]
+    public UserFeedbackInfo UserFeedback { get; init; } = new();
 
-    [Description("Confidence score between 0.0 and 1.0 indicating how certain the classification is.")]
-    public float? Confidence { get; init; }
+    [Description("An optimized and detailed prompt for the next step, expanding on what the user is asking for.")]
+    public string DetailedPrompt { get; init; } = string.Empty;
 
-    [Description("Optional search keywords extracted from the user message for RAG (Retrieval-Augmented Generation).")]
-    public List<string>? RagKeys { get; init; }
-
-    [Description("Optional tags for filtering or categorizing the intention.")]
-    public List<string>? RagTags { get; init; }
-
-    public string GetDescription() => GetEnumDescription(Option);
-
-    private static string GetEnumDescription(TEnum value)
-    {
-        var field = typeof(TEnum).GetField(value.ToString());
-        var attribute = field?.GetCustomAttributes(typeof(DescriptionAttribute), false)
-            .FirstOrDefault() as DescriptionAttribute;
-        return attribute?.Description ?? value.ToString();
-    }
+    [Description("Additional information extracted from the user message as specified in the system prompt.")]
+    public Dictionary<string, object> ExtraInformation { get; init; } = [];
 }
-//public interface IIntentionResult
-//{
-//    Enum Options { get; }
-//}
-public sealed class IntentionResult<TEnum>(IStep step, Intention<TEnum>? value) : StepResult<Intention<TEnum>>(step, value)//, IIntentionResult
-    where TEnum : struct, Enum
+
+[Description("User-facing feedback payload. Used to render a friendly message and optional choice chips.")]
+public sealed class UserFeedbackInfo
 {
-    public Enum Options => throw new NotImplementedException();
-
-    public override Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
-    {
-        if (Value == null)
-        {
-            return Task.FromResult((false, (string?)"Intention data is null"));
-        }
-
-        if (!Enum.IsDefined(Value.Option))
-        {
-            return Task.FromResult((false, (string?)$"Option '{Value.Option}' is not a valid {typeof(TEnum).Name} value"));
-        }
-
-        if (string.IsNullOrWhiteSpace(Value.Reasoning))
-        {
-            return Task.FromResult((false, (string?)"Reasoning cannot be empty"));
-        }
-
-        if (string.IsNullOrWhiteSpace(Value.OptimizedPrompt))
-        {
-            return Task.FromResult((false, (string?)"OptimizedPrompt cannot be empty"));
-        }
-
-        return Task.FromResult((true, (string?)null));
-    }
+    [Description("Friendly message to show the user acknowledging their request and/or explaining what happens next.")]
+    public string Message { get; init; } = string.Empty;
+    [Description("True if more information is needed to fulfill the request.")]
+    public bool NeedMoreInfo { get; init; }
+    [Description("If NeedMoreInfo=true, provide a single closed clarification question and optional choice chips for the user to select from.")]
+    public List<Question>? Questions { get; init; }
+    [Description("If true, the user may also answer with free text instead of selecting a chip.")]
+    public bool AllowFreeText { get; init; } = true;
 }
 
+[Description("A single selectable option that can be rendered as a chip/button.")]
+public sealed class UserChoiceChip
+{
+    [Description("Stable id for the chip (e.g., QUERY, DISCOVERY, PLANNING, ORCHESTRATION).")]
+    public string Id { get; init; } = string.Empty;
+
+    [Description("Short label to display to the user.")]
+    public string Label { get; init; } = string.Empty;
+
+    [Description("Optional short description to help the user choose.")]
+    public string? Description { get; init; }
+}
+
+public sealed class Question
+{
+    [Description("Ask ONE closed clarification question here. Keep it short and action-oriented.")]
+    public string? ClarificationQuestion { get; init; }
+    [Description("True if multiples choices can be selected. False otherwise.")]
+    public bool Multiple { get; init; } = false;
+    [Description("If NeedMoreInfo=true, provide choices the UI can render as chips. The user's selection should map to a valid next intent (e.g., QUERY, DISCOVERY, PLANNING, ORCHESTRATION).")]
+    public List<UserChoiceChip>? ChoiceChips { get; init; }
+}

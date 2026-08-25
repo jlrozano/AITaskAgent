@@ -29,7 +29,7 @@ internal static class StepResultFactory
             }
             else if (Ctor is not null)
             {
-                var obj = Ctor(step);
+                object obj = Ctor(step);
                 ((IStepResult)obj).Error = error;
                 return obj;
             }
@@ -39,7 +39,7 @@ internal static class StepResultFactory
 
         public object CreateInstance(IStep step, object? value, IStepError? error = null)
         {
-            var obj = CreateInstance(step, error);
+            object obj = CreateInstance(step, error);
 
             if (value is not null && !ValueType.IsAssignableFrom(value.GetType()) &&
                 !(value is null && !ValueType.IsValueType && Nullable.GetUnderlyingType(ValueType) != null))
@@ -78,18 +78,18 @@ internal static class StepResultFactory
     public static IStepResult CreateStepResult(Type type, IStep step, IStepError? error = null)
 
     {
-        var info = GetStepActivatorInfo(type);
+        StepActivatorInfo info = GetStepActivatorInfo(type);
 
         return (IStepResult)info.CreateInstance(step, error);
     }
 
     public static IStepResult CreateStepResult(Type type, IStep step, object? value, IStepError? error = null)
     {
-        var info = GetStepActivatorInfo(type);
+        StepActivatorInfo info = GetStepActivatorInfo(type);
 
         return (IStepResult)info.CreateInstance(step, value, error);
     }
-    public static StepActivatorInfo GetStepActivatorInfo(Type type)
+    internal static StepActivatorInfo GetStepActivatorInfo(Type type)
     {
         return _cache.GetOrAdd(type, BuildInfo);
     }
@@ -105,13 +105,13 @@ internal static class StepResultFactory
                 $"{type.Name} no implementa IStepResult.");
         }
 
-        var valueProperty = GetValuePropertyInfo(type);
-        var jsonSchema = BuildJsonSchema(valueProperty.PropertyType);
+        PropertyInfo valueProperty = GetValuePropertyInfo(type);
+        JsonSchema? jsonSchema = BuildJsonSchema(valueProperty.PropertyType);
 
-        var ctor2 = type.GetConstructors()
+        ConstructorInfo? ctor2 = type.GetConstructors()
             .FirstOrDefault(c =>
             {
-                var p = c.GetParameters();
+                ParameterInfo[] p = c.GetParameters();
                 return p.Length == 2
                     && typeof(IStep).IsAssignableFrom(p[0].ParameterType)
                     && typeof(IStepError).IsAssignableFrom(p[1].ParameterType);
@@ -124,10 +124,10 @@ internal static class StepResultFactory
         }
 
 
-        var ctor1 = type.GetConstructors()
+        ConstructorInfo? ctor1 = type.GetConstructors()
             .FirstOrDefault(c =>
             {
-                var p = c.GetParameters();
+                ParameterInfo[] p = c.GetParameters();
                 return p.Length == 1
                     && typeof(IStep).IsAssignableFrom(p[0].ParameterType);
             });
@@ -136,16 +136,50 @@ internal static class StepResultFactory
         {
             ctor = CompileCtor(ctor1);
         }
+        else
+        {
+            // Try constructor with (IStep, T?) where T is the value type
+            ConstructorInfo? ctorWithOptionalValue = type.GetConstructors()
+                .FirstOrDefault(c =>
+                {
+                    ParameterInfo[] p = c.GetParameters();
+                    return p.Length == 2
+                        && typeof(IStep).IsAssignableFrom(p[0].ParameterType)
+                        && !typeof(IStepError).IsAssignableFrom(p[1].ParameterType)
+                        && (p[1].IsOptional || p[1].HasDefaultValue);
+                });
+
+            if (ctorWithOptionalValue is not null)
+            {
+                ctor = CompileCtorWithOptionalValue(ctorWithOptionalValue);
+            }
+            else
+            {
+                // Try any constructor with (IStep, any) pattern - use default value for second param
+                ConstructorInfo? ctorWithTwoParams = type.GetConstructors()
+                    .FirstOrDefault(c =>
+                    {
+                        ParameterInfo[] p = c.GetParameters();
+                        return p.Length == 2
+                            && typeof(IStep).IsAssignableFrom(p[0].ParameterType);
+                    });
+
+                if (ctorWithTwoParams is not null)
+                {
+                    ctor = CompileCtorWithSecondParamDefault(ctorWithTwoParams, valueProperty.PropertyType);
+                }
+            }
+        }
 
         return new StepActivatorInfo(ctorWithError, ctor, valueProperty, jsonSchema);
     }
 
     private static PropertyInfo GetValuePropertyInfo(Type type)
     {
-        var currentType = type;
+        Type? currentType = type;
         while (currentType != null)
         {
-            var prop = currentType.GetProperty(nameof(IStepResult.Value),
+            PropertyInfo? prop = currentType.GetProperty(nameof(IStepResult.Value),
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
 
             if (prop != null)
@@ -161,7 +195,7 @@ internal static class StepResultFactory
 
     private static JsonSchema? BuildJsonSchema(Type valueType)
     {
-        var actualType = Nullable.GetUnderlyingType(valueType) ?? valueType;
+        Type actualType = Nullable.GetUnderlyingType(valueType) ?? valueType;
 
         // Tipos primitivos que no necesitan schema
         if (actualType == typeof(string) ||
@@ -191,31 +225,31 @@ internal static class StepResultFactory
     {
         var nullabilityContext = new NullabilityInfoContext();
 
-        foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+        foreach (PropertyInfo? prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanWrite &&
                        !Attribute.IsDefined(p, typeof(JsonIgnoreAttribute))))
         {
             // Nombre de propiedad en camelCase
-            var jsonPropertyAttr = prop.GetCustomAttribute<JsonPropertyAttribute>();
-            var propertyName = jsonPropertyAttr?.PropertyName
+            JsonPropertyAttribute? jsonPropertyAttr = prop.GetCustomAttribute<JsonPropertyAttribute>();
+            string propertyName = jsonPropertyAttr?.PropertyName
                 ?? (char.ToLowerInvariant(prop.Name[0]) + prop.Name[1..]);
 
-            var propSchema = CreateSchemaForType(prop.PropertyType);
+            JsonSchemaProperty propSchema = CreateSchemaForType(prop.PropertyType);
             ApplyValidationAttributes(prop, propSchema);
 
             // Aplicar [Description] si existe
-            var descAttr = prop.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>();
+            DescriptionAttribute? descAttr = prop.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>();
             if (descAttr != null)
             {
                 propSchema.Description = descAttr.Description;
             }
 
             // Determinar si es requerida
-            var nullabilityInfo = nullabilityContext.Create(prop);
-            var isNullable = nullabilityInfo.ReadState == NullabilityState.Nullable;
-            var hasInitSetter = prop.SetMethod?.ReturnParameter.GetRequiredCustomModifiers()
+            NullabilityInfo nullabilityInfo = nullabilityContext.Create(prop);
+            bool isNullable = nullabilityInfo.ReadState == NullabilityState.Nullable;
+            bool hasInitSetter = prop.SetMethod?.ReturnParameter.GetRequiredCustomModifiers()
                 .Contains(typeof(System.Runtime.CompilerServices.IsExternalInit)) ?? false;
-            var defaultValueAttr = prop.GetCustomAttribute<DefaultValueAttribute>();
+            DefaultValueAttribute? defaultValueAttr = prop.GetCustomAttribute<DefaultValueAttribute>();
 
             // Required si: no nullable + init setter + sin default value
             if (!isNullable && hasInitSetter && defaultValueAttr == null)
@@ -242,7 +276,7 @@ internal static class StepResultFactory
     private static JsonSchemaProperty CreateSchemaForType(Type propertyType)
     {
         var propSchema = new JsonSchemaProperty();
-        var underlyingType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+        Type underlyingType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
 
         if (underlyingType == typeof(string))
         {
@@ -268,19 +302,19 @@ internal static class StepResultFactory
         else if (underlyingType.IsEnum)
         {
             propSchema.Type = JsonObjectType.String;
-            var enumValues = Enum.GetNames(underlyingType);
+            string[] enumValues = Enum.GetNames(underlyingType);
             propSchema.Enumeration.Clear();
-            foreach (var value in enumValues)
+            foreach (string value in enumValues)
             {
                 propSchema.Enumeration.Add(value);
             }
 
             // Add enum value descriptions if they exist
             List<string> enumDescriptions = [];
-            foreach (var enumValue in Enum.GetValues(underlyingType))
+            foreach (object? enumValue in Enum.GetValues(underlyingType))
             {
-                var fieldInfo = underlyingType.GetField(enumValue.ToString()!);
-                var descAttr = fieldInfo?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>();
+                FieldInfo? fieldInfo = underlyingType.GetField(enumValue.ToString()!);
+                DescriptionAttribute? descAttr = fieldInfo?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>();
                 if (descAttr != null)
                 {
                     enumDescriptions.Add($"{enumValue}: {descAttr.Description}");
@@ -292,14 +326,24 @@ internal static class StepResultFactory
                 propSchema.Description = string.Join("; ", enumDescriptions);
             }
         }
+        else if (TryGetStringKeyDictionaryValueType(underlyingType, out Type? dictionaryValueType))
+        {
+            propSchema.Type = JsonObjectType.Object;
+            propSchema.AdditionalPropertiesSchema = CreateAdditionalPropertiesSchema(dictionaryValueType);
+        }
+        else if (underlyingType.IsArray && underlyingType.GetElementType() is Type elementType)
+        {
+            propSchema.Type = JsonObjectType.Array;
+            propSchema.Item = CreateSchemaForType(elementType);
+        }
         else if (underlyingType.IsGenericType &&
                  (underlyingType.GetGenericTypeDefinition() == typeof(List<>) ||
                   underlyingType.GetGenericTypeDefinition() == typeof(IEnumerable<>) ||
                   underlyingType.GetGenericTypeDefinition() == typeof(ICollection<>)))
         {
             propSchema.Type = JsonObjectType.Array;
-            var elementType = underlyingType.GetGenericArguments()[0];
-            var itemSchema = CreateSchemaForType(elementType);
+            Type genericElementType = underlyingType.GetGenericArguments()[0];
+            JsonSchemaProperty itemSchema = CreateSchemaForType(genericElementType);
             propSchema.Item = itemSchema;
         }
         else if (underlyingType.IsClass)
@@ -312,9 +356,127 @@ internal static class StepResultFactory
         return propSchema;
     }
 
+    private static bool TryGetStringKeyDictionaryValueType(Type type, out Type valueType)
+    {
+        valueType = typeof(object);
+
+        if (!type.IsGenericType)
+        {
+            return false;
+        }
+
+        if (type.GetGenericTypeDefinition() == typeof(Dictionary<,>) ||
+            type.GetGenericTypeDefinition() == typeof(IDictionary<,>))
+        {
+            Type[] args = type.GetGenericArguments();
+            if (args.Length == 2 && args[0] == typeof(string))
+            {
+                valueType = args[1];
+                return true;
+            }
+        }
+
+        Type? dictInterface = type.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
+
+        if (dictInterface == null)
+        {
+            return false;
+        }
+
+        Type[] interfaceArgs = dictInterface.GetGenericArguments();
+        if (interfaceArgs.Length != 2 || interfaceArgs[0] != typeof(string))
+        {
+            return false;
+        }
+
+        valueType = interfaceArgs[1];
+        return true;
+    }
+
+    private static JsonSchema CreateAdditionalPropertiesSchema(Type valueType)
+    {
+        var schema = new JsonSchema();
+        Type underlyingType = Nullable.GetUnderlyingType(valueType) ?? valueType;
+
+        if (underlyingType == typeof(string))
+        {
+            schema.Type = JsonObjectType.String;
+            return schema;
+        }
+
+        if (underlyingType == typeof(int) || underlyingType == typeof(long))
+        {
+            schema.Type = JsonObjectType.Integer;
+            return schema;
+        }
+
+        if (underlyingType == typeof(double) || underlyingType == typeof(decimal) || underlyingType == typeof(float))
+        {
+            schema.Type = JsonObjectType.Number;
+            return schema;
+        }
+
+        if (underlyingType == typeof(bool))
+        {
+            schema.Type = JsonObjectType.Boolean;
+            return schema;
+        }
+
+        if (underlyingType == typeof(DateTime) || underlyingType == typeof(DateTimeOffset))
+        {
+            schema.Type = JsonObjectType.String;
+            schema.Format = "date-time";
+            return schema;
+        }
+
+        if (underlyingType.IsEnum)
+        {
+            schema.Type = JsonObjectType.String;
+            foreach (string value in Enum.GetNames(underlyingType))
+            {
+                schema.Enumeration.Add(value);
+            }
+            return schema;
+        }
+
+        if (TryGetStringKeyDictionaryValueType(underlyingType, out Type? innerValueType))
+        {
+            schema.Type = JsonObjectType.Object;
+            schema.AdditionalPropertiesSchema = CreateAdditionalPropertiesSchema(innerValueType);
+            return schema;
+        }
+
+        if (underlyingType.IsArray && underlyingType.GetElementType() is Type elementType)
+        {
+            schema.Type = JsonObjectType.Array;
+            schema.Item = CreateAdditionalPropertiesSchema(elementType);
+            return schema;
+        }
+
+        if (underlyingType.IsGenericType &&
+            (underlyingType.GetGenericTypeDefinition() == typeof(List<>) ||
+             underlyingType.GetGenericTypeDefinition() == typeof(IEnumerable<>) ||
+             underlyingType.GetGenericTypeDefinition() == typeof(ICollection<>)))
+        {
+            schema.Type = JsonObjectType.Array;
+            schema.Item = CreateAdditionalPropertiesSchema(underlyingType.GetGenericArguments()[0]);
+            return schema;
+        }
+
+        if (underlyingType.IsClass)
+        {
+            schema.Type = JsonObjectType.Object;
+            AddPropertiesFromType(underlyingType, schema.Properties, schema.RequiredProperties);
+            return schema;
+        }
+
+        return schema;
+    }
+
     private static void ApplyValidationAttributes(PropertyInfo propertyInfo, JsonSchema schema)
     {
-        foreach (var attribute in propertyInfo.GetCustomAttributes(true))
+        foreach (object attribute in propertyInfo.GetCustomAttributes(true))
         {
             switch (attribute)
             {
@@ -385,11 +547,11 @@ internal static class StepResultFactory
 
     private static Func<IStep, IStepError?, object> CompileCtorWithError(ConstructorInfo ctor)
     {
-        var stepParam = Expression.Parameter(typeof(IStep));
-        var errorParam = Expression.Parameter(typeof(IStepError));
+        ParameterExpression stepParam = Expression.Parameter(typeof(IStep));
+        ParameterExpression errorParam = Expression.Parameter(typeof(IStepError));
 
-        var newExp = Expression.New(ctor, stepParam, errorParam);
-        var cast = Expression.Convert(newExp, typeof(object));
+        NewExpression newExp = Expression.New(ctor, stepParam, errorParam);
+        UnaryExpression cast = Expression.Convert(newExp, typeof(object));
 
         return Expression.Lambda<Func<IStep, IStepError?, object>>(
             cast, stepParam, errorParam
@@ -398,15 +560,39 @@ internal static class StepResultFactory
 
     private static Func<IStep, object> CompileCtor(ConstructorInfo ctor)
     {
-        var stepParam = Expression.Parameter(typeof(IStep));
+        ParameterExpression stepParam = Expression.Parameter(typeof(IStep));
 
-        var newExp = Expression.New(ctor, stepParam);
-        var cast = Expression.Convert(newExp, typeof(object));
+        NewExpression newExp = Expression.New(ctor, stepParam);
+        UnaryExpression cast = Expression.Convert(newExp, typeof(object));
+
+        return Expression.Lambda<Func<IStep, object>>(cast, stepParam).Compile();
+    }
+
+    private static Func<IStep, object> CompileCtorWithOptionalValue(ConstructorInfo ctor)
+    {
+        ParameterExpression stepParam = Expression.Parameter(typeof(IStep));
+        ParameterInfo[] parameters = ctor.GetParameters();
+        Type valueParamType = parameters[1].ParameterType;
+
+        DefaultExpression defaultValueExpression = Expression.Default(valueParamType);
+        NewExpression newExp = Expression.New(ctor, stepParam, defaultValueExpression);
+        UnaryExpression cast = Expression.Convert(newExp, typeof(object));
+
+        return Expression.Lambda<Func<IStep, object>>(cast, stepParam).Compile();
+    }
+
+    private static Func<IStep, object> CompileCtorWithSecondParamDefault(ConstructorInfo ctor, Type valueType)
+    {
+        ParameterExpression stepParam = Expression.Parameter(typeof(IStep));
+        ParameterInfo[] parameters = ctor.GetParameters();
+        Type secondParamType = parameters[1].ParameterType;
+
+        // Use default value for the second parameter (e.g., null for string, default(T) for generic)
+        DefaultExpression defaultValueExpression = Expression.Default(secondParamType);
+        NewExpression newExp = Expression.New(ctor, stepParam, defaultValueExpression);
+        UnaryExpression cast = Expression.Convert(newExp, typeof(object));
 
         return Expression.Lambda<Func<IStep, object>>(cast, stepParam).Compile();
     }
 
 }
-
-
-

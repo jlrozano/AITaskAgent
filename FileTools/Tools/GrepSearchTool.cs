@@ -1,5 +1,7 @@
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
+using Microsoft.Extensions.FileSystemGlobbing;
+using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System.Text.RegularExpressions;
@@ -24,27 +26,27 @@ public sealed class GrepSearchTool : BaseFileTool
             Description = Description,
             ParametersJsonSchema = """
             {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "CaseInsensitive": {
-                        "type": "BOOLEAN",
+                        "type": "boolean",
                         "description": "If true, performs a case-insensitive search."
                     },
                     "IsRegex": {
-                        "type": "BOOLEAN",
+                        "type": "boolean",
                         "description": "If true, treats Query as a regular expression."
                     },
                     "Query": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "The search term or pattern to look for."
                     },
                     "SearchPath": {
-                        "type": "STRING",
-                        "description": "The path to search. This can be a directory or a file."
+                        "type": "string",
+                        "description": "The path to search. Can be a directory or a file. Can be absolute or relative to project root. The '/workspace/' prefix is handled automatically."
                     },
                     "Includes": {
-                        "type": "ARRAY",
-                        "items": { "type": "STRING" },
+                        "type": "array",
+                        "items": { "type": "string" },
                         "description": "Glob patterns to filter files."
                     }
                 },
@@ -63,7 +65,13 @@ public sealed class GrepSearchTool : BaseFileTool
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        var args = ParseArguments<Arguments>(argumentsJson);
+        var (success, args, parseError) = TryParseArguments<Arguments>(
+            argumentsJson,
+            expectedSchemaHint: """{"SearchPath": "string", "Query": "string"}""",
+            logger: logger);
+
+        if (!success) return parseError!;
+
         if (args is null || string.IsNullOrWhiteSpace(args.SearchPath) || string.IsNullOrWhiteSpace(args.Query))
         {
             return "Error: SearchPath and Query are required.";
@@ -87,8 +95,9 @@ public sealed class GrepSearchTool : BaseFileTool
             return $"Error: Invalid regex. {ex.Message}";
         }
 
-        // Resolve path in case it's relative
+        // Resolve path — must use resolved path for all subsequent operations
         var resolvedSearchPath = ResolvePath(args.SearchPath);
+        ValidatePath(resolvedSearchPath);
 
         await NotifyProgressAsync($"🔎 Grep searching for '{args.Query}' in '{resolvedSearchPath}'", context, cancellationToken);
 
@@ -100,11 +109,22 @@ public sealed class GrepSearchTool : BaseFileTool
         }
         else if (Directory.Exists(resolvedSearchPath))
         {
-            // Simple recursive search, filters logic omitted for brevity/speed in this MVP 
-            // Ideally would use Globbing from FindByNameTool logic here too.
             try
             {
-                files.AddRange(Directory.EnumerateFiles(resolvedSearchPath, "*", SearchOption.AllDirectories));
+                if (args.Includes != null && args.Includes.Count > 0)
+                {
+                    // Apply glob include patterns using FileSystemGlobbing
+                    var matcher = new Matcher();
+                    foreach (var include in args.Includes)
+                        matcher.AddInclude(include);
+
+                    var matchResult = matcher.Execute(new DirectoryInfoWrapper(new DirectoryInfo(resolvedSearchPath)));
+                    files.AddRange(matchResult.Files.Select(f => Path.GetFullPath(Path.Combine(resolvedSearchPath, f.Path))));
+                }
+                else
+                {
+                    files.AddRange(Directory.EnumerateFiles(resolvedSearchPath, "*", SearchOption.AllDirectories));
+                }
             }
             catch { }
         }
@@ -115,6 +135,7 @@ public sealed class GrepSearchTool : BaseFileTool
 
         foreach (var file in files)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (matchCount >= MaxMatches) break;
 
             // Skip binaries/huge files simplistic check
@@ -129,8 +150,10 @@ public sealed class GrepSearchTool : BaseFileTool
 
                     if (regex.IsMatch(lines[i]))
                     {
-                        var relativePath = Path.GetRelativePath(args.SearchPath, file); // if dir
-                        if (File.Exists(args.SearchPath)) relativePath = Path.GetFileName(file);
+                        // Use resolvedSearchPath so relative→absolute comparison works correctly
+                        var relativePath = File.Exists(resolvedSearchPath)
+                            ? Path.GetFileName(file)
+                            : Path.GetRelativePath(resolvedSearchPath, file);
 
                         results.Add(new
                         {

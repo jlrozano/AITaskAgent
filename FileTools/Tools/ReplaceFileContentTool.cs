@@ -21,52 +21,52 @@ public sealed class ReplaceFileContentTool : BaseFileTool
             Description = Description,
             ParametersJsonSchema = """
             {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "AllowMultiple": {
-                        "type": "BOOLEAN",
+                        "type": "boolean",
                         "description": "If true, multiple occurrences of 'targetContent' will be replaced by 'replacementContent' if they are found. Otherwise if multiple occurences are found, an error will be returned."
                     },
                     "CodeMarkdownLanguage": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "Markdown language for the code block, e.g 'python' or 'javascript'"
                     },
                     "Complexity": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "A 1-10 rating of how important it is for the user to review this change. Rate based on: 1-3 (routine/obvious), 4-6 (worth noting), 7-10 (critical or subtle and warrants explanation)."
                     },
                     "Description": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "Brief, user-facing explanation of what this change did. Focus on non-obvious rationale, design decisions, or important context. Don't just restate what the code does."
                     },
                     "EndLine": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "The ending line number of the chunk (1-indexed). Should be at or after the last line containing the target content. Must satisfy StartLine <= EndLine <= number of lines in the file. The target content is searched for within the [StartLine, EndLine] range."
                     },
                     "Instruction": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "A description of the changes that you are making to the file."
                     },
                     "ReplacementContent": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "The content to replace the target content with."
                     },
                     "StartLine": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "The starting line number of the chunk (1-indexed). Should be at or before the first line containing the target content. Must satisfy 1 <= StartLine <= EndLine. The target content is searched for within the [StartLine, EndLine] range."
                     },
                     "TargetContent": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "The exact string to be replaced. This must be the exact character-sequence to be replaced, including whitespace. Be very careful to include any leading whitespace otherwise this will not work at all. This must be a unique substring within the file, or else it will error."
                     },
                     "TargetFile": {
-                        "type": "STRING",
-                        "description": "The target file to modify. Always specify the target file as the very first argument."
+                        "type": "string",
+                        "description": "The target file to modify. Can be absolute or relative to project root. The '/workspace/' prefix is handled automatically."
                     },
                     "TargetLintErrorIds": {
-                        "type": "ARRAY",
+                        "type": "array",
                         "items": {
-                            "type": "STRING"
+                            "type": "string"
                         },
                         "description": "If applicable, IDs of lint errors this edit aims to fix (they'll have been given in recent IDE feedback). If you believe the edit could fix lints, do specify lint IDs; if the edit is wholly unrelated, do not. A rule of thumb is, if your edit was influenced by lint feedback, include lint IDs. Exercise honest judgement here."
                     }
@@ -94,7 +94,13 @@ public sealed class ReplaceFileContentTool : BaseFileTool
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        var args = ParseArguments<Arguments>(argumentsJson);
+        var (success, args, parseError) = TryParseArguments<Arguments>(
+            argumentsJson,
+            expectedSchemaHint: """{"TargetFile": "string", "TargetContent": "string", "ReplacementContent": "string", "StartLine": int, "EndLine": int, "AllowMultiple": bool}""",
+            logger: logger);
+
+        if (!success) return parseError!;
+
         if (args is null || string.IsNullOrWhiteSpace(args.TargetFile))
         {
             return "Error: TargetFile is required.";
@@ -114,25 +120,29 @@ public sealed class ReplaceFileContentTool : BaseFileTool
 
         string content = await File.ReadAllTextAsync(resolvedTargetFile, cancellationToken);
 
-        // Exact match replacement logic
-        // Verify TargetContent exists
-        if (!content.Contains(args.TargetContent))
+        // Normalise line endings once; all operations stay in \n-space.
+        content = content.Replace("\r\n", "\n");
+
+        string? result;
+        try
         {
-            // Fallback: try to normalize line endings
-            var normalizedContent = content.Replace("\r\n", "\n");
-            var normalizedTarget = args.TargetContent.Replace("\r\n", "\n");
-            if (!normalizedContent.Contains(normalizedTarget))
-            {
-                return "Error: TargetContent not found in file (checked with normal and normalized line endings).";
-            }
-            content = normalizedContent.Replace(normalizedTarget, args.ReplacementContent.Replace("\r\n", "\n"));
+            result = FileToolsHelper.ApplyChunk(
+                content,
+                args.TargetContent,
+                args.ReplacementContent,
+                args.StartLine,
+                args.EndLine,
+                args.AllowMultiple);
         }
-        else
+        catch (InvalidOperationException ex)
         {
-            content = content.Replace(args.TargetContent, args.ReplacementContent);
+            return $"Error: {ex.Message}";
         }
 
-        await File.WriteAllTextAsync(resolvedTargetFile, content, cancellationToken);
+        if (result is null)
+            return $"Error: TargetContent was not found within the line range [{args.StartLine}, {args.EndLine}] in the file.";
+
+        await File.WriteAllTextAsync(resolvedTargetFile, result, cancellationToken);
 
         return $"Successfully replaced content in {resolvedTargetFile}.";
     }

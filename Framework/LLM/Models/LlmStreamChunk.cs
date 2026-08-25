@@ -25,6 +25,12 @@ public sealed class LlmStreamChunk
     /// <summary>Total tokens used (only available in final chunk).</summary>
     public int? TokensUsed { get; init; }
 
+    /// <summary>Prompt (input) tokens — only available in the final/usage chunk.</summary>
+    public int? PromptTokens { get; init; }
+
+    /// <summary>Completion (output) tokens — only available in the final/usage chunk.</summary>
+    public int? CompletionTokens { get; init; }
+
     /// <summary>Tool call deltas if applicable.</summary>
     public IReadOnlyList<ToolCallUpdate>? ToolCallUpdates { get; init; }
 

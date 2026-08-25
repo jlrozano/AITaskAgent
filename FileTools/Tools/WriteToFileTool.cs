@@ -32,26 +32,29 @@ public sealed class WriteToFileTool : BaseFileTool
             Description = Description,
             ParametersJsonSchema = """
             {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "TargetFile": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "The target file to create. Specify this FIRST."
                     },
                     "Overwrite": {
-                        "type": "BOOLEAN",
+                        "type": "boolean",
                         "description": "Set to true to overwrite existing files."
                     },
                     "CodeLines": {
-                        "type": "ARRAY",
-                        "items": { "type": "STRING" },
-                        "description": "The content of the file as an array of strings. Each item is a line."
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "The content of the file as an array of strings. Each item is a line. Use for small files."
+                    },
+                    "CodeContent": {
+                        "type": "string",
+                        "description": "The full content of the file as a single string. RECOMMENDED for large files to avoid JSON errors."
                     }
                 },
                 "required": [
                     "TargetFile",
-                    "Overwrite",
-                    "CodeLines"
+                    "Overwrite"
                 ]
             }
             """
@@ -64,8 +67,13 @@ public sealed class WriteToFileTool : BaseFileTool
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        // Console.WriteLine($"[DEBUG] WriteToFileTool JSON: {argumentsJson}");
-        var args = ParseArguments<Arguments>(argumentsJson);
+        var (success, args, parseError) = TryParseArguments<Arguments>(
+            argumentsJson,
+            expectedSchemaHint: """{"TargetFile": "string", "Overwrite": true, "CodeContent": "string"}""",
+            logger: logger);
+
+        if (!success) return parseError!;
+
         if (args is null || string.IsNullOrWhiteSpace(args.TargetFile))
         {
             return "Error: TargetFile is required.";
@@ -89,7 +97,10 @@ public sealed class WriteToFileTool : BaseFileTool
             Directory.CreateDirectory(directory);
         }
 
-        string content = args.CodeLines != null ? string.Join("\n", args.CodeLines) : string.Empty;
+        // Support both CodeContent (preferred) and CodeLines (legacy/fallback)
+        string content = args.CodeContent ??
+                        (args.CodeLines != null ? string.Join("\n", args.CodeLines) : string.Empty);
+
         await File.WriteAllTextAsync(resolvedTargetFile, content, cancellationToken);
 
         logger.LogInformation("Written file {File}", resolvedTargetFile);
@@ -100,5 +111,6 @@ public sealed class WriteToFileTool : BaseFileTool
     private record Arguments(
         string TargetFile,
         bool Overwrite,
+        string? CodeContent,
         List<string>? CodeLines);
 }

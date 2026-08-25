@@ -6,23 +6,17 @@ using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
-using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.LLM.Models;
 using AITaskAgent.LLM.Results;
 using AITaskAgent.LLM.Streaming;
 using AITaskAgent.LLM.Support;
 using AITaskAgent.LLM.Tools.Abstractions;
-using AITaskAgent.Observability.Events;
 using AITaskAgent.Support.JSON;
-using AITaskAgent.Support.Template;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
-using NJsonSchema;
-using NJsonSchema.CodeGeneration;
-using System.Diagnostics;
+using Newtonsoft.Json.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace AITaskAgent.LLM.Steps;
 
@@ -39,88 +33,116 @@ namespace AITaskAgent.LLM.Steps;
 /// Subclasses customise the request via the existing hook:
 ///   - ConfigureLlmRequest (virtual)
 /// </summary>
-public abstract class BaseLlmStep(
-    ILlmService llmService,
+public abstract partial class BaseLlmStep(
     string name,
+    LlmRole role,
     Type inputType,
     Type outputType,
-    LlmProviderConfig profile,
-    List<ITool>? tools = null,
-    int maxToolIterations = 5,
-    List<IStreamingTagHandler>? streamingHandlers = null,
-    ITemplateProvider? templateProvider = null
-) : StepBase(name, inputType, outputType)
+    string prompt,
+    string? systemPrompt = null
+    ) : StepBase(name, inputType, outputType), IFallbackable
 {
-    protected readonly ILlmService LlmService = llmService ?? throw new ArgumentNullException(nameof(llmService));
-    protected readonly LlmProviderConfig Profile = profile;
-    protected readonly ITemplateProvider? TemplateProvider = templateProvider;
+    private int _currentIndex = 0;
 
-    private readonly List<ITool>? _tools = tools;
-    private readonly List<IStreamingTagHandler>? _streamingHandlers = streamingHandlers;
+    protected ILlmService LlmService => (_currentIndex == 0 ? role.Provider.Service :
+        role.Fallbacks?[_currentIndex - 1].Provider.Service) ?? new NullLlmService();
+    protected string Model => _currentIndex == 0 ? role.Model :
+        role.Fallbacks?[_currentIndex - 1].Model
+        ?? throw new InvalidOperationException("Model not set");
+    protected LlmProvider Provider => _currentIndex == 0 ? role.Provider :
+        role.Fallbacks?[_currentIndex - 1].Provider
+        ?? throw new InvalidOperationException("Provider not set");
+    protected LlmInferenceSettings Inference =>
+        (_currentIndex == 0 ? role.Inference : role.Fallbacks?[_currentIndex - 1].Inference)
+        ?? Provider.Inference ?? new();
+
+    public int MaxToolIterations { get; init; } = 5;
+
+    public IList<ITool> Tools { get; init; } = role.Tools ?? [];
+    public List<IStreamingTagHandler> StreamingHandlers { get; init; } = [];
 
     // Per-invocation state (reset in FinalizeAsync)
-    private ConversationContext? _conversation = null;
-    private string? _initialBookmark = null;
-    private string? _message = null;
-    private LlmRequest? _request = null;
+    protected ConversationContext? _conversation = null;
+    protected string? _initialBookmark = null;
+    protected string _message = "";
+    protected LlmRequest? _request = null;
 
-    // Loop detection state
-    private int _consecutiveIdenticalToolCalls = 0;
-    private HashSet<string>? _lastToolCallHashes = null;
+    public string? SystemPrompt { get; set; } = string.IsNullOrWhiteSpace(systemPrompt) ? role.SystemPrompt : systemPrompt;
 
-    private static readonly HashSet<string> ReadOnlyTools = ["view_file", "grep_search", "list_dir", "find_by_name", "view_file_outline", "view_code_item"];
+    public string? Prompt { get; set; } = prompt;
 
-    protected int MaxToolIterations { get; init; } = maxToolIterations;
-
-    // ── Template resolution ──────────────────────────────────────────────────
-
-    protected Task<string> ResolvePromptAsync(string rawPrompt, IStepResult input, PipelineContext context)
+    protected override bool SwitchToNextFallback(IStepResult error, int attempt)
     {
-        var model = new { inputData = input.Value, context };
-        if (rawPrompt.StartsWith('@') && TemplateProvider != null)
+        if (_currentIndex < (role.Fallbacks?.Count ?? 0))
         {
-            var templateName = rawPrompt[1..];
-            return Task.FromResult(TemplateProvider.Render(templateName, model) ?? rawPrompt);
+            _currentIndex++;
+            if (string.IsNullOrWhiteSpace(Model) || Provider == null || LlmService == null)
+            {
+                return false;
+            }
+            if (Logger.IsEnabled(LogLevel.Warning))
+            {
+                Logger.LogWarning("Step {StepName} switching to fallback engine {Index}: {Model} ({Provider})",
+                    Name, _currentIndex, Model, LlmService.Name);
+            }
+
+            if (_conversation != null && _initialBookmark != null)
+            {
+                _conversation.RestoreBookmark(_initialBookmark);
+            }
+            return true;
         }
-        return Task.FromResult(JsonTemplateEngine.Render(rawPrompt, model, strictMode: false) ?? rawPrompt);
+        return false;
     }
 
-    // ── Prompt builders (override to supply prompts) ─────────────────────────
-
     /// <summary>Builds the user message sent to the LLM.</summary>
-    protected abstract Task<string> BuildUserMessageAsync(IStepResult input, PipelineContext context);
+    protected virtual Task<string?> BuildUserMessageAsync(IStepResult input, PipelineContext context) => Task.FromResult(Prompt);
 
     /// <summary>Builds the system message. Return null for no system prompt.</summary>
-    protected virtual Task<string?> BuildSystemMessageAsync(IStepResult input, PipelineContext context)
-        => Task.FromResult<string?>(null);
+    protected virtual Task<string?> BuildSystemMessageAsync(IStepResult input, PipelineContext context) => Task.FromResult(SystemPrompt);
 
-    // ── Core execution ───────────────────────────────────────────────────────
-
-    protected override Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
+    protected override async Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {
         if (_conversation == null)
-            return Task.CompletedTask;
-
-        if (result is ILlmStepResult llmResult)
-            AddConversationToContext(context, _conversation, llmResult);
-
-        if (_initialBookmark != null && _message != null)
         {
-            _conversation.RestoreBookmark(_initialBookmark);
-            _conversation.AddUserMessage(_message);
-
-            if (!result.HasError)
-                _conversation.AddAssistantMessage(((ILlmStepResult)result).AssistantMessage);
-            else
-                _conversation.AddAssistantMessage($"Error: {result.Error?.Message ?? "Unknown error"}");
+            return;
         }
 
+        if (result is ILlmStepResult llmResult)
+        {
+            if (StreamingHandlers?.Count > 0 && !string.IsNullOrEmpty(llmResult.AssistantMessage))
+            {
+                llmResult.AssistantMessage = await ProcessTagsNonStreamingAsync(llmResult.AssistantMessage, context, cancellationToken);
+            }
+        }
+
+        if (_initialBookmark != null && _message != "")
+        {
+            // Always restore the bookmark first to rewind to the clean pre-turn state.
+            // This removes all mid-retry assistant messages from the conversation.
+            _conversation.RestoreBookmark(_initialBookmark);
+
+            if (!result.HasError)
+            {
+                // Success: write the canonical [user / assistant] pair.
+                _conversation.AddUserMessage(_message);
+                if (result is ILlmStepResult llmFinal)
+                {
+                    _conversation.AddAssistantMessage(llmFinal.AssistantMessage);
+                }
+                // If result is not ILlmStepResult (e.g. custom subclass), the user message is
+                // still recorded so the conversation is not left in an inconsistent state.
+            }
+            // On error: bookmark already restored — user message and any error text are NOT recorded.
+        }
+
+        if (result is ILlmStepResult llmRes)
+            AddConversationToContext(context, _conversation, llmRes);
         _conversation = null;
         _initialBookmark = null;
-        _message = null;
+        _message = "";
         _request = null;
-
-        return Task.CompletedTask;
+        _currentIndex = 0; // Reset fallback index for next complete pipeline execution
     }
 
     protected override async Task<IStepResult> ExecuteAsync(
@@ -132,507 +154,104 @@ public abstract class BaseLlmStep(
     {
         if (attempt == 1)
         {
+            // First attempt ever for this step invocation.
             _conversation = GetConversationContext(context);
-            _initialBookmark = _conversation.CreateBookmark();
-            _message = await BuildUserMessageAsync(input, context);
+            // Create a fresh bookmark at the current (clean) position.
+            _initialBookmark = _conversation!.CreateBookmark();
+
+            // Add the user message explicitly here — NOT inside BuildLlmRequestAsync.
+            // This keeps BuildLlmRequestAsync free of conversation side-effects and makes
+            // the mutation visible and reasoned-about at the call site.
+            _message = await BuildUserMessageAsync(input, context) ?? "";
+            _conversation.AddUserMessage(_message);
+
             _request = await BuildLlmRequestAsync(input, context, _conversation!, cancellationToken);
 
-            Logger.LogInformation("LLM step {StepName} starting, model: {Model}, conversation size: {MessageCount} messages",
-                Name, Profile.Model, _conversation.History.Messages.Count);
-            Logger.LogDebug("LLM step {StepName} bookmark created: {BookmarkId}", Name, _initialBookmark);
-            Logger.LogTrace("LLM step {StepName} user message: {Message}", Name, _message);
+            if (Logger.IsEnabled(LogLevel.Information))
+            {
+                Logger.LogInformation("LLM step {StepName} starting, model: {Model}, conversation size: {MessageCount} messages",
+                    Name, Model, _conversation.History.Messages.Count);
+            }
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                Logger.LogDebug("LLM step {StepName} bookmark created: {BookmarkId}", Name, _initialBookmark);
+            }
+            if (Logger.IsEnabled(LogLevel.Trace))
+            {
+                Logger.LogTrace("LLM step {StepName} user message: {Message}", Name, _message);
+            }
         }
         else
         {
+            // Normal retry: the conversation already contains the user message from attempt 1.
+            // Only add the error feedback so the LLM can self-correct.
             var errorFeedback = lastStepResult?.Error?.Message
                 ?? $"Your response is invalid for {OutputType.Name}.\nPlease ensure you return valid value";
 
-            Logger.LogDebug("LLM step {StepName} retry {Attempt}, adding error to conversation: {Error}",
-                Name, attempt, errorFeedback);
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                Logger.LogDebug("LLM step {StepName} retry {Attempt}, adding error feedback to conversation: {Error}",
+                    Name, attempt, errorFeedback);
+            }
             _conversation!.AddUserMessage(errorFeedback);
+
+            // _request.Conversation is a reference to _conversation (same object), so the
+            // LLM service will see the updated history automatically. The with-expression
+            // just makes the intent explicit and future-proofs against record copy scenarios.
+            _request = _request! with { Conversation = _conversation };
         }
 
-        var response = await InvokeLlmWithToolsAsync(_request!, context, 0, cancellationToken);
+        var llmResult = await InvokeLlmWithToolsAsync(_request!, context, 0, cancellationToken);
 
-        Logger.LogDebug("LLM step {StepName} received response, tokens: {Tokens}, finish reason: {Reason}",
-            Name, response.TokensUsed, response.FinishReason);
-        Logger.LogTrace("LLM step {StepName} response content: {Content}", Name, response.Content);
+        if (!llmResult.IsSuccess)
+        {
+            // Any provider-level error (retriable or fatal) must include the exception.
+            // This ensures RetryMiddleware recognizes it as an infrastructure error
+            // and immediately triggers SwitchToNextFallback instead of treating it 
+            // as a prompt parsing error.
+            return CreateErrorResult(llmResult.Error?.Message ?? "Provider error", llmResult.Error);
+        }
 
-        var (result, parseError) = await ParseLlmResponseAsync(response, context);
+        var primaryCandidate = llmResult.Candidates.FirstOrDefault();
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+        {
+            // El reparto prompt/completion hace visible el tamaño real del contexto enviado en
+            // CADA intento (incluido el reintento). Si prompt se clava en el cap del proveedor
+            // y completion ~0, hubo truncado de ventana (ver warning en OpenAILlmService).
+            Logger.LogDebug("LLM step {StepName} received response, tokens: {Tokens} (prompt: {Prompt}, completion: {Completion}), finish reason: {Reason}",
+                Name, llmResult.TokensUsed, llmResult.PromptTokens, llmResult.CompletionTokens, primaryCandidate?.FinishReason);
+        }
+        if (Logger.IsEnabled(LogLevel.Trace))
+        {
+            Logger.LogTrace("LLM step {StepName} response content: {Content}", Name, primaryCandidate?.Content);
+        }
+
+        (var result, var parseError) = await ParseLlmResponseAsync(llmResult, context);
+
+        // Always record the assistant response in the conversation, even when it is empty
+        // or malformed. This guarantees proper [user / assistant / user / assistant] role
+        // alternation so that any subsequent retry does NOT produce two consecutive [user]
+        // messages. Most LLM APIs (Gemini in particular) reject conversations with
+        // consecutive same-role messages and return empty/unexpected responses.
+        // FinalizeAsync will restore the bookmark and rewrite the tail of the conversation
+        // cleanly, so adding here is always safe — it just keeps the mid-retry state valid.
+        _conversation!.AddAssistantMessage(primaryCandidate?.Content ?? string.Empty);
 
         if (result == null || parseError != null)
         {
-            Logger.LogWarning(
-                "LLM response parsing failed (attempt {Attempt}/{Max}): {Error}",
-                attempt, MaxRetries, parseError);
+            if (Logger.IsEnabled(LogLevel.Warning))
+            {
+                Logger.LogWarning(
+                    "LLM response parsing failed (attempt {Attempt}/{Max}): {Error}",
+                    attempt, MaxRetries, parseError);
+            }
 
             return CreateErrorResult(parseError ?? "Parsing returned null result");
         }
 
         return result;
     }
-
-    // ── Tool execution loop ──────────────────────────────────────────────────
-
-    private async Task<LlmResponse> InvokeLlmWithToolsAsync(
-        LlmRequest request,
-        PipelineContext context,
-        int toolIteration,
-        CancellationToken cancellationToken)
-    {
-        if (toolIteration >= MaxToolIterations)
-        {
-            throw new InvalidOperationException(
-                $"Maximum tool iterations ({MaxToolIterations}) exceeded - possible infinite loop");
-        }
-
-        using var llmActivity = Telemetry.Source.StartActivity("LLM.Invoke", ActivityKind.Client);
-        llmActivity?.SetTag(AITaskAgentConstants.TelemetryTags.LlmModel, request.Profile.Model);
-        llmActivity?.SetTag(AITaskAgentConstants.TelemetryTags.LlmProvider, request.Profile.Provider.ToString());
-        llmActivity?.SetTag("llm.iteration", toolIteration);
-        llmActivity?.SetTag("llm.has_tools", request.Tools?.Count > 0);
-
-        Logger.LogDebug("LLM invoke starting (iteration {Iteration}), model: {Model}, tools available: {ToolCount}",
-            toolIteration, request.Profile.Model, request.Tools?.Count ?? 0);
-
-        var llmStopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var response = await InvokeLlmAsync(request, context, Name, cancellationToken);
-        llmStopwatch.Stop();
-
-        llmActivity?.SetTag(AITaskAgentConstants.TelemetryTags.TokensUsed, response.TokensUsed);
-        llmActivity?.SetTag("llm.finish_reason", response.FinishReason);
-
-        Metrics.LlmDuration.Record(llmStopwatch.Elapsed.TotalMilliseconds,
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Profile.Model),
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, Profile.Provider));
-
-        UpdateContextMetrics(context, response);
-
-        if (response.ToolCalls == null || response.ToolCalls.Count == 0)
-        {
-            Logger.LogDebug("LLM returned final response (no tool calls), tokens: {Tokens}", response.TokensUsed);
-            return response;
-        }
-
-        HashSet<string> currentToolHashes = [.. response.ToolCalls.Select(LlmHelpers.NormalizeToolCallKey)];
-
-        if (_lastToolCallHashes != null && currentToolHashes.SetEquals(_lastToolCallHashes))
-        {
-            _consecutiveIdenticalToolCalls++;
-
-            var toolName = response.ToolCalls.FirstOrDefault()?.Name ?? string.Empty;
-            var isReadOnly = ReadOnlyTools.Contains(toolName);
-            var threshold = isReadOnly ? 3 : 1;
-
-            if (_consecutiveIdenticalToolCalls > threshold)
-            {
-                Logger.LogWarning(
-                    "Tool loop detected: {ToolName} called {Count} times consecutively (threshold: {Threshold})",
-                    toolName, _consecutiveIdenticalToolCalls + 1, threshold + 1);
-
-                var fallbackContent = !string.IsNullOrWhiteSpace(response.Content)
-                    ? response.Content
-                    : $"Error: Execution stopped because '{toolName}' was called {_consecutiveIdenticalToolCalls + 1} times consecutively without progress.";
-
-                return new LlmResponse
-                {
-                    Content = fallbackContent,
-                    TokensUsed = response.TokensUsed,
-                    PromptTokens = response.PromptTokens,
-                    CompletionTokens = response.CompletionTokens,
-                    CostUsd = response.CostUsd,
-                    FinishReason = FinishReason.Stop,
-                    Model = response.Model,
-                    NativeResponse = response.NativeResponse,
-                    ToolCalls = null
-                };
-            }
-
-            Logger.LogDebug("Same tool called again: {ToolName} (consecutive: {Count}/{Threshold})",
-                toolName, _consecutiveIdenticalToolCalls + 1, threshold + 1);
-        }
-        else
-        {
-            if (_consecutiveIdenticalToolCalls > 0)
-                Logger.LogDebug("Tool changed, resetting loop counter (was: {Count})", _consecutiveIdenticalToolCalls);
-
-            _consecutiveIdenticalToolCalls = 0;
-            _lastToolCallHashes = currentToolHashes;
-        }
-
-        var uniqueToolCalls = DeduplicateToolCalls(response.ToolCalls);
-
-        Logger.LogInformation("LLM requested {ToolCount} tool calls (iteration {Iteration}), executing {UniqueCount} unique",
-            response.ToolCalls.Count, toolIteration + 1, uniqueToolCalls.Count);
-
-        context.Conversation?.AddAssistantMessageWithToolCalls(response.ToolCalls);
-
-        await ExecuteToolCallsAsync(Name, uniqueToolCalls, response.ToolCalls, _tools, context, cancellationToken);
-
-        return await InvokeLlmWithToolsAsync(request, context, toolIteration + 1, cancellationToken);
-    }
-
-    private List<ToolCall> DeduplicateToolCalls(List<ToolCall> toolCalls)
-    {
-        Dictionary<string, ToolCall> uniqueCalls = [];
-
-        foreach (var toolCall in toolCalls)
-        {
-            var key = LlmHelpers.NormalizeToolCallKey(toolCall);
-            if (!uniqueCalls.ContainsKey(key))
-                uniqueCalls[key] = toolCall;
-        }
-
-        if (uniqueCalls.Count < toolCalls.Count)
-        {
-            Logger.LogWarning("Deduplicated {Removed} duplicate tool calls from batch of {Total}",
-                toolCalls.Count - uniqueCalls.Count, toolCalls.Count);
-        }
-
-        return [.. uniqueCalls.Values];
-    }
-
-    private async Task ExecuteToolCallsAsync(
-        string stepName,
-        List<ToolCall> uniqueToolCalls,
-        List<ToolCall> allToolCalls,
-        List<ITool>? availableTools,
-        PipelineContext context,
-        CancellationToken cancellationToken)
-    {
-        var conversation = context.Conversation;
-
-        if (availableTools == null || availableTools.Count == 0)
-        {
-            Logger.LogWarning("No tools available, cannot execute tool calls");
-            foreach (var toolCall in allToolCalls)
-                conversation?.AddToolMessage(toolCall.Id, "Error: No tools available");
-            return;
-        }
-
-        Dictionary<string, string> resultCache = [];
-
-        foreach (var toolCall in uniqueToolCalls)
-        {
-            var cacheKey = LlmHelpers.NormalizeToolCallKey(toolCall);
-            var tool = availableTools.FirstOrDefault(t => t.Name == toolCall.Name);
-
-            if (tool == null)
-            {
-                Logger.LogError("Tool '{ToolName}' not found in registry", toolCall.Name);
-                resultCache[cacheKey] = $"Error: Tool '{toolCall.Name}' not found";
-
-                await context.SendEventAsync(new ToolCompletedEvent
-                {
-                    StepName = stepName,
-                    ToolName = toolCall.Name,
-                    Success = false,
-                    Duration = TimeSpan.Zero,
-                    ErrorMessage = "Tool not found",
-                    CorrelationId = context.CorrelationId
-                }, cancellationToken);
-                continue;
-            }
-
-            try
-            {
-                var result = await tool.ExecuteAsync(toolCall.Arguments, context, stepName, Logger, cancellationToken);
-                resultCache[cacheKey] = result ?? string.Empty;
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Tool {ToolName} execution failed", toolCall.Name);
-                resultCache[cacheKey] = $"Error executing tool: {ex.Message}";
-            }
-        }
-
-        foreach (var toolCall in allToolCalls)
-        {
-            var cacheKey = LlmHelpers.NormalizeToolCallKey(toolCall);
-            var result = resultCache.GetValueOrDefault(cacheKey, "Error: Result not found");
-            conversation?.AddToolMessage(toolCall.Id, result);
-        }
-    }
-
-    // ── LLM invocation (non-streaming + streaming) ───────────────────────────
-
-    private async Task<LlmResponse> InvokeLlmAsync(
-        LlmRequest request,
-        PipelineContext context,
-        string stepName,
-        CancellationToken cancellationToken)
-    {
-        if (Logger.IsEnabled(LogLevel.Trace))
-        {
-            var prompts = request.Conversation.GetMessagesForRequest(
-                maxTokens: request.SlidingWindowMaxTokens,
-                useSlidingWindow: request.UseSlidingWindow);
-
-            var promptLog = string.Join("\n---\n", prompts.Select(m => $"[{m.Role}]: {m.Content}"));
-            if (!string.IsNullOrEmpty(request.SystemPrompt))
-                promptLog = $"[System]: {request.SystemPrompt}\n---\n{promptLog}";
-
-            Logger.LogTrace("[LLM] Step {StepName} Request:\n{Prompts}", stepName, promptLog);
-        }
-
-        if (!request.UseStreaming)
-        {
-            var response = await LlmService.InvokeAsync(request, cancellationToken);
-
-            if (_streamingHandlers?.Count > 0 && !string.IsNullOrEmpty(response.Content))
-                response = await ProcessTagsNonStreamingAsync(response, context, cancellationToken);
-
-            if (!string.IsNullOrEmpty(response.Content))
-            {
-                Logger.LogTrace("[LLM] Step {StepName} Final Response:\n{Content}\n[Finish: {FinishReason}, Tokens: {Tokens}]",
-                    stepName, response.Content, response.FinishReason, response.TokensUsed);
-
-                var reason = response.FinishReason ?? FinishReason.Other;
-                var rawReason = response.RawFinishReason;
-
-                if (reason == FinishReason.Other)
-                    Logger.LogWarning("Unknown LLM finish reason: {RawReason}", rawReason);
-
-                await context.SendEventAsync(new LlmResponseEvent
-                {
-                    StepName = stepName,
-                    Content = response.Content,
-                    FinishReason = reason,
-                    RawFinishReason = rawReason,
-                    TokensUsed = response.TokensUsed ?? 0,
-                    Model = Profile.Model,
-                    Provider = Profile.Provider,
-                    CorrelationId = context.CorrelationId
-                }, cancellationToken);
-            }
-            else if (response.ToolCalls?.Count > 0)
-            {
-                Logger.LogDebug("[LLM] Step {StepName} Tool Calls:\n{ToolCalls}\n[Finish: {FinishReason}]",
-                    stepName,
-                    string.Join("\n", response.ToolCalls.Select(tc => $"- {tc.Name}({tc.Arguments})")),
-                    response.FinishReason);
-            }
-
-            return response;
-        }
-
-        // ── Streaming mode ───────────────────────────────────────────────────
-        var contentBuilder = new StringBuilder();
-        Dictionary<int, (string? Id, string? Name, StringBuilder Args)> toolCallBuilders = [];
-        FinishReason? finishReason = null;
-        string? rawFinishReason = null;
-        var totalTokens = 0;
-
-        StreamingTagParser? tagParser = _streamingHandlers?.Count > 0
-            ? new StreamingTagParser(_streamingHandlers)
-            : null;
-
-        await foreach (var chunk in LlmService.InvokeStreamingAsync(request, cancellationToken))
-        {
-            if (!string.IsNullOrEmpty(chunk.Delta))
-            {
-                string processedDelta = chunk.Delta;
-
-                if (tagParser != null)
-                    processedDelta = await tagParser.ProcessChunkAsync(chunk.Delta, context, cancellationToken);
-
-                if (!chunk.IsThinking && !string.IsNullOrEmpty(processedDelta))
-                    contentBuilder.Append(processedDelta);
-
-                if (!string.IsNullOrEmpty(processedDelta))
-                {
-                    await context.SendEventAsync(new LlmResponseEvent
-                    {
-                        StepName = stepName,
-                        Content = processedDelta,
-                        FinishReason = FinishReason.Streaming,
-                        IsThinking = chunk.IsThinking,
-                        CorrelationId = context.CorrelationId
-                    }, cancellationToken);
-                }
-            }
-
-            if (chunk.ToolCallUpdates != null)
-            {
-                foreach (var update in chunk.ToolCallUpdates)
-                {
-                    if (!toolCallBuilders.TryGetValue(update.Index, out var builder))
-                    {
-                        builder = (null, null, new StringBuilder());
-                        toolCallBuilders[update.Index] = builder;
-                    }
-
-                    if (update.ToolCallId != null)
-                        toolCallBuilders[update.Index] = (update.ToolCallId, builder.Item2, builder.Item3);
-
-                    if (update.FunctionName != null)
-                        toolCallBuilders[update.Index] = (builder.Item1, update.FunctionName, builder.Item3);
-
-                    if (update.FunctionArgumentsUpdate != null)
-                        builder.Args.Append(update.FunctionArgumentsUpdate);
-                }
-            }
-
-            if (chunk.IsComplete)
-            {
-                finishReason = chunk.FinishReason;
-                rawFinishReason = chunk.RawFinishReason;
-                if (chunk.TokensUsed.HasValue)
-                    totalTokens = chunk.TokensUsed.Value;
-            }
-        }
-
-        var finalReason = finishReason ?? FinishReason.Stop;
-        if (finalReason == FinishReason.Other)
-            Logger.LogWarning("Unknown LLM finish reason in streaming: {RawReason}", rawFinishReason);
-
-        await context.SendEventAsync(new LlmResponseEvent
-        {
-            StepName = stepName,
-            Content = string.Empty,
-            FinishReason = finalReason,
-            RawFinishReason = rawFinishReason,
-            TokensUsed = totalTokens,
-            Model = Profile.Model,
-            Provider = Profile.Provider,
-            CorrelationId = context.CorrelationId
-        }, cancellationToken);
-
-        List<ToolCall> toolCalls = [];
-        foreach (var kvp in toolCallBuilders.OrderBy(k => k.Key))
-        {
-            (var id, var toolName, var args) = kvp.Value;
-            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(toolName))
-            {
-                toolCalls.Add(new ToolCall
-                {
-                    Id = id,
-                    Name = toolName,
-                    Arguments = args?.ToString() ?? string.Empty
-                });
-            }
-        }
-
-        return new LlmResponse
-        {
-            Content = contentBuilder.ToString(),
-            ToolCalls = toolCalls,
-            FinishReason = finishReason ?? FinishReason.Stop,
-            RawFinishReason = rawFinishReason,
-            Model = request.Profile.Model,
-            TokensUsed = totalTokens
-        };
-    }
-
-    private async Task<LlmResponse> ProcessTagsNonStreamingAsync(
-        LlmResponse response,
-        PipelineContext context,
-        CancellationToken cancellationToken)
-    {
-        if (_streamingHandlers == null || _streamingHandlers.Count == 0 || string.IsNullOrEmpty(response.Content))
-            return response;
-
-        var content = response.Content;
-        var handlerDict = _streamingHandlers.ToDictionary(h => h.TagName);
-        var tagRegex = new Regex(@"<(\w+)([^>]*)>(.*?)</\1>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-        var sb = new StringBuilder();
-        var lastIndex = 0;
-
-        foreach (Match match in tagRegex.Matches(content))
-        {
-            sb.Append(content[lastIndex..match.Index]);
-
-            var tagName = match.Groups[1].Value;
-            var attrString = match.Groups[2].Value;
-            var tagContent = match.Groups[3].Value;
-
-            if (handlerDict.TryGetValue(tagName, out var handler))
-            {
-                var attributes = ParseAttributes(attrString);
-                string placeholder;
-                try
-                {
-                    var result = await handler.OnCompleteTagAsync(attributes, tagContent, context, cancellationToken);
-                    placeholder = result ?? string.Empty;
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError(ex, "Error processing tag {TagName}", tagName);
-                    placeholder = $"[Error processing tag {tagName}: {ex.Message}]";
-                }
-                sb.Append(placeholder);
-            }
-            else
-            {
-                sb.Append(match.Value);
-            }
-
-            lastIndex = match.Index + match.Length;
-        }
-
-        if (lastIndex < content.Length)
-            sb.Append(content[lastIndex..]);
-
-        return new LlmResponse
-        {
-            Content = sb.ToString(),
-            TokensUsed = response.TokensUsed,
-            PromptTokens = response.PromptTokens,
-            CompletionTokens = response.CompletionTokens,
-            CostUsd = response.CostUsd,
-            FinishReason = response.FinishReason,
-            RawFinishReason = response.RawFinishReason,
-            ToolCalls = response.ToolCalls,
-            Choices = response.Choices,
-            Model = response.Model,
-            NativeResponse = response.NativeResponse
-        };
-    }
-
-    private static string EnrichSystemPromptWithStreamingTags(string? basePrompt, List<IStreamingTagHandler> handlers)
-    {
-        var sb = new StringBuilder();
-        if (!string.IsNullOrEmpty(basePrompt))
-        {
-            sb.AppendLine(basePrompt);
-        }
-
-        sb.AppendLine();
-        sb.AppendLine("## IN-TEXT STREAMING ACTIONS (NOT TOOLS)");
-        sb.AppendLine("You can execute actions directly by typing XML tags in your response. These are NOT functions or tools. DO NOT invoke them via the tool_call mechanism.");
-        sb.AppendLine("Simply type the XML tag directly in your text response to execute it.");
-        sb.AppendLine();
-        sb.AppendLine("**IMPORTANT BEHAVIOR:**");
-        sb.AppendLine("- The content inside XML tags (e.g., file content) is INVISIBLE to the user - they only see a brief placeholder.");
-        sb.AppendLine("- AFTER using any tag, you MUST provide a clear explanation of what you did, just like you would after a tool call.");
-        sb.AppendLine("- Example: After writing a file, say something like: 'He creado el archivo `demo.py` con el código para imprimir números primos del 1 al 100.'");
-        sb.AppendLine("- Do NOT just write the tag and stop. Always follow up with a user-friendly explanation.");
-        sb.AppendLine();
-        sb.AppendLine("### AVAILABLE TAGS (Type directly in chat)");
-        foreach (var handler in handlers)
-            sb.AppendLine($"- **<{handler.TagName}>**");
-        sb.AppendLine();
-        sb.AppendLine("### DETAILED INSTRUCTIONS");
-        foreach (var handler in handlers)
-        {
-            sb.AppendLine(handler.GetInstructions());
-            sb.AppendLine("---");
-        }
-
-        return sb.ToString();
-    }
-
-    private static Dictionary<string, string> ParseAttributes(string attrString)
-    {
-        var attributes = new Dictionary<string, string>();
-        var attrRegex = new Regex(@"(\w+)=""([^""]*)""");
-        foreach (Match match in attrRegex.Matches(attrString))
-            attributes[match.Groups[1].Value] = match.Groups[2].Value;
-        return attributes;
-    }
-
-    // ── Overridable hooks ────────────────────────────────────────────────────
 
     protected virtual ConversationContext GetConversationContext(PipelineContext context) => context.Conversation;
 
@@ -649,33 +268,44 @@ public abstract class BaseLlmStep(
         ConversationContext conversation,
         CancellationToken cancellationToken)
     {
-        string? systemPrompt = await BuildSystemMessageAsync(input, context);
 
-        if (_tools?.Count > 0)
-            systemPrompt = EnrichSystemPromptWithToolGuidelines(systemPrompt, _tools);
 
-        if (_streamingHandlers?.Count > 0)
-            systemPrompt = EnrichSystemPromptWithStreamingTags(systemPrompt, _streamingHandlers);
+        var systemPrompt = await BuildSystemMessageAsync(input, context) ?? "";
 
-        var toolDefinitions = _tools?.Select(t => t.GetDefinition()).ToList();
+        if (Tools?.Count > 0)
+        {
+            systemPrompt = EnrichSystemPromptWithToolGuidelines(systemPrompt, Tools);
+        }
+
+        if (StreamingHandlers?.Count > 0)
+        {
+            systemPrompt = EnrichSystemPromptWithStreamingTags(systemPrompt, StreamingHandlers);
+        }
+
+        var toolDefinitions = Tools?.Select(t => t.GetDefinition()).ToList();
 
         var request = new LlmRequest
         {
+            // conversation already contains the user message — added explicitly in ExecuteAsync.
+            // Do NOT call AddUserMessage here: BuildLlmRequestAsync must be side-effect-free
+            // with respect to conversation state.
             Conversation = conversation,
             SystemPrompt = systemPrompt,
-            Profile = Profile,
-            Temperature = Profile.Temperature,
-            MaxTokens = Profile.MaxTokens,
-            TopP = Profile.TopP,
-            TopK = Profile.TopK,
-            FrequencyPenalty = Profile.FrequencyPenalty,
-            PresencePenalty = Profile.PresencePenalty,
+            Model = Model,
+            Temperature = Inference?.Temperature ?? Provider?.Inference?.Temperature,
+            MaxTokens = Inference?.MaxTokens ?? Provider?.Inference?.MaxTokens,
             Tools = toolDefinitions,
-            UseStreaming = Profile.UseStreaming
+            UseStreaming = Inference?.UseStreaming ?? Provider?.Inference?.UseStreaming ?? false,
+            BaseUrl = Provider?.BaseUrl,
+            ApiKey = Provider?.ApiKey,
+            // Automatically merges options from both levels
+            Options = MergeOptions(
+                Provider?.Inference?.Options,
+                Inference?.Options)
         };
 
         request = ConfigureLlmRequest(request, context);
-        request = ConfigureJsonResponse(request, _message!);
+        request = ConfigureJsonResponse(request, _message);
 
         return request;
     }
@@ -686,10 +316,23 @@ public abstract class BaseLlmStep(
     /// </summary>
     protected virtual LlmRequest ConfigureLlmRequest(LlmRequest request, PipelineContext context) => request;
 
+    private static JObject MergeOptions(params JObject?[] optionsList)
+    {
+        var result = new JObject();
+        foreach (var options in optionsList)
+        {
+            if (options != null)
+            {
+                result.Merge(options, new JsonMergeSettings { MergeArrayHandling = MergeArrayHandling.Union });
+            }
+        }
+        return result;
+    }
+
     // ── Response parsing ─────────────────────────────────────────────────────
 
     protected virtual Task<(IStepResult? Result, string? Error)> ParseLlmResponseAsync(
-        LlmResponse response,
+        LlmResult response,
         PipelineContext context)
     {
         IStepResult? result = null;
@@ -698,21 +341,31 @@ public abstract class BaseLlmStep(
         try
         {
             object? valueObj;
+            var content = response.Content;
 
             if (ValueType == null)
             {
-                Logger.LogDebug("Response type is string, using content directly");
-                valueObj = response.Content;
+                if (Logger.IsEnabled(LogLevel.Debug))
+                {
+                    Logger.LogDebug("Response type is string, using content directly");
+                }
+                valueObj = content;
             }
             else if (!ValueType.IsClass || ValueType.IsPrimitive || ValueType == typeof(string))
             {
-                Logger.LogDebug("Response type is {Type}, converting from string", ValueType.Name);
-                valueObj = LlmHelpers.ConvertOrThrow(response.Content, ValueType);
+                if (Logger.IsEnabled(LogLevel.Debug))
+                {
+                    Logger.LogDebug("Response type is {Type}, converting from string", ValueType.Name);
+                }
+                valueObj = LlmHelpers.ConvertOrThrow(content, ValueType);
             }
             else
             {
-                var cleanContent = LlmHelpers.CleanJsonResponse(response.Content);
-                Logger.LogDebug("Parsing JSON response as {Type}", ValueType.Name);
+                var cleanContent = LlmHelpers.CleanJsonResponse(content);
+                if (Logger.IsEnabled(LogLevel.Debug))
+                {
+                    Logger.LogDebug("Parsing JSON response as {Type}", ValueType.Name);
+                }
                 valueObj = JsonConvert.DeserializeObject(cleanContent, ValueType);
 
                 if (valueObj == null)
@@ -738,11 +391,12 @@ public abstract class BaseLlmStep(
         return Task.FromResult<(IStepResult?, string?)>((result, errorMsg));
     }
 
-    private static void SetLlmMetrics(IStepResult? result, LlmResponse response)
+    private static void SetLlmMetrics(IStepResult? result, LlmResult response)
     {
         if (result is not null and LlmStepResult llmResult)
         {
             llmResult.AssistantMessage = response.Content;
+            llmResult.Reasoning = response.Reasoning;
             llmResult.Model = response.Model;
             llmResult.TokensUsed = response.TokensUsed;
             llmResult.CostUsd = response.CostUsd;
@@ -750,26 +404,26 @@ public abstract class BaseLlmStep(
         }
     }
 
-    private void UpdateContextMetrics(PipelineContext context, LlmResponse response)
+    private void UpdateContextMetrics(PipelineContext context, LlmResult response)
     {
         Metrics.LlmRequests.Add(1,
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Profile.Model),
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, Profile.Provider));
+            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Model),
+            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, LlmService?.Name));
 
         if (response.TokensUsed.HasValue)
         {
             context.Metadata["TokensUsed"] = response.TokensUsed.Value;
             Metrics.LlmTokens.Add(response.TokensUsed.Value,
-                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Profile.Model),
-                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, Profile.Provider));
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Model),
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, LlmService?.Name));
         }
 
         if (response.CostUsd.HasValue)
         {
             context.Metadata["CostUsd"] = response.CostUsd.Value;
             Metrics.LlmCost.Add((double)response.CostUsd.Value,
-                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Profile.Model),
-                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, Profile.Provider));
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Model),
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, LlmService?.Name));
         }
     }
 
@@ -777,18 +431,21 @@ public abstract class BaseLlmStep(
 
     private LlmRequest ConfigureJsonResponse(LlmRequest request, string userMessage)
     {
+
         if (Schema == null)
         {
-            return request with
-            {
-                Conversation = request.Conversation.AddUserMessage(userMessage)
-            };
+            return request;
         }
 
-        Logger.LogDebug("Configuring JSON response for {TypeName} with profile capability: {Capability}",
-            ValueType.Name, request.Profile.JsonCapability);
+        var jsonCapability = (Provider?.Inference?.JsonSupport ?? false) ? JsonResponseCapability.JsonSchema : JsonResponseCapability.None;
 
-        return request.Profile.JsonCapability switch
+        if (Logger.IsEnabled(LogLevel.Debug))
+        {
+            Logger.LogDebug("Configuring JSON response for {TypeName} with provider capability: {Capability}",
+                ValueType.Name, jsonCapability);
+        }
+
+        return jsonCapability switch
         {
             JsonResponseCapability.JsonSchema => request with
             {
@@ -797,7 +454,6 @@ public abstract class BaseLlmStep(
                     Type = ResponseFormatType.JsonObject,
                     JsonSchema = Schema
                 },
-                Conversation = request.Conversation.AddUserMessage(userMessage)
             },
 
             JsonResponseCapability.JsonObject => request with
@@ -812,20 +468,22 @@ public abstract class BaseLlmStep(
 
             _ => request with
             {
-                Conversation = request.Conversation.AddUserMessage(LlmHelpers.InjectSchemaInUserMessage(userMessage, Schema))
+                SystemPrompt = LlmHelpers.InjectSchemaInSystemPrompt(request.SystemPrompt, Schema)
             }
         };
     }
 
-    private static string EnrichSystemPromptWithToolGuidelines(string? basePrompt, List<ITool> tools)
+    private static string EnrichSystemPromptWithToolGuidelines(string? basePrompt, IList<ITool> tools)
     {
         var guidelines = tools
-            .Where(t => !string.IsNullOrWhiteSpace(t.UsageGuidelines))
-            .Select(t => $"- **{t.Name}**: {t.UsageGuidelines}")
+            //.Where(t => !string.IsNullOrWhiteSpace(t.UsageGuidelines))
+            .Select(t => $"- **{t.Name}**: {t.UsageGuidelines ?? t.Description}")
             .ToList();
 
         if (guidelines.Count == 0)
+        {
             return basePrompt ?? string.Empty;
+        }
 
         var sb = new StringBuilder();
 
@@ -840,7 +498,45 @@ public abstract class BaseLlmStep(
         sb.AppendLine();
 
         foreach (var guideline in guidelines)
+        {
             sb.AppendLine(guideline);
+        }
+
+        return sb.ToString();
+    }
+
+    private static string EnrichSystemPromptWithStreamingTags(string? basePrompt, List<IStreamingTagHandler> handlers)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(basePrompt))
+        {
+            sb.AppendLine(basePrompt);
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("## IN-TEXT STREAMING ACTIONS (NOT TOOLS)");
+        sb.AppendLine("You can execute actions directly by typing XML tags in your response. These are NOT functions or tools. DO NOT invoke them via the tool_call mechanism.");
+        sb.AppendLine("Simply type the XML tag directly in your text response to execute it.");
+        sb.AppendLine();
+        sb.AppendLine("**IMPORTANT BEHAVIOR:**");
+        sb.AppendLine("- The content inside XML tags (e.g., file content) is INVISIBLE to the user - they only see a brief placeholder.");
+        sb.AppendLine("- AFTER using any tag, you MUST provide a clear explanation of what you did, just like you would after a tool call.");
+        sb.AppendLine("- Example: After writing a file, say something like: 'He creado el archivo `demo.py` con el código para imprimir números primos del 1 al 100.'");
+        sb.AppendLine("- Do NOT just write the tag and stop. Always follow up with a user-friendly explanation.");
+        sb.AppendLine();
+        sb.AppendLine("### AVAILABLE TAGS (Type directly in chat)");
+        foreach (var handler in handlers)
+        {
+            sb.AppendLine($"- **<{handler.TagName}>**");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("### DETAILED INSTRUCTIONS");
+        foreach (var handler in handlers)
+        {
+            sb.AppendLine(handler.GetInstructions());
+            sb.AppendLine("---");
+        }
 
         return sb.ToString();
     }
@@ -849,41 +545,24 @@ public abstract class BaseLlmStep(
 
 /// <summary>
 /// Generic typed LLM step. Inherits ALL execution logic from BaseLlmStep.
-/// Only responsibility: compile-time type safety.
-///   - Passes typeof(TIn) / typeof(TOut) to the base constructor.
-///   - Adapts typed delegates to the BuildUserMessageAsync / BuildSystemMessageAsync virtuals.
-///   - Coerces IStepResult inputs to TIn when needed.
 /// </summary>
 public class BaseLlmStep<TIn, TOut>(
-    ILlmService llmService,
     string name,
-    LlmProviderConfig profile,
-    Func<TIn, PipelineContext, Task<string>>? messageBuilder = null,
-    Func<TIn, PipelineContext, Task<string>>? systemMessageBuilder = null,
-    List<ITool>? tools = null,
-    int maxToolIterations = 5,
-    List<IStreamingTagHandler>? streamingHandlers = null,
-    ITemplateProvider? templateProvider = null
-    ) : BaseLlmStep(llmService, name, typeof(TIn), typeof(TOut), profile, tools, maxToolIterations, streamingHandlers, templateProvider),
-      IStep<TIn, TOut>
+    LlmRole role,
+    string prompt,
+    string? systemPrompt = null
+
+    ) : BaseLlmStep(
+        name,
+        role,
+        typeof(TIn),
+        typeof(TOut),
+        prompt,
+        systemPrompt
+    ), IStep<TIn, TOut>
     where TIn : IStepResult
     where TOut : ILlmStepResult
 {
-    // ── Wire typed delegates to the virtual hooks ────────────────────────────
-
-    protected override Task<string> BuildUserMessageAsync(IStepResult input, PipelineContext context)
-    {
-        if (messageBuilder == null)
-            throw new InvalidOperationException(
-                $"Step '{Name}' must provide a messageBuilder delegate or override BuildUserMessageAsync.");
-        return messageBuilder((TIn)input, context);
-    }
-
-    protected override async Task<string?> BuildSystemMessageAsync(IStepResult input, PipelineContext context)
-        => systemMessageBuilder != null ? await systemMessageBuilder((TIn)input, context) : null;
-
-    // ── Input type coercion ──────────────────────────────────────────────────
-
     protected override Task<IStepResult> ExecuteAsync(
         IStepResult input,
         PipelineContext context,
@@ -929,4 +608,5 @@ public class BaseLlmStep<TIn, TOut>(
         var result = await ExecuteAsync(input, context, attempt, lastStepResult, cancellationToken);
         return (TOut)result;
     }
+
 }

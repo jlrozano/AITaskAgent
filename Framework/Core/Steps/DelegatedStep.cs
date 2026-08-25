@@ -11,7 +11,7 @@ namespace AITaskAgent.Core.Steps;
 /// <typeparam name="TOut">Output step result type.</typeparam>
 public class DelegatedStep<TIn, TOut>(
     string name,
-    Func<TIn, PipelineContext, int, TOut?, Task<TOut>> action)
+    Func<DelegatedStep<TIn, TOut>, TIn, PipelineContext, int, TOut?, Task<TOut>> action)
     : TypedStep<TIn, TOut>(name) where TIn : IStepResult where TOut : IStepResult
 {
     protected override async Task<TOut> ExecuteAsync(
@@ -23,7 +23,7 @@ public class DelegatedStep<TIn, TOut>(
     {
         try
         {
-            return await action(input, context, attempt, lastStepResult);
+            return await action(this, input, context, attempt, lastStepResult);
         }
         catch (Exception ex)
         {

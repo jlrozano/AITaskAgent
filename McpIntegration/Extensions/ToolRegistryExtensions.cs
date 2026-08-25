@@ -16,7 +16,7 @@ public static class ToolRegistryExtensions
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Number of tools registered.</returns>
     public static async Task<int> RegisterMcpToolsAsync(
-        this IToolRegistry registry,
+        this ITools registry,
         IMcpToolProvider provider,
         CancellationToken cancellationToken = default)
     {
@@ -46,7 +46,7 @@ public static class ToolRegistryExtensions
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Total number of tools registered.</returns>
     public static async Task<int> RegisterMcpToolsAsync(
-        this IToolRegistry registry,
+        this ITools registry,
         IEnumerable<IMcpToolProvider> providers,
         CancellationToken cancellationToken = default)
     {

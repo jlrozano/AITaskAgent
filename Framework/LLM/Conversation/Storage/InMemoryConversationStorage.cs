@@ -19,7 +19,7 @@ public class InMemoryConversationStorage : IConversationStorage
 
     public Task<ConversationContext?> GetConversationAsync(string conversationId, CancellationToken cancellationToken = default)
     {
-        if (_store.TryGetValue(conversationId, out var conversation))
+        if (_store.TryGetValue(conversationId, out ConversationContext? conversation))
         {
             // Return a clone so the caller has their own copy
             return Task.FromResult<ConversationContext?>(conversation.Clone());

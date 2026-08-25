@@ -23,18 +23,18 @@ public sealed class ViewFileTool : BaseFileTool
             Description = Description,
             ParametersJsonSchema = """
             {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "AbsolutePath": {
-                        "type": "STRING",
-                        "description": "Path to file to view. Must be an absolute path."
+                        "type": "string",
+                        "description": "Path to file to view. Can be absolute or relative to project root. Using the '/workspace/' prefix is supported but not required as it will be handled automatically."
                     },
                     "EndLine": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "Optional. Endline to view, 1-indexed as usual, inclusive. This value must be greater than or equal to StartLine."
                     },
                     "StartLine": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "Optional. Startline to view, 1-indexed as usual, inclusive. This value must be less than or equal to EndLine."
                     }
                 },
@@ -52,7 +52,13 @@ public sealed class ViewFileTool : BaseFileTool
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        var args = ParseArguments<Arguments>(argumentsJson);
+        var (success, args, parseError) = TryParseArguments<Arguments>(
+            argumentsJson,
+            expectedSchemaHint: """{"AbsolutePath": "string (absolute path to file)"}""",
+            logger: logger);
+
+        if (!success) return parseError!;
+
         if (args is null || string.IsNullOrWhiteSpace(args.AbsolutePath))
         {
             return "Error: AbsolutePath is required.";

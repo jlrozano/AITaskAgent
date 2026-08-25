@@ -1,32 +1,77 @@
-namespace AITaskAgent.Resilience;
-
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
+namespace AITaskAgent.Resilience;
+
 /// <summary>
 /// Token bucket rate limiter for API calls.
+/// S-07: Uses SemaphoreSlim signaling instead of spin-wait with Task.Delay(50ms).
 /// </summary>
-public sealed class RateLimiter(
-    int maxTokens = 10,
-    TimeSpan? refillInterval = null,
-    int? tokensPerRefill = null,
-    ILogger<RateLimiter>? logger = null)
+public sealed class RateLimiter : IDisposable
 {
-    private readonly int _maxTokens = maxTokens;
-    private readonly TimeSpan _refillInterval = refillInterval ?? TimeSpan.FromSeconds(1);
-    private readonly int _tokensPerRefill = tokensPerRefill ?? maxTokens;
-    private readonly ILogger<RateLimiter> _logger = logger ?? NullLogger<RateLimiter>.Instance;
+    private readonly int _maxTokens;
+    private readonly TimeSpan _refillInterval;
+    private readonly int _tokensPerRefill;
+    private readonly ILogger<RateLimiter> _logger;
 
-    private int _availableTokens = maxTokens;
-    private DateTime _lastRefill = DateTime.UtcNow;
+    private int _availableTokens;
+    private DateTime _lastRefill;
     private readonly Lock _lock = new();
+    private readonly Timer? _refillTimer;
+
+    // S-07: Signal released on each refill so waiters wake up immediately instead of spinning
+    private readonly SemaphoreSlim _refillSignal = new(0, int.MaxValue);
+
+    public RateLimiter(
+        int maxTokens = 10,
+        TimeSpan? refillInterval = null,
+        int? tokensPerRefill = null,
+        ILogger<RateLimiter>? logger = null)
+    {
+        _maxTokens = maxTokens;
+        _refillInterval = refillInterval ?? TimeSpan.FromSeconds(1);
+        _tokensPerRefill = tokensPerRefill ?? maxTokens;
+        _logger = logger ?? NullLogger<RateLimiter>.Instance;
+        _availableTokens = maxTokens;
+        _lastRefill = DateTime.UtcNow;
+
+        _refillTimer = new Timer(RefillTimerCallback, null, _refillInterval, _refillInterval);
+    }
+
+    private void RefillTimerCallback(object? state)
+    {
+        lock (_lock)
+        {
+            DateTime now = DateTime.UtcNow;
+            TimeSpan elapsed = now - _lastRefill;
+
+            if (elapsed >= _refillInterval)
+            {
+                int refills = (int)(elapsed / _refillInterval);
+                int tokensToAdd = refills * _tokensPerRefill;
+                int oldTokens = _availableTokens;
+
+                _availableTokens = Math.Min(_availableTokens + tokensToAdd, _maxTokens);
+                _lastRefill = now;
+
+                if (tokensToAdd > 0 && _availableTokens > oldTokens)
+                {
+                    _logger.LogTrace("Rate limiter refilled: {OldTokens} -> {NewTokens} (+{Added})",
+                        oldTokens, _availableTokens, _availableTokens - oldTokens);
+
+                    // S-07: Signal all waiting callers that tokens are available
+                    _refillSignal.Release(_availableTokens - oldTokens);
+                }
+            }
+        }
+    }
 
     /// <summary>
     /// Waits until a token is available, then consumes it.
     /// </summary>
     public async Task WaitAsync(CancellationToken cancellationToken = default)
     {
-        var waitStarted = false;
+        bool waitStarted = false;
 
         while (true)
         {
@@ -59,8 +104,15 @@ public sealed class RateLimiter(
                 _logger.LogDebug("Rate limiter exhausted, waiting for token (max: {MaxTokens})", _maxTokens);
             }
 
-            // Wait a bit before checking again
-            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+            // S-07: Wait for refill signal instead of spinning every 50ms
+            try
+            {
+                await _refillSignal.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
         }
     }
 
@@ -88,14 +140,14 @@ public sealed class RateLimiter(
 
     private void RefillTokens()
     {
-        var now = DateTime.UtcNow;
-        var elapsed = now - _lastRefill;
+        DateTime now = DateTime.UtcNow;
+        TimeSpan elapsed = now - _lastRefill;
 
         if (elapsed >= _refillInterval)
         {
-            var refills = (int)(elapsed / _refillInterval);
-            var tokensToAdd = refills * _tokensPerRefill;
-            var oldTokens = _availableTokens;
+            int refills = (int)(elapsed / _refillInterval);
+            int tokensToAdd = refills * _tokensPerRefill;
+            int oldTokens = _availableTokens;
 
             _availableTokens = Math.Min(_availableTokens + tokensToAdd, _maxTokens);
             _lastRefill = now;
@@ -104,6 +156,9 @@ public sealed class RateLimiter(
             {
                 _logger.LogTrace("Rate limiter refilled: {OldTokens} -> {NewTokens} (+{Added})",
                     oldTokens, _availableTokens, _availableTokens - oldTokens);
+
+                // S-07: Signal all waiting callers that tokens are available
+                _refillSignal.Release(_availableTokens - oldTokens);
             }
         }
     }
@@ -118,5 +173,11 @@ public sealed class RateLimiter(
                 return _availableTokens;
             }
         }
+    }
+
+    public void Dispose()
+    {
+        _refillSignal.Dispose();
+        _refillTimer?.Dispose();
     }
 }

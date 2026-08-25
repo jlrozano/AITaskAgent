@@ -8,7 +8,7 @@ public sealed class ConsoleStepTracer : IStepTracer
 {
     public Task OnTraceEventAsync(StepTraceEvent evt)
     {
-        var icon = evt.Status switch
+        string icon = evt.Status switch
         {
             StepStatus.Started => "▶️",
             StepStatus.InProgress => "⏳",
@@ -18,7 +18,11 @@ public sealed class ConsoleStepTracer : IStepTracer
             _ => "ℹ️"
         };
 
-        var message = evt.Message != null ? $": {evt.Message}" : "";
+        string message = evt.Message != null ? $": {evt.Message}" : "";
+        if (evt.Message != null && evt.Message.Contains("Loop exhausted"))
+        {
+            icon = "⚠️";
+        }
         Console.WriteLine($"{icon} [{evt.StepName}] {evt.Status}{message}");
 
         if (evt.StreamingContent != null)

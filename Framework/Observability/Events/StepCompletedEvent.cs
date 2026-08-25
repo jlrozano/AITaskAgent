@@ -1,3 +1,5 @@
+using AITaskAgent.Core.Abstractions;
+
 namespace AITaskAgent.Observability.Events;
 
 /// <summary>
@@ -7,6 +9,8 @@ public sealed record StepCompletedEvent : ProgressEventBase, IStepCompletedEvent
 {
     /// <inheritdoc />
     public override string EventType => AITaskAgent.Core.AITaskAgentConstants.EventTypes.StepCompleted;
+
+    public string? StepPath { get; init; }
 
     /// <summary>Whether the step completed successfully.</summary>
     public bool Success { get; init; }
@@ -21,5 +25,9 @@ public sealed record StepCompletedEvent : ProgressEventBase, IStepCompletedEvent
     /// Additional data added by derived step classes.
     /// Allows LLM steps to include tokens, cost, etc. without changing the event type.
     /// </summary>
-    public Dictionary<string, object>? AdditionalData { get; init; }
+    public Dictionary<string, object?> AdditionalData { get; init; } = [];
+    /// <summary>
+    /// Gets the result of the step, if available.
+    /// </summary>
+    public IStepResult? StepResult { get; init; }
 }

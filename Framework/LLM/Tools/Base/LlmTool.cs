@@ -54,9 +54,9 @@ public abstract class LlmTool : ITool
         ILogger logger,
         CancellationToken cancellationToken = default)
     {
-        var stopwatch = Stopwatch.StartNew();
+        Stopwatch stopwatch = Stopwatch.StartNew();
 
-        using var activity = Telemetry.Source.StartActivity(
+        using Activity? activity = Telemetry.Source.StartActivity(
             $"Tool.{Name}",
             ActivityKind.Internal);
         activity?.SetTag(AITaskAgentConstants.TelemetryTags.ToolName, Name);
@@ -66,14 +66,14 @@ public abstract class LlmTool : ITool
         // Hook: Derived classes add specific tags
         EnrichActivityBefore(activity, argumentsJson, context);
 
-        var startedEvent = new ToolStartedEvent()
+        ToolStartedEvent startedEvent = new()
         {
             StepName = stepName,
             ToolName = Name,
             CorrelationId = context.CorrelationId
         };
         // Hook: Derived classes enrich started event
-        var enrichedStartedEvent = EnrichStartedEvent(startedEvent, argumentsJson, context);
+        ToolStartedEvent enrichedStartedEvent = EnrichStartedEvent(startedEvent, argumentsJson, context);
         await context.SendEventAsync(enrichedStartedEvent, cancellationToken);
 
         logger.LogDebug("Tool {ToolName} executing with arguments length: {Length}",
@@ -108,7 +108,7 @@ public abstract class LlmTool : ITool
         }
         finally
         {
-            var duration = stopwatch.Elapsed;
+            TimeSpan duration = stopwatch.Elapsed;
 
             // Hook: Derived classes add result-specific tags
             EnrichActivityAfter(activity, result, context);
@@ -124,7 +124,7 @@ public abstract class LlmTool : ITool
             Metrics.ToolDuration.Record(duration.TotalMilliseconds,
                 new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.ToolName, Name));
 
-            var baseEvent = new ToolCompletedEvent()
+            ToolCompletedEvent baseEvent = new()
             {
                 StepName = stepName,
                 ToolName = Name,
@@ -133,7 +133,7 @@ public abstract class LlmTool : ITool
                 ErrorMessage = errorMessage,
                 CorrelationId = context.CorrelationId
             };
-            var enrichedEvent = EnrichCompletedEvent(baseEvent, result, context);
+            ToolCompletedEvent enrichedEvent = EnrichCompletedEvent(baseEvent, result, context);
             await context.SendEventAsync(enrichedEvent, cancellationToken);
         }
 

@@ -8,6 +8,8 @@ public sealed record StepStartedEvent : ProgressEventBase
     /// <inheritdoc />
     public override string EventType => AITaskAgent.Core.AITaskAgentConstants.EventTypes.StepStarted;
 
+    public string? StepPath { get; init; }
+
     /// <summary>Current attempt number (1-based).</summary>
     public int AttemptNumber { get; init; } = 1;
 

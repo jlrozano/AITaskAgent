@@ -18,6 +18,8 @@ public sealed class EmptyStep : IStep
 
     public int MaxRetries => 1;
 
+    public IResume? Resume => null;
+
     /// <summary>
     /// Creates an EmptyStep with default name.
     /// </summary>

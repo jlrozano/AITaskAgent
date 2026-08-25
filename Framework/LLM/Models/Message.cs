@@ -21,6 +21,9 @@ public sealed record Message
     /// <summary>Optional tool calls for assistant messages requesting tool execution.</summary>
     public List<ToolCall>? ToolCalls { get; init; }
 
+    /// <summary>Optional metadata for provider-specific extensions (e.g. Gemini files, OpenAI image IDs).</summary>
+    public Dictionary<string, object?> Metadata { get; init; } = [];
+
     /// <summary>
     /// Native provider-specific message object with metadata.
     /// Used for smart conversion: if current provider matches, reuse native object.

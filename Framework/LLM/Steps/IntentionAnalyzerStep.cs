@@ -2,119 +2,75 @@ using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
+using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Results;
-using System.ComponentModel;
-using System.Text;
+using AITaskAgent.Observability.Events;
+using AITaskAgent.Support.Template;
+using Newtonsoft.Json;
 
 namespace AITaskAgent.LLM.Steps;
 
-/// <summary>
-/// Step that analyzes user intention using LLM and classifies it into predefined options.
-/// Uses BaseLlmStep for automatic retry, bookmark, validation, and JSON parsing.
-/// 
-/// TIn should be a StepResult containing a string value (the user's message to analyze).
-/// TEnum is the enum with available intention options, using [Description] for each option.
-/// 
-/// The LLM response is automatically parsed to IntentionInfo&lt;TEnum&gt; by BaseLlmStep.
-/// Newtonsoft.Json handles string-to-enum conversion automatically.
-/// </summary>
-public sealed class IntentionAnalyzerStep<TIn, TEnum>(
-    ILlmService llmService,
-    LlmProviderConfig profile,
-    string? name = null,
-    Func<TIn, PipelineContext, Task<string>>? promptBuilder = null,
-    string? systemPrompt = null
-    ) : BaseLlmStep<TIn, LlmStepResult<Intention<TEnum>>>(
-        llmService,
-        name ?? $"IntentionAnalyzer<{typeof(TEnum).Name}>",
-        profile,
-        promptBuilder ?? DefaultPromptBuilder,
-        (_, _) => Task.FromResult(systemPrompt ?? "You are an expert at understanding user intentions and classifying them accurately."),
-        tools: null)
+
+public class IntentionAnalyzerStep<TIn> : TemplateLlmStep<TIn, LlmIntentionResult>, IRouterOptions
     where TIn : IStepResult
-    where TEnum : struct, Enum
 {
-    /// <summary>
-    /// Default prompt builder that extracts the user message from the input and builds the classification prompt.
-    /// Uses typed access to get the value properly.
-    /// </summary>
-    private static Task<string> DefaultPromptBuilder(TIn input, PipelineContext context)
+    private const string DefaultSystemTemplate = "Analyze and clarify the user's intention based on these options:\n{{ context.options }}";
+    private const string DefaultUserTemplate = "{{ input }}";
+
+    private readonly IEnumerable<IntentionOption> _options;
+
+    public IntentionAnalyzerStep(
+        string name,
+        LlmRole role,
+        IList<IntentionOption> options,
+        string? promptTemplateName = null,
+        string? systemPromptTemplateName = null,
+        ITemplateProvider? templateProvider = null,
+        IList<string>? tools = null)
+        : base(name, role, templateProvider, tools,
+               promptTemplateName ?? DefaultUserTemplate,
+               (role.SystemPrompt ?? "") + "\n\n" + (systemPromptTemplateName ?? DefaultSystemTemplate))
     {
-        // Extract user message from input based on its value type
-        var userMessage = ExtractUserMessage(input);
+        _options = options ?? throw new ArgumentNullException(nameof(options));
 
-        var sb = new StringBuilder();
-
-        sb.AppendLine("Analyze the following user message and classify their intention:");
-        sb.AppendLine();
-        sb.AppendLine($"User Message: \"{userMessage}\"");
-        sb.AppendLine();
-
-        sb.AppendLine("Available Options:");
-        var enumValues = Enum.GetValues<TEnum>();
-        foreach (var value in enumValues)
+        if (!options.Any())
         {
-            var description = GetEnumDescription(value);
-            sb.AppendLine($"- {value}: {description}");
+            throw new ArgumentException("Options for intention analysis cannot be empty.", nameof(options));
         }
 
-        // JSON Schema with field descriptions is injected automatically by BaseLlmStep
+        // Definir la variable con las opciones y sus descripciones para el LLM
 
-        return Task.FromResult(sb.ToString());
+        var optionsText = string.Join("\n", options.Select(o => $"- **{o.Id}**: {o.Description}"));
+        SetVariable("options", optionsText);
     }
 
-    /// <summary>
-    /// Extracts the user message from the input result, handling different input types.
-    /// </summary>
-    private static string ExtractUserMessage(TIn input)
+    IList<string> IRouterOptions.Options => [.. _options.Select(o => o.Id)];
+
+
+    protected override async Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {
-        // Try to get string value from IStepResult<string>
-        if (input is IStepResult<string> stringResult && stringResult.Value != null)
-        {
-            return stringResult.Value;
-        }
+        await base.FinalizeAsync(result, context, cancellationToken);
 
-        // Try to get Value property if it's a string
-        if (input.Value is string strValue)
-        {
-            return strValue;
-        }
 
-        // If Value is another IStepResult, try to extract its string content
-        if (input.Value is IStepResult nestedResult && nestedResult.Value is string nestedStr)
+        if (result?.Value is Intention intention)
         {
-            return nestedStr;
-        }
-
-        // Last resort: if Value exists and is not null, try to get a meaningful string representation
-        if (input.Value != null)
-        {
-            // Check if it has an OptimizedPrompt or Content property
-            var valueType = input.Value.GetType();
-            var optimizedPromptProp = valueType.GetProperty("OptimizedPrompt");
-            if (optimizedPromptProp?.GetValue(input.Value) is string optimized)
+            await context.SendEventAsync(new LlmResponseEvent
             {
-                return optimized;
+                StepName = Name,
+                Content = intention.UserFeedback?.Message ?? "",
+                FinishReason = FinishReason.Stop,
+                IsThinking = false,
+                CorrelationId = context.CorrelationId
+            }, cancellationToken);
+
+            context.Conversation?.History?.RemoveMessage(context.Conversation.History.Messages.Count - 1);
+
+            if (intention.UserFeedback?.NeedMoreInfo ?? false)
+            {
+                context.Conversation?.AddAssistantMessage(JsonConvert.SerializeObject(intention.UserFeedback));
             }
 
-            var contentProp = valueType.GetProperty("Content");
-            if (contentProp?.GetValue(input.Value) is string content)
-            {
-                return content;
-            }
         }
 
-        // If we can't extract a string, return empty
-        // This should ideally not happen if the pipeline is correctly typed
-        return string.Empty;
     }
-
-    private static string GetEnumDescription(TEnum value)
-    {
-        var field = typeof(TEnum).GetField(value.ToString());
-        var attribute = field?.GetCustomAttributes(typeof(DescriptionAttribute), false)
-            .FirstOrDefault() as DescriptionAttribute;
-        return attribute?.Description ?? value.ToString();
-    }
-
 }

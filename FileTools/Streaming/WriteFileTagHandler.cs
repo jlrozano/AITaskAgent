@@ -4,7 +4,6 @@ using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Streaming;
 using AITaskAgent.Observability.Events;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 using System.IO;
 using System.Text;
 
@@ -58,7 +57,18 @@ He creado el archivo `script.py` con un simple script que imprime 'hello'.";
             throw new InvalidOperationException("write_file tag requires 'path' attribute");
         }
 
-        var fullPath = Path.Combine(baseDirectory, relativePath);
+        var fullPath = Path.GetFullPath(Path.Combine(baseDirectory, relativePath));
+        var safeBaseDirectory = Path.GetFullPath(baseDirectory);
+        if (!safeBaseDirectory.EndsWith(Path.DirectorySeparatorChar))
+        {
+            safeBaseDirectory += Path.DirectorySeparatorChar;
+        }
+
+        if (!fullPath.StartsWith(safeBaseDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException($"Invalid path traversal attempt: {relativePath}");
+        }
+
         var directory = Path.GetDirectoryName(fullPath);
 
         if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
@@ -118,7 +128,18 @@ He creado el archivo `script.py` con un simple script que imprime 'hello'.";
             throw new InvalidOperationException("write_file tag requires 'path' attribute");
         }
 
-        var fullPath = Path.Combine(baseDirectory, relativePath);
+        var fullPath = Path.GetFullPath(Path.Combine(baseDirectory, relativePath));
+        var safeBaseDirectory = Path.GetFullPath(baseDirectory);
+        if (!safeBaseDirectory.EndsWith(Path.DirectorySeparatorChar))
+        {
+            safeBaseDirectory += Path.DirectorySeparatorChar;
+        }
+
+        if (!fullPath.StartsWith(safeBaseDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException($"Invalid path traversal attempt: {relativePath}");
+        }
+
         var directory = Path.GetDirectoryName(fullPath);
 
         if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))

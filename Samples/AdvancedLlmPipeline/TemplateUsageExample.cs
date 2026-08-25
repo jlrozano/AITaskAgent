@@ -6,7 +6,7 @@ using AITaskAgent.Support.Template;
 namespace Samples.AdvancedLlmPipeline;
 
 /// <summary>
-/// Example of how to refactor StoryPipelineFactory to use JsonTemplateEngine.
+/// Example of how to refactor StoryPipelineFactory to use TinyTemplateRendered.
 /// This demonstrates token-efficient prompt building for LLM steps.
 /// </summary>
 internal static class TemplateUsageExample
@@ -16,8 +16,6 @@ internal static class TemplateUsageExample
     /// </summary>
     public static string BuildCriticPromptWithTemplate(PipelineContext context)
     {
-        var templateEngine = new JsonTemplateEngine();
-
         // Get results from previous parallel writers
         var results = (context.StepResults["Router/NewStoryPhase/ParallelWriters"] as ParallelResult)?.Value;
 
@@ -30,7 +28,7 @@ Draft 1:
 Draft 2:
 {{Writer2.Content ?? No draft 2}}";
 
-        return JsonTemplateEngine.Render(template, results ?? new Dictionary<string, IStepResult>());
+        return TinyTemplateRendered.Render(template, results ?? new Dictionary<string, IStepResult>());
     }
 
     /// <summary>
@@ -38,8 +36,6 @@ Draft 2:
     /// </summary>
     public static string BuildDatabaseAnalysisPrompt(object dbResults)
     {
-        var templateEngine = new JsonTemplateEngine();
-
         var template = @"Analyze the following customer data and identify trends:
 
 {{Customers:csv}}
@@ -49,7 +45,7 @@ Focus on:
 2. Geographic patterns
 3. Purchase behavior";
 
-        return JsonTemplateEngine.Render(template, dbResults);
+        return TinyTemplateRendered.Render(template, dbResults);
     }
 
     /// <summary>
@@ -57,15 +53,13 @@ Focus on:
     /// </summary>
     public static string BuildConfigurationPrompt(object config)
     {
-        var templateEngine = new JsonTemplateEngine();
-
         var template = @"Review the following system configuration and suggest optimizations:
 
 {{Config:json:indent}}
 
 Consider performance, security, and scalability.";
 
-        return JsonTemplateEngine.Render(template, config);
+        return TinyTemplateRendered.Render(template, config);
     }
 
     /// <summary>
@@ -73,8 +67,6 @@ Consider performance, security, and scalability.";
     /// </summary>
     public static string BuildComplexPrompt(object analysisResult)
     {
-        var templateEngine = new JsonTemplateEngine();
-
         var template = @"Story Analysis Report
 Generated: {{Timestamp:yyyy-MM-dd HH:mm}}
 
@@ -93,7 +85,7 @@ Recommendations:
 Previous Versions:
 {{PreviousVersions:csv}}";
 
-        return JsonTemplateEngine.Render(template, analysisResult);
+        return TinyTemplateRendered.Render(template, analysisResult);
     }
 
     /// <summary>
@@ -115,8 +107,6 @@ Previous Versions:
     /// </summary>
     public static void DemonstrateTokenSavings()
     {
-        var templateEngine = new JsonTemplateEngine();
-
         var data = new DatabaseQueryResult(
             Customers: [
                 new("John Doe", 30, "NYC", 1250.50m),
@@ -126,14 +116,14 @@ Previous Versions:
         );
 
         // CSV format (token-efficient)
-        var csvPrompt = JsonTemplateEngine.Render("{{Customers:csv}}", data);
+        var csvPrompt = TinyTemplateRendered.Render("{{Customers:csv}}", data);
         Console.WriteLine("CSV Format (Token-Efficient):");
         Console.WriteLine(csvPrompt);
         Console.WriteLine($"Approximate tokens: ~{EstimateTokens(csvPrompt)}");
         Console.WriteLine();
 
         // JSON format (preserves structure)
-        var jsonPrompt = JsonTemplateEngine.Render("{{Customers:json}}", data);
+        var jsonPrompt = TinyTemplateRendered.Render("{{Customers:json}}", data);
         Console.WriteLine("JSON Format:");
         Console.WriteLine(jsonPrompt);
         Console.WriteLine($"Approximate tokens: ~{EstimateTokens(jsonPrompt)}");

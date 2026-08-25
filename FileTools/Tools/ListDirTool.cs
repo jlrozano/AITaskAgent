@@ -21,11 +21,11 @@ public sealed class ListDirTool : BaseFileTool
             Description = Description,
             ParametersJsonSchema = """
             {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "DirectoryPath": {
-                        "type": "STRING",
-                        "description": "Path to list contents of, should be absolute path to a directory"
+                        "type": "string",
+                        "description": "Path to list contents of. Can be absolute or relative to project root. The '/workspace/' prefix is handled automatically."
                     }
                 },
                 "required": []

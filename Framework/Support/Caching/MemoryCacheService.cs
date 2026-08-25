@@ -3,11 +3,19 @@ using Microsoft.Extensions.Caching.Memory;
 namespace AITaskAgent.Support.Caching;
 
 /// <summary>
-/// In-memory cache service implementation.
+/// In-memory cache service implementation, independent of DI.
 /// </summary>
-public sealed class MemoryCacheService(IMemoryCache memoryCache) : ICacheService
+public sealed class MemoryCacheService : ICacheService
 {
-    private readonly IMemoryCache _cache = memoryCache ?? throw new ArgumentNullException(nameof(memoryCache));
+    private readonly IMemoryCache _cache;
+
+    /// <summary>
+    /// Creates a new MemoryCacheService with its own internal MemoryCache instance.
+    /// </summary>
+    public MemoryCacheService()
+    {
+        _cache = new MemoryCache(new MemoryCacheOptions());
+    }
 
     public T? Get<T>(string key)
     {
@@ -19,7 +27,7 @@ public sealed class MemoryCacheService(IMemoryCache memoryCache) : ICacheService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
-        var options = new MemoryCacheEntryOptions();
+        MemoryCacheEntryOptions options = new();
         if (expiration.HasValue)
         {
             options.AbsoluteExpirationRelativeToNow = expiration.Value;
@@ -55,7 +63,7 @@ public sealed class MemoryCacheService(IMemoryCache memoryCache) : ICacheService
             return cached!;
         }
 
-        var value = await factory();
+        T? value = await factory();
         Set(key, value, expiration);
         return value;
     }

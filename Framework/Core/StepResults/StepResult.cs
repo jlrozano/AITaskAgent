@@ -7,21 +7,33 @@ namespace AITaskAgent.Core.StepResults;
 /// <summary>
 /// Base class for step results with automatic parameter extraction.
 /// </summary>
-public abstract class StepResult(IStep step, object? value = null) : IStepResult
+public abstract class StepResult : IStepResult
 {
 
-    internal object? _value = value;
-    internal List<IStep> _nextSteps = [];
+    private object? _value;
+    private List<IStep> _nextSteps = [];
+
+    public StepResult(IStep step, object? value = null)
+    {
+        ArgumentNullException.ThrowIfNull(step, nameof(step));
+        _value = value;
+        StepName = step.Name;
+        StepType = step.GetType().Name;
+    }
     /// <summary>Gets the result value (implementation for IStepResult).</summary>
     public object? Value { get => _value; internal protected set => _value = value; }
-    public IStep Step => step;
 
+    public string StepName { get; }
 
+    public string StepType { get; }
     /// <summary>Gets whether this is an error result.</summary>
     public bool HasError => Error != null;
 
     /// <summary>Gets error information if IsError is true.</summary>
     public IStepError? Error { get; set; }
+
+    /// <summary>Gets or sets information related to suspension.</summary>
+    public object? SuspendInfo { get; set; }
 
 
     /// <summary>Validates the result content. Override for custom validation.</summary>
@@ -43,9 +55,9 @@ public abstract class StepResult(IStep step, object? value = null) : IStepResult
     public virtual Dictionary<string, object?> GetParameters()
     {
         Dictionary<string, object?> parameters = [];
-        var properties = GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        PropertyInfo[] properties = GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
-        foreach (var prop in properties)
+        foreach (PropertyInfo prop in properties)
         {
             // Skip Value and IsError
             if (prop.Name is nameof(IStepResult.Value) or nameof(HasError))
@@ -53,13 +65,13 @@ public abstract class StepResult(IStep step, object? value = null) : IStepResult
                 continue;
             }
 
-            var value = prop.GetValue(this);
+            object? value = prop.GetValue(this);
 
             // Add PascalCase
             parameters[prop.Name] = value;
 
             // Add camelCase
-            var camelCase = char.ToLowerInvariant(prop.Name[0]) + prop.Name[1..];
+            string camelCase = char.ToLowerInvariant(prop.Name[0]) + prop.Name[1..];
             parameters[camelCase] = value;
         }
 
@@ -73,7 +85,7 @@ public abstract class StepResult(IStep step, object? value = null) : IStepResult
 public class StepResult<T>(IStep step, T? value = default) : StepResult(step, value), IStepResult<T>
 {
     /// <summary>Gets the strongly-typed result value.</summary>
-    new public T? Value { get => (T?)_value; internal protected set => _value = value; }
+    new public T? Value { get => (T?)base.Value; internal protected set => base.Value = value; }
 
 
 }

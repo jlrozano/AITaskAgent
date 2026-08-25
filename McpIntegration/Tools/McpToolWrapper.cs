@@ -1,12 +1,13 @@
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
 using AITaskAgent.LLM.Tools.Abstractions;
+using AITaskAgent.Observability.Events;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using System.Text.Json;
-using AITaskAgent.Observability.Events;
+using Newtonsoft.Json.Linq;
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace McpIntegration.Tools;
 
@@ -51,20 +52,36 @@ public sealed class McpToolWrapper(
 
         var stopwatch = Stopwatch.StartNew();
 
-        // Emit ToolStarted event
+        // Emit ToolStarted event. Surface the call arguments under "parameters"
+        // so the orchestrator's EventMapper can forward them to the UI (it reads
+        // AdditionalData["parameters"]). Empty/invalid argument payloads are omitted.
+        var startedData = new Dictionary<string, object> { { "McpServer", _serverName } };
+        if (TryParseJson(argumentsJson) is { } parameters)
+        {
+            startedData["parameters"] = parameters;
+        }
         await context.SendEventAsync(new ToolStartedEvent
         {
             StepName = stepName,
             CorrelationId = context.CorrelationId,
             Timestamp = DateTimeOffset.UtcNow,
             ToolName = Name,
-            AdditionalData = new() { { "McpServer", _serverName } }
+            AdditionalData = startedData
         }, cancellationToken);
 
         try
         {
             // Parse arguments from JSON
             var arguments = ParseArguments(argumentsJson);
+
+            // Restricción de seguridad: Forzar al MCP de BdpCodebase a usar únicamente el proyecto C-Asisa-BDP
+            if (_serverName == "BdpCodebase")
+            {
+                if (arguments.ContainsKey("project"))
+                {
+                    arguments["project"] = JsonSerializer.SerializeToElement("C-Asisa-BDP");
+                }
+            }
 
             // Call MCP tool
             var result = await _client.CallToolAsync(
@@ -78,13 +95,48 @@ public sealed class McpToolWrapper(
             // Extract and return text content
             var textResult = ExtractTextResult(result);
 
+            // Filtrado de seguridad: Ocultar otros proyectos globales en la respuesta de list_projects
+            if (_serverName == "BdpCodebase" && Name == "list_projects")
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(textResult);
+                    if (doc.RootElement.TryGetProperty("projects", out var projectsProp) && projectsProp.ValueKind == JsonValueKind.Array)
+                    {
+                        var filteredProjects = projectsProp.EnumerateArray()
+                            .Where(p => p.TryGetProperty("name", out var nameProp) && nameProp.GetString() == "C-Asisa-BDP")
+                            .ToList();
+                        
+                        var filteredDoc = new { projects = filteredProjects };
+                        textResult = JsonSerializer.Serialize(filteredDoc);
+                    }
+                }
+                catch
+                {
+                    // Mantener el texto original en caso de error de parseo
+                }
+            }
+
             stopwatch.Stop();
 
             logger.LogDebug(
                 "MCP tool {ToolName} completed successfully. Result length: {Length}",
                 Name, textResult.Length);
 
-            // Emit ToolCompleted event (Success)
+            // Emit ToolCompleted event (Success). Surface the tool's textual
+            // output under "result" so the orchestrator's EventMapper (which reads
+            // AdditionalData["result"]) can forward it to the UI. Parse it as JSON
+            // when possible so it renders as structured data; otherwise keep the
+            // raw text. Empty output is omitted.
+            var completedData = new Dictionary<string, object> { { "McpServer", _serverName } };
+            if (TryParseJson(textResult) is { } resultJson)
+            {
+                completedData["result"] = resultJson;
+            }
+            else if (!string.IsNullOrEmpty(textResult))
+            {
+                completedData["result"] = textResult;
+            }
             await context.SendEventAsync(new ToolCompletedEvent
             {
                 StepName = stepName,
@@ -93,7 +145,7 @@ public sealed class McpToolWrapper(
                 ToolName = Name,
                 Success = true,
                 Duration = stopwatch.Elapsed,
-                AdditionalData = new() { { "McpServer", _serverName } }
+                AdditionalData = completedData
             }, cancellationToken);
 
             return textResult;
@@ -120,6 +172,28 @@ public sealed class McpToolWrapper(
             }, cancellationToken);
 
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Parses a JSON string into a Newtonsoft <see cref="JToken"/> so it can be
+    /// embedded into a progress event's AdditionalData and serialized as
+    /// structured JSON by the SSE writer. Returns null for empty or non-JSON text.
+    /// </summary>
+    private static JToken? TryParseJson(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JToken.Parse(text);
+        }
+        catch (Newtonsoft.Json.JsonReaderException)
+        {
+            return null;
         }
     }
 

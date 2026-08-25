@@ -1,3 +1,5 @@
+using Newtonsoft.Json;
+
 namespace AITaskAgent.LLM.Models;
 
 /// <summary>
@@ -15,6 +17,7 @@ public sealed record ToolCall
     public required string Arguments { get; init; }
 
     /// <summary>Native provider-specific tool call object with metadata.</summary>
+    [JsonIgnore]
     public NativeObject? Native { get; init; }
 }
 

@@ -20,12 +20,9 @@ public static class ServiceProviderPipelineMiddlewareExtensions
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
 
-        var middleware = serviceProvider.GetService<TMiddleware>();
-        if (middleware is null)
-        {
-            // Create instance with constructor injection if not registered in DI
-            middleware = ActivatorUtilities.CreateInstance<TMiddleware>(serviceProvider);
-        }
+        TMiddleware? middleware = serviceProvider.GetService<TMiddleware>();
+        // Create instance with constructor injection if not registered in DI
+        middleware ??= ActivatorUtilities.CreateInstance<TMiddleware>(serviceProvider);
 
         PipelineMiddlewareRegistry.Register(middleware);
         return serviceProvider;
@@ -45,7 +42,7 @@ public static class ServiceProviderPipelineMiddlewareExtensions
         ArgumentNullException.ThrowIfNull(serviceProvider);
         ArgumentNullException.ThrowIfNull(middlewareTypes);
 
-        foreach (var type in middlewareTypes)
+        foreach (Type type in middlewareTypes)
         {
             if (!typeof(IPipelineMiddleware).IsAssignableFrom(type))
             {

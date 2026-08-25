@@ -21,12 +21,12 @@ internal sealed class ObservabilityMiddleware : IPipelineMiddleware
         Func<CancellationToken, Task<IStepResult>> next,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        Stopwatch stopwatch = Stopwatch.StartNew();
 
         // Check if step supports enrichment
-        var enrichable = step as IEnrichableStep;
+        IEnrichable? enrichable = step as IEnrichable;
 
-        using var activity = Telemetry.Source.StartActivity(
+        using Activity? activity = Telemetry.Source.StartActivity(
             $"Step.{step.Name}",
             ActivityKind.Internal);
         activity?.SetTag(AITaskAgentConstants.TelemetryTags.StepName, step.Name);
@@ -36,13 +36,24 @@ internal sealed class ObservabilityMiddleware : IPipelineMiddleware
         // ENRICHMENT: Allow step to add custom tags before execution
         enrichable?.EnrichActivityBefore(activity, input, context);
 
+        // Get attempt number from context if available (set by RetryMiddleware)
+        var attemptNumber = 1;
+        if (context.Metadata.TryGetValue("__current_attempt__", out var attemptObj))
+        {
+            attemptNumber = attemptObj is int attempt ? attempt : 1;
+            context.Metadata.TryRemove("__current_attempt__", out var _);
+        }
+
         // Create and enrich started event
-        var startedEvent = new StepStartedEvent
+        StepStartedEvent startedEvent = new()
         {
             StepName = step.Name,
-            CorrelationId = context.CorrelationId
+            StepPath = context.CurrentStepPath,
+            CorrelationId = context.CorrelationId,
+            AttemptNumber = attemptNumber,
+            SchemaVersion = "1.0"
         };
-        var enrichedStartedEvent = enrichable?.EnrichStartedEvent(startedEvent, input, context) ?? startedEvent;
+        StepStartedEvent enrichedStartedEvent = enrichable?.EnrichStartedEvent(startedEvent, input, context) ?? startedEvent;
         await context.SendEventAsync(enrichedStartedEvent, cancellationToken);
 
         IStepResult result;
@@ -52,7 +63,7 @@ internal sealed class ObservabilityMiddleware : IPipelineMiddleware
             result = await next(cancellationToken);
 
             stopwatch.Stop();
-            var duration = stopwatch.Elapsed;
+            TimeSpan duration = stopwatch.Elapsed;
 
             // Update activity with result
             activity?.SetTag(AITaskAgentConstants.TelemetryTags.StepDurationMs, duration.TotalMilliseconds);
@@ -76,17 +87,20 @@ internal sealed class ObservabilityMiddleware : IPipelineMiddleware
                     new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.StepName, step.Name));
             }
 
-            var completedEvent = new StepCompletedEvent()
+            StepCompletedEvent completedEvent = new()
             {
                 StepName = step.Name,
+                StepPath = context.CurrentStepPath,
                 Success = !result.HasError,
                 Duration = duration,
                 ErrorMessage = result.HasError ? result.Error?.Message : null,
-                CorrelationId = context.CorrelationId
+                CorrelationId = context.CorrelationId,
+                StepResult = result,
+                SchemaVersion = "1.0"
             };
 
             // ENRICHMENT: Allow step to add custom data to event
-            var enrichedCompletedEvent = enrichable?.EnrichCompletedEvent(completedEvent, result, context) ?? completedEvent;
+            IStepCompletedEvent enrichedCompletedEvent = enrichable?.EnrichCompletedEvent(completedEvent, result, context) ?? completedEvent;
             await context.SendEventAsync(enrichedCompletedEvent, cancellationToken);
 
             return result;
@@ -94,7 +108,7 @@ internal sealed class ObservabilityMiddleware : IPipelineMiddleware
         catch (Exception ex)
         {
             stopwatch.Stop();
-            var duration = stopwatch.Elapsed;
+            TimeSpan duration = stopwatch.Elapsed;
 
             activity?.SetTag(AITaskAgentConstants.TelemetryTags.StepDurationMs, duration.TotalMilliseconds);
             activity?.SetTag(AITaskAgentConstants.TelemetryTags.StepSuccess, false);
@@ -115,10 +129,13 @@ internal sealed class ObservabilityMiddleware : IPipelineMiddleware
             await context.SendEventAsync(new StepCompletedEvent
             {
                 StepName = step.Name,
+                StepPath = context.CurrentStepPath,
                 Success = false,
                 Duration = duration,
                 ErrorMessage = ex.Message,
-                CorrelationId = context.CorrelationId
+                CorrelationId = context.CorrelationId,
+                StepResult = null,
+                SchemaVersion = "1.0"
             }, cancellationToken);
 
             throw;

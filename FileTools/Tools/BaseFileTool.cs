@@ -1,7 +1,6 @@
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Tools.Base;
 using AITaskAgent.Observability.Events;
-using FileTools;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
@@ -284,20 +283,19 @@ public abstract partial class BaseFileTool : LlmTool
         var fullPath = Path.GetFullPath(path);
         var rootPath = Path.GetFullPath(FileToolsConfiguration.RootDirectory);
 
-        // Normalize both paths to end with directory separator for consistent comparison
-        if (!fullPath.EndsWith(Path.DirectorySeparatorChar))
-        {
-            fullPath += Path.DirectorySeparatorChar;
-        }
+        // Normalize both paths to use consistent separator and end with it
+        var sep = Path.DirectorySeparatorChar.ToString();
+        var altSep = Path.AltDirectorySeparatorChar.ToString();
 
-        if (!rootPath.EndsWith(Path.DirectorySeparatorChar))
-        {
-            rootPath += Path.DirectorySeparatorChar;
-        }
+        var normalizedFullPath = fullPath.Replace(altSep, sep);
+        var normalizedRootPath = rootPath.Replace(altSep, sep);
+
+        if (!normalizedFullPath.EndsWith(sep)) normalizedFullPath += sep;
+        if (!normalizedRootPath.EndsWith(sep)) normalizedRootPath += sep;
 
         // Check if fullPath is the same as rootPath OR starts with rootPath
-        if (!fullPath.Equals(rootPath, StringComparison.OrdinalIgnoreCase) &&
-            !fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase))
+        if (!normalizedFullPath.Equals(normalizedRootPath, StringComparison.OrdinalIgnoreCase) &&
+            !normalizedFullPath.StartsWith(normalizedRootPath, StringComparison.OrdinalIgnoreCase))
         {
             throw new UnauthorizedAccessException($"Access denied: Path '{path}' is outside the authorized root directory '{FileToolsConfiguration.RootDirectory}'.");
         }
@@ -312,7 +310,7 @@ public abstract partial class BaseFileTool : LlmTool
     protected static string ResolvePath(string? path)
     {
         var root = string.IsNullOrWhiteSpace(FileToolsConfiguration.RootDirectory)
-            ? AppContext.BaseDirectory
+            ? Directory.GetCurrentDirectory()
             : FileToolsConfiguration.RootDirectory;
 
         if (string.IsNullOrWhiteSpace(path))
@@ -320,14 +318,33 @@ public abstract partial class BaseFileTool : LlmTool
             return root;
         }
 
-        if (Path.IsPathRooted(path))
+        // Intelligent prefix handling:
+        // Only strip '/workspace/' if a directory named 'workspace' doesn't actually exist in the root.
+        var normalizedPath = path;
+        if (path.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("\\workspace\\", StringComparison.OrdinalIgnoreCase))
         {
-            // It's absolute, just return it (Validation will check it later)
-            return path;
+            if (!Directory.Exists(Path.Combine(root, "workspace")))
+            {
+                normalizedPath = path.Substring(11); // Strips the 11 characters of "/workspace/" or "\workspace\"
+            }
+        }
+
+        if (Path.IsPathRooted(normalizedPath))
+        {
+            // If it starts with / or \ but NOT a drive letter (like C:), treat it as relative to root
+            if (normalizedPath.StartsWith("/") || normalizedPath.StartsWith("\\"))
+            {
+                var relativePath = normalizedPath.TrimStart('/', '\\');
+                return Path.GetFullPath(Path.Combine(root, relativePath));
+            }
+
+            // It's a real absolute path (e.g. C:\...) or similar
+            return normalizedPath;
         }
 
         // It's relative, combine with root
-        return Path.GetFullPath(Path.Combine(root, path));
+        return Path.GetFullPath(Path.Combine(root, normalizedPath));
     }
 
     // We don't implement ParametersSchema here because derived classes (like ListDirTool)

@@ -64,12 +64,12 @@ eventChannel.Subscribe(async (evt) => {
 
 ## Tipos de Eventos
 
-- `PipelineStartedEvent` / `PipelineCompletedEvent`
-- `StepStartedEvent` / `StepCompletedEvent`
-- `LlmResponseEvent` - Chunks de respuesta LLM
-- `ToolExecutionEvent` - Ejecución de herramientas
-- `StepProgressEvent` - Progreso custom
-
+- `PipelineStartedEvent` / `PipelineCompletedEvent` - Ciclo de vida del pipeline completo
+- `StepStartedEvent` / `StepCompletedEvent` - Ciclo de vida de cada paso del pipeline
+- `LlmResponseEvent` - Chunks de respuesta de texto/pensamiento del LLM
+- `ToolStartedEvent` - Inicio de la ejecución de una herramienta (MCP u otra)
+- `ToolCompletedEvent` - Fin de la ejecución de una herramienta (con éxito/error y duración)
+- `StepProgressEvent` - Progreso customizado emitido por pasos individuales
 ## Replay de Sesiones
 
 Filtra logs por `SourceContext = "EventChannel"` para reproducir exactamente lo que vio el usuario:

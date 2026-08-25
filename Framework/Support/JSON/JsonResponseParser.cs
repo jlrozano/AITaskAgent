@@ -32,7 +32,7 @@ public sealed partial class JsonResponseParser
     public T? Parse<T>(string response) where T : class
     {
         // Strategy 1: Direct parse
-        var result = TryDirectParse<T>(response);
+        T? result = TryDirectParse<T>(response);
         if (result != null)
         {
             return result;
@@ -79,14 +79,14 @@ public sealed partial class JsonResponseParser
     private T? TryExtractFromCodeBlock<T>(string response) where T : class
     {
         // Match ```json ... ``` or ``` ... ```
-        var match = MarkDownCodeBlockRegEx().Match(response);
+        Match match = MarkDownCodeBlockRegEx().Match(response);
 
         if (!match.Success)
         {
             return null;
         }
 
-        var json = match.Groups[1].Value.Trim();
+        string json = match.Groups[1].Value.Trim();
 
         try
         {
@@ -102,7 +102,7 @@ public sealed partial class JsonResponseParser
     private T? TryExtractJsonFromText<T>(string response) where T : class
     {
         // Try to find JSON object
-        var objectMatch = JsonObjectRegEx().Match(response);
+        Match objectMatch = JsonObjectRegEx().Match(response);
 
         if (objectMatch.Success)
         {
@@ -114,7 +114,7 @@ public sealed partial class JsonResponseParser
         }
 
         // Try to find JSON array
-        var arrayMatch = JsonArrayRegEx().Match(response);
+        Match arrayMatch = JsonArrayRegEx().Match(response);
 
         if (arrayMatch.Success)
         {
@@ -131,19 +131,19 @@ public sealed partial class JsonResponseParser
     private T? TryCleanAndParse<T>(string response) where T : class
     {
         // Remove common issues
-        var cleaned = response
+        string cleaned = response
             .Replace("\r\n", "\n")
             .Replace("\r", "\n")
             .Trim();
 
         // Remove leading/trailing non-JSON text
-        var startIndex = cleaned.AsSpan().IndexOfAny(jsonStartValues);
+        int startIndex = cleaned.AsSpan().IndexOfAny(jsonStartValues);
         if (startIndex > 0)
         {
             cleaned = cleaned[startIndex..];
         }
 
-        var endIndex = cleaned.AsSpan().LastIndexOfAny(jsonEndValues);
+        int endIndex = cleaned.AsSpan().LastIndexOfAny(jsonEndValues);
         if (endIndex >= 0 && endIndex < cleaned.Length - 1)
         {
             cleaned = cleaned[..(endIndex + 1)];

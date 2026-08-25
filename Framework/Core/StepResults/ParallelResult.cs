@@ -34,7 +34,7 @@ public sealed class ParallelResult(IStep step) : StepResult(step), IStepResult<I
     /// Gets a result by step name.
     /// </summary>
     public IStepResult? GetResult(string stepName)
-        => _results.TryGetValue(stepName, out var result) ? result : null;
+        => _results.TryGetValue(stepName, out IStepResult? result) ? result : null;
 
     /// <summary>
     /// Gets a typed result by step name.

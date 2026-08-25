@@ -38,7 +38,7 @@ public static class PipelineMiddlewareRegistry
         ArgumentNullException.ThrowIfNull(middlewares);
         lock (_lock)
         {
-            foreach (var m in middlewares)
+            foreach (IPipelineMiddleware m in middlewares)
             {
                 if (!_middlewares.Contains(m))
                 {

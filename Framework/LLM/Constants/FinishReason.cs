@@ -38,7 +38,9 @@ public static class FinishReasonExtensions
     public static (FinishReason Reason, string? Raw) Parse(string? value)
     {
         if (string.IsNullOrEmpty(value))
+        {
             return (FinishReason.Streaming, null);
+        }
 
         return value.ToLowerInvariant() switch
         {

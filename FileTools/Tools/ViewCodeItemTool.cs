@@ -1,13 +1,9 @@
-using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
-using AITaskAgent.LLM.Tools.Abstractions;
-using AITaskAgent.LLM.Tools.Base;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
 
 namespace AITaskAgent.FileTools.Tools;
 
@@ -28,15 +24,15 @@ public sealed class ViewCodeItemTool : BaseFileTool
         Description = Description,
         ParametersJsonSchema = """
         {
-            "type": "OBJECT",
+            "type": "object",
             "properties": {
                 "File": {
-                    "type": "STRING",
-                    "description": "Absolute path to the C# source file"
+                    "type": "string",
+                    "description": "Path to the C# source file. Can be absolute or relative to project root. The '/workspace/' prefix is handled automatically."
                 },
                 "NodePaths": {
-                    "type": "ARRAY",
-                    "items": { "type": "STRING" },
+                    "type": "array",
+                    "items": { "type": "string" },
                     "description": "List of code item paths to view, e.g., ['ClassName', 'ClassName.MethodName', 'ClassName.PropertyName']. Use view_file_outline first to discover available paths."
                 }
             },
@@ -78,6 +74,7 @@ public sealed class ViewCodeItemTool : BaseFileTool
 
         // Resolve path in case it's relative
         var resolvedFile = ResolvePath(args.File);
+        ValidatePath(resolvedFile);
 
         await NotifyProgressAsync($"🧩 Reading code item '{string.Join(", ", args.NodePaths)}' in file '{resolvedFile}'", context, cancellationToken);
 

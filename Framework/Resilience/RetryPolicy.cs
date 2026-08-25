@@ -42,8 +42,8 @@ public sealed class RetryPolicy
         ILogger? logger = null,
         CancellationToken cancellationToken = default)
     {
-        var attempt = 0;
-        var delay = InitialDelay;
+        int attempt = 0;
+        TimeSpan delay = InitialDelay;
         Exception? lastException = null;
 
         while (attempt < MaxAttempts)
@@ -71,7 +71,7 @@ public sealed class RetryPolicy
                 // Add jitter to prevent thundering herd
                 if (UseJitter)
                 {
-                    var jitter = (Random.Shared.NextDouble() * 0.3) + 0.85; // 85-115%
+                    double jitter = (Random.Shared.NextDouble() * 0.3) + 0.85; // 85-115%
                     delay = TimeSpan.FromMilliseconds(delay.TotalMilliseconds * jitter);
                 }
             }

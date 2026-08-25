@@ -1,6 +1,5 @@
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
-using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.Extensions.Logging;
@@ -27,11 +26,11 @@ public sealed class ViewFileOutlineTool : BaseFileTool
             Description = Description,
             ParametersJsonSchema = """
             {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "AbsolutePath": {
-                        "type": "STRING",
-                        "description": "Path to file to view. Must be an absolute path."
+                        "type": "string",
+                        "description": "Path to file to view. Can be absolute or relative to project root. The '/workspace/' prefix is handled automatically."
                     }
                 },
                 "required": [

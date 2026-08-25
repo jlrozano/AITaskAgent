@@ -9,6 +9,9 @@ public interface IStep
 {
     /// <summary>Gets the step name for observability.</summary>
     string Name { get; }
+
+    /// <summary>Gets the resume capability for this step.</summary>
+    IResume? Resume { get; }
     /// <summary>
     /// Gets the maximum number of retry attempts allowed for an operation.
     /// </summary>

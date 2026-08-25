@@ -1,20 +1,60 @@
 using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Execution;
 using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Observability;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 
 namespace AITaskAgent.Core.Models;
 
 /// <summary>
+/// Empty service provider implementation for default values.
+/// </summary>
+internal sealed class EmptyServiceProvider : IServiceProvider
+{
+    public static readonly EmptyServiceProvider Instance = new();
+    public object? GetService(Type serviceType) => null;
+}
+
+/// <summary>
 /// Context passed through the pipeline execution containing shared state and services.
 /// Uses ConcurrentDictionary for thread-safety in parallel execution scenarios.
 /// </summary>
-public sealed record PipelineContext(
-    IEventChannel? EventChannel = null)
+public sealed record PipelineContext
 {
+    /// <summary>
+    /// Creates a new PipelineContext with an event channel.
+    /// </summary>
+    public PipelineContext(IEventChannel? eventChannel = null)
+        : this(eventChannel, EmptyServiceProvider.Instance)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new PipelineContext with an event channel and service provider.
+    /// </summary>
+    public PipelineContext(IEventChannel? eventChannel, IServiceProvider serviceProvider)
+    {
+        EventChannel = eventChannel;
+        ServiceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+    }
+
     /// <summary>Active conversation context.</summary>
     private string _currentPath = "";
     private readonly Stack<string> _lastPath = [];
+
+    /// <summary>
+    /// Event channel for sending observability events.
+    /// </summary>
+    public IEventChannel? EventChannel { get; }
+
+    /// <summary>
+    /// Service provider for resolving dependencies during pipeline execution.
+    /// Similar to HttpContext.RequestServices in ASP.NET Core.
+    /// </summary>
+    public IServiceProvider ServiceProvider { get; }
+
     public ConversationContext Conversation { get; init; } = new();
 
     /// <summary>
@@ -29,6 +69,16 @@ public sealed record PipelineContext(
     public ConcurrentDictionary<string, object?> Metadata { get; init; } = [];
 
     /// <summary>
+    /// Helper for JS access to metadata.
+    /// </summary>
+    public object? GetMetadata(string key) => Metadata.TryGetValue(key, out var val) ? val : null;
+
+    /// <summary>
+    /// Helper for JS access to set metadata.
+    /// </summary>
+    public void SetMetadata(string key, object? value) => Metadata[key] = value;
+
+    /// <summary>
     /// Storage for step results. Thread-safe for parallel access.
     /// Key: step path (e.g., "pipeline/step1"). Value: step result.
     /// </summary>
@@ -38,7 +88,7 @@ public sealed record PipelineContext(
     /// Current path in the pipeline execution tree.
     /// Used for building step result keys. Internal setter for Pipeline use.
     /// </summary>
-    public string CurrentPath { get => _currentPath; }
+    public string CurrentStepPath { get => _currentPath; }
 
     internal void AddPathPart(string part)
     {
@@ -47,25 +97,35 @@ public sealed record PipelineContext(
     }
     internal void RemovePathPart()
     {
-        if (_lastPath.Count > 0)
-        {
-            _currentPath = _lastPath.Pop();
-        }
-        else
-        {
-            _currentPath = "";
-        }
+        _currentPath = _lastPath.Count > 0 ? _lastPath.Pop() : "";
     }
 
     /// <summary>
     /// Creates a clone for parallel branch execution.
-    /// Clones only the Conversation (each branch needs isolated history).
+    /// Clones Conversation and path state to prevent interference between branches.
     /// Shares StepResults, Metadata, EventChannel (thread-safe).
     /// </summary>
-    public PipelineContext CloneForBranch() => this with
+    public PipelineContext CloneForBranch()
     {
-        Conversation = Conversation.Clone()
-    };
+        PipelineContext clonedContext = new(EventChannel, ServiceProvider)
+        {
+            Conversation = Conversation.Clone(),
+            CorrelationId = CorrelationId,
+            Metadata = Metadata,
+            StepResults = StepResults,
+            _currentPath = ""
+        };
+
+        // Clone the path stack by reversing the original order
+        Stack<string> reversedStack = new(_lastPath.Reverse());
+
+        // Create a new context with the cloned stack using reflection to bypass readonly constraint
+        var finalContext = clonedContext with { };
+        typeof(PipelineContext).GetField("_lastPath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(finalContext, reversedStack);
+
+        return finalContext;
+    }
 
     /// <summary>
     /// Sends an event to the EventChannel if available.
@@ -90,5 +150,106 @@ public sealed record PipelineContext(
             // Swallow event errors to prevent pipeline failure
             return false;
         }
+    }
+
+    /// <summary>
+    /// INTERNAL: Gets the IPipeline service from the service provider.
+    /// Used by internal steps (ParallelStep, LoopStep, etc.) to execute sub-pipelines.
+    /// </summary>
+    internal IPipeline GetPipeline() =>
+        ServiceProvider.GetRequiredService<IPipeline>();
+
+    /// <summary>
+    /// INTERNAL: Gets a logger for the specified type.
+    /// </summary>
+    internal ILogger<T> GetLogger<T>() =>
+        ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<T>();
+
+    /// <summary>
+    /// INTERNAL: Gets a logger for the specified type.
+    /// </summary>
+    internal ILogger GetLogger(Type type) =>
+        ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(type);
+
+    /// <summary>
+    /// INTERNAL: Executes a sub-pipeline with NextSteps support.
+    /// Used by ParallelStep, LoopStep, and router steps.
+    /// </summary>
+    internal Task<IStepResult> ExecuteStepsWithNextStepsAsync(
+        IReadOnlyList<IStep> steps,
+        IStepResult currentResult,
+        string pipelineName,
+        CancellationToken cancellationToken,
+        bool isBranchScope = false)
+    {
+        // Cast to Pipeline to access internal method
+        return ServiceProvider.GetService<IPipeline>() is Pipeline pipeline
+            ? pipeline.ExecuteStepsWithNextStepsAsync(
+                steps, currentResult, this, pipelineName, cancellationToken, isBranchScope)
+            : throw new InvalidOperationException("IPipeline service not found in ServiceProvider.");
+    }
+}
+
+public class PipelineContextFactory
+{
+    private readonly IEventChannel? _eventChannel;
+    private readonly IServiceProvider _serviceProvider;
+    private readonly IPipelineContextStorage _storage;
+    private static PipelineContextFactory? _instance;
+    public PipelineContextFactory(IEventChannel? eventChannel, IServiceProvider serviceProvider, IPipelineContextStorage storage)
+    {
+        _eventChannel = eventChannel;
+        _serviceProvider = serviceProvider;
+        _storage = storage;
+        _instance = this;
+    }
+
+    public static PipelineContext Create(ConversationContext? conversation = null)
+    {
+        return Create(conversation, null);
+    }
+
+    public static PipelineContext Create(
+        ConversationContext? conversation = null,
+        IEnumerable<Func<IProgressEvent, CancellationToken, Task>>? subscribers = null)
+    {
+        if (_instance == null)
+        {
+            throw new InvalidOperationException("PipelineContextFactory is not initialized. Ensure it is registered in the service container.");
+        }
+
+        var eventChannel = _instance._eventChannel;
+
+        if (subscribers != null)
+        {
+            var options = _instance._serviceProvider.GetService<Microsoft.Extensions.Options.IOptions<AITaskAgent.Configuration.AITaskAgentOptions>>()?.Value;
+            var eventLogLevel = options?.Observability?.EventLogLevel ?? LogLevel.Information;
+            var logger = _instance._serviceProvider.GetService<ILogger<EventChannel>>();
+            var localChannel = new EventChannel(eventLogLevel, logger);
+            var hasSubscribers = false;
+
+            foreach (var handler in subscribers)
+            {
+                localChannel.Subscribe(handler);
+                hasSubscribers = true;
+            }
+
+            if (hasSubscribers)
+            {
+                eventChannel = localChannel;
+            }
+        }
+
+        return new(eventChannel, _instance._serviceProvider)
+        {
+            Conversation = conversation ?? new ConversationContext()
+        };
+    }
+    public static async Task<PipelineContext> CreateFromId(string id)
+    {
+        return _instance == null
+            ? throw new InvalidOperationException("PipelineContextFactory is not initialized. Ensure it is registered in the service container.")
+            : (await _instance._storage.LoadAsync(id, CancellationToken.None))
+            ?? throw new KeyNotFoundException();
     }
 }

@@ -109,12 +109,19 @@ public sealed class McpToolProvider : IMcpToolProvider
 
     private void OnProcessExit(object? sender, EventArgs e)
     {
-        if (_client != null)
+        // I-19: Capture _client under lock before using it (same pattern as DisconnectAsync)
+        McpClient? client;
+        lock (_lock)
+        {
+            client = _client;
+        }
+
+        if (client != null)
         {
             try
             {
                 // Force synchronous disposal during process exit
-                _client.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                client.DisposeAsync().AsTask().GetAwaiter().GetResult();
             }
             catch
             {

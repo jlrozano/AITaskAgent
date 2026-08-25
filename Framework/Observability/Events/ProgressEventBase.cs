@@ -2,12 +2,13 @@ namespace AITaskAgent.Observability.Events;
 
 /// <summary>
 /// Base record for all progress events.
-/// Provides common properties for event identification, timing, and correlation.
+/// Provides common properties for event identification, timing, correlation, and versioning.
+/// Supports backward compatibility through schema versioning.
 /// </summary>
 public abstract record ProgressEventBase : IProgressEvent
 {
     /// <inheritdoc />
-    public required string StepName { get; init; }
+    public string StepName { get; init; } = string.Empty;
 
     /// <inheritdoc />
     public abstract string EventType { get; }
@@ -20,4 +21,7 @@ public abstract record ProgressEventBase : IProgressEvent
 
     /// <inheritdoc />
     public bool SuppressFromUser { get; init; }
+
+    /// <inheritdoc />
+    public string SchemaVersion { get; init; } = "1.0";
 }

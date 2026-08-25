@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Results;
 using Newtonsoft.Json;
 
@@ -46,7 +47,7 @@ public sealed class CriticResult(IStep step) : LlmStepResult<CriticData>(step)
     /// <summary>
     /// Validación estructural del resultado.
     /// </summary>
-    public override Task<(bool IsValid, string? Error)> ValidateAsync()
+    public override Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
     {
         if (Value == null)
         {

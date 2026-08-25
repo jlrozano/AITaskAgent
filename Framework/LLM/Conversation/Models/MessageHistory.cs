@@ -45,7 +45,7 @@ public sealed class MessageHistory(int maxTokens = 4000, Func<string, int>? toke
     /// </summary>
     public string CreateBookmark()
     {
-        var name = Guid.NewGuid().ToString();
+        string name = Guid.NewGuid().ToString();
         _bookmarks[name] = _messages.Count;
         return name;
     }
@@ -55,7 +55,7 @@ public sealed class MessageHistory(int maxTokens = 4000, Func<string, int>? toke
     /// </summary>
     public List<Message> GetMessagesFromBookmark(string bookmarkName)
     {
-        return !_bookmarks.TryGetValue(bookmarkName, out var index)
+        return !_bookmarks.TryGetValue(bookmarkName, out int index)
             ? throw new ArgumentException($"Bookmark '{bookmarkName}' not found", nameof(bookmarkName))
             : [.. _messages.Skip(index)];
     }
@@ -65,15 +65,15 @@ public sealed class MessageHistory(int maxTokens = 4000, Func<string, int>? toke
     /// </summary>
     public List<Message> GetRecentMessages(int? maxTokens = null)
     {
-        var limit = maxTokens ?? _maxTokens;
+        int limit = maxTokens ?? _maxTokens;
         List<Message> result = [];
-        var currentTokens = 0;
+        int currentTokens = 0;
 
         // Iterate backwards to get most recent messages
-        for (var i = _messages.Count - 1; i >= 0; i--)
+        for (int i = _messages.Count - 1; i >= 0; i--)
         {
-            var message = _messages[i];
-            var tokens = EstimateMessageTokens(message);
+            Message message = _messages[i];
+            int tokens = EstimateMessageTokens(message);
 
             if (currentTokens + tokens > limit && result.Count > 0)
             {
@@ -95,7 +95,7 @@ public sealed class MessageHistory(int maxTokens = 4000, Func<string, int>? toke
         int keepFirstN = 2,
         int? maxTokens = null)
     {
-        var limit = maxTokens ?? _maxTokens;
+        int limit = maxTokens ?? _maxTokens;
 
         if (_messages.Count <= keepFirstN)
         {
@@ -103,22 +103,22 @@ public sealed class MessageHistory(int maxTokens = 4000, Func<string, int>? toke
         }
 
         List<Message> result = [];
-        var currentTokens = 0;
+        int currentTokens = 0;
 
         // Always include first N messages (usually system + initial context)
-        for (var i = 0; i < Math.Min(keepFirstN, _messages.Count); i++)
+        for (int i = 0; i < Math.Min(keepFirstN, _messages.Count); i++)
         {
-            var message = _messages[i];
+            Message message = _messages[i];
             result.Add(message);
             currentTokens += EstimateMessageTokens(message);
         }
 
         // Add recent messages that fit
         List<Message> recentMessages = [];
-        for (var i = _messages.Count - 1; i >= keepFirstN; i--)
+        for (int i = _messages.Count - 1; i >= keepFirstN; i--)
         {
-            var message = _messages[i];
-            var tokens = EstimateMessageTokens(message);
+            Message message = _messages[i];
+            int tokens = EstimateMessageTokens(message);
 
             if (currentTokens + tokens > limit)
             {
@@ -147,7 +147,7 @@ public sealed class MessageHistory(int maxTokens = 4000, Func<string, int>? toke
     /// </summary>
     public void ClearAfterBookmark(string bookmarkName)
     {
-        if (!_bookmarks.TryGetValue(bookmarkName, out var index))
+        if (!_bookmarks.TryGetValue(bookmarkName, out int index))
         {
             throw new ArgumentException($"Bookmark '{bookmarkName}' not found", nameof(bookmarkName));
         }
@@ -169,7 +169,7 @@ public sealed class MessageHistory(int maxTokens = 4000, Func<string, int>? toke
         _messages.Clear();
         _messages.AddRange(other._messages);
         _bookmarks.Clear();
-        foreach (var kvp in other._bookmarks)
+        foreach (KeyValuePair<string, int> kvp in other._bookmarks)
         {
             _bookmarks[kvp.Key] = kvp.Value;
         }

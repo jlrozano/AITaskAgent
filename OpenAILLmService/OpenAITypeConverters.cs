@@ -1,181 +1,144 @@
 using AITaskAgent.LLM.Models;
-using OpenAI.Chat;
+using Newtonsoft.Json.Linq;
 
 namespace OpenAILLmService;
 
-/// <summary>
-/// Type converters between framework-agnostic models and OpenAI-specific types.
-/// Implements smart conversion: reuse native objects when provider matches, convert otherwise.
-/// </summary>
 internal static class OpenAITypeConverters
 {
     private const string ProviderName = "OpenAI";
 
-    #region Message Conversions
+    #region Message → JObject (request)
 
-    /// <summary>
-    /// Converts framework Message to OpenAI ChatMessage.
-    /// Reuses native object if it came from OpenAI.
-    /// </summary>
-    public static ChatMessage ToChatMessage(this Message message)
+    public static JObject ToJObject(this Message message)
     {
-        // OPTIMIZATION: Reuse native if same provider
+        // Misma optimización: si el native ya es un JObject de este provider, reusar
         if (message.Native?.Provider == ProviderName &&
-            message.Native.Value is ChatMessage nativeMessage)
+            message.Native.Value is JObject nativeObj)
         {
-            return nativeMessage;
+            return nativeObj;
         }
 
-        // Convert from agnostic model
         return message.Role switch
         {
-            "system" => ChatMessage.CreateSystemMessage(message.Content),
-            "user" => ChatMessage.CreateUserMessage(message.Content),
-            "assistant" => message.ToolCalls?.Count > 0
-                ? ChatMessage.CreateAssistantMessage(
-                    message.ToolCalls.Select(tc => tc.ToChatToolCall()))
-                : ChatMessage.CreateAssistantMessage(message.Content),
-            "tool" => ChatMessage.CreateToolMessage(message.ToolCallId!, message.Content),
+            "system" => new JObject { ["role"] = "system", ["content"] = message.Content },
+
+            "user" => new JObject { ["role"] = "user", ["content"] = message.Content },
+
+            "assistant" when message.ToolCalls?.Count > 0 => new JObject
+            {
+                ["role"]       = "assistant",
+                ["content"]    = message.Content,  // puede ser null, la API lo acepta
+                ["tool_calls"] = new JArray(message.ToolCalls.Select(tc => tc.ToJObject()))
+            },
+
+            "assistant" => new JObject { ["role"] = "assistant", ["content"] = message.Content },
+
+            "tool" => new JObject
+            {
+                ["role"]         = "tool",
+                ["tool_call_id"] = message.ToolCallId,
+                ["content"]      = message.Content
+            },
+
             _ => throw new ArgumentException($"Unknown role: {message.Role}")
         };
     }
 
-    /// <summary>
-    /// Converts OpenAI ChatMessage to framework Message.
-    /// Stores native object with provider metadata.
-    /// </summary>
-    public static Message ToFrameworkMessage(this ChatMessage chatMessage)
+    // Usado al construir el array tool_calls de un mensaje assistant
+    private static JObject ToJObject(this ToolCall tc) => new()
     {
-        // Determine role and extract content based on concrete message type
-        string role;
-        var content = string.Empty;
-
-        string? toolCallId = null;
-        List<ToolCall>? toolCalls = null;
-
-        switch (chatMessage)
+        ["type"] = "function",
+        ["id"]   = tc.Id,
+        ["function"] = new JObject
         {
-            case SystemChatMessage systemMsg:
-                role = "system";
-                content = ExtractTextContent(systemMsg.Content);
-                break;
-
-            case UserChatMessage userMsg:
-                role = "user";
-                content = ExtractTextContent(userMsg.Content);
-                break;
-
-            case AssistantChatMessage assistantMsg:
-                role = "assistant";
-                content = ExtractTextContent(assistantMsg.Content);
-                if (assistantMsg.ToolCalls != null && assistantMsg.ToolCalls.Count > 0)
-                {
-                    toolCalls = assistantMsg.ToolCalls.Select(tc => tc.ToFrameworkToolCall()).ToList();
-                }
-                break;
-
-            case ToolChatMessage toolMsg:
-                role = "tool";
-                toolCallId = toolMsg.ToolCallId;
-                content = ExtractTextContent(toolMsg.Content);
-                break;
-
-            default:
-                throw new ArgumentException($"Unknown ChatMessage type: {chatMessage.GetType().Name}");
+            ["name"]      = tc.Name,
+            ["arguments"] = tc.Arguments
         }
+    };
+
+    #endregion
+
+    #region JToken → Message (historial de respuesta)
+
+    /// <summary>
+    /// Convierte el "message" de una choice del JSON de respuesta a Message del framework.
+    /// Guarda el JObject como native para poder reutilizarlo en la siguiente llamada.
+    /// </summary>
+    public static Message ToFrameworkMessage(this JToken messageToken)
+    {
+        var role      = messageToken["role"]?.Value<string>() ?? "assistant";
+        var content   = messageToken["content"]?.Value<string>() ?? string.Empty;
+        var toolCallId = messageToken["tool_call_id"]?.Value<string>();
+
+        List<ToolCall>? toolCalls = null;
+        if (messageToken["tool_calls"] is JArray tcArray && tcArray.Count > 0)
+            toolCalls = [.. tcArray.Select(t => t.ToFrameworkToolCall())];
 
         return new Message
         {
-            Role = role,
-            Content = content,
+            Role       = role,
+            Content    = content,
             ToolCallId = toolCallId,
-            ToolCalls = toolCalls,
-            Native = new NativeObject
+            ToolCalls  = toolCalls,
+            Native     = new NativeObject
             {
                 Provider = ProviderName,
-                Value = chatMessage,
-                TypeName = chatMessage.GetType().AssemblyQualifiedName!
+                Value    = messageToken,          // JToken como native: round-trip sin re-parse
+                TypeName = typeof(JToken).AssemblyQualifiedName!
             }
         };
-    }
-
-    /// <summary>
-    /// Extracts text content from ChatMessageContentPart collection.
-    /// </summary>
-    private static string ExtractTextContent(IEnumerable<ChatMessageContentPart> contentParts)
-    {
-        return string.Concat(contentParts
-            .Where(part => part.Kind == ChatMessageContentPartKind.Text)
-            .Select(part => part.Text));
     }
 
     #endregion
 
-    #region Tool Conversions
+    #region Tool definitions
 
-    /// <summary>
-    /// Converts framework ToolDefinition to OpenAI ChatTool.
-    /// Reuses native if it came from OpenAI.
-    /// </summary>
-    public static ChatTool ToChatTool(this ToolDefinition tool)
+    public static JObject ToJObject(this ToolDefinition tool)
     {
-        // OPTIMIZATION: Reuse native if same provider
-        return tool.Native?.Provider == ProviderName &&
-            tool.Native.Value is ChatTool nativeTool
-            ? nativeTool
-            : ChatTool.CreateFunctionTool(
-            tool.Name,
-            tool.Description,
-            BinaryData.FromString(tool.ParametersJsonSchema));
-    }
+        if (tool.Native?.Provider == ProviderName &&
+            tool.Native.Value is JObject nativeTool)
+            return nativeTool;
 
-    /// <summary>
-    /// Converts OpenAI ChatToolCall to framework ToolCall.
-    /// Stores native object with provider metadata.
-    /// </summary>
-    public static ToolCall ToFrameworkToolCall(this ChatToolCall chatToolCall)
-    {
-        return new ToolCall
+        return new JObject
         {
-            Id = chatToolCall.Id,
-            Name = chatToolCall.FunctionName,
-            Arguments = chatToolCall.FunctionArguments.ToString(),
-            Native = new NativeObject
+            ["type"] = "function",
+            ["function"] = new JObject
             {
-                Provider = ProviderName,
-                Value = chatToolCall,
-                TypeName = chatToolCall.GetType().AssemblyQualifiedName!
+                ["name"]        = tool.Name,
+                ["description"] = tool.Description,
+                ["parameters"]  = JObject.Parse(tool.ParametersJsonSchema)
             }
         };
     }
 
-    /// <summary>
-    /// Converts framework ToolCall to OpenAI ChatToolCall.
-    /// Reuses native if it came from OpenAI.
-    /// </summary>
-    public static ChatToolCall ToChatToolCall(this ToolCall toolCall)
+    #endregion
+
+    #region Tool calls (respuesta y streaming)
+
+    public static ToolCall ToFrameworkToolCall(this JToken token)
     {
-        //  OPTIMIZATION: Reuse native if same provider
-        return toolCall.Native?.Provider == ProviderName &&
-            toolCall.Native.Value is ChatToolCall nativeToolCall
-            ? nativeToolCall
-            : ChatToolCall.CreateFunctionToolCall(
-            toolCall.Id,
-            toolCall.Name,
-            BinaryData.FromString(toolCall.Arguments));
+        return new ToolCall
+        {
+            Id        = token["id"]?.Value<string>() ?? string.Empty,
+            Name      = token["function"]?["name"]?.Value<string>() ?? string.Empty,
+            Arguments = token["function"]?["arguments"]?.Value<string>() ?? string.Empty,
+            Native    = new NativeObject
+            {
+                Provider = ProviderName,
+                Value    = token,
+                TypeName = typeof(JToken).AssemblyQualifiedName!
+            }
+        };
     }
 
-    /// <summary>
-    /// Converts OpenAI StreamingChatToolCallUpdate to framework ToolCallUpdate.
-    /// </summary>
-    public static ToolCallUpdate ToFrameworkToolCallUpdate(this StreamingChatToolCallUpdate update)
+    public static ToolCallUpdate ToFrameworkToolCallUpdate(this JToken token)
     {
         return new ToolCallUpdate
         {
-            Index = update.Index,
-            ToolCallId = update.ToolCallId,
-            FunctionName = update.FunctionName,
-            FunctionArgumentsUpdate = update.FunctionArgumentsUpdate?.ToString()
+            Index                   = token["index"]?.Value<int>() ?? 0,
+            ToolCallId              = token["id"]?.Value<string>(),
+            FunctionName            = token["function"]?["name"]?.Value<string>(),
+            FunctionArgumentsUpdate = token["function"]?["arguments"]?.Value<string>()
         };
     }
 

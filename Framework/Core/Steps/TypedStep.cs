@@ -44,7 +44,7 @@ public abstract class TypedStep<TIn, TOut>(string name) : StepBase(name, typeof(
         {
             try
             {
-                var newInput = StepResultFactory.CreateStepResult<TIn>(this, input.Value);
+                TIn newInput = StepResultFactory.CreateStepResult<TIn>(this, input.Value);
                 return await ExecuteAsync(newInput, context, attempt, (TOut?)lastStepResult, cancellationToken);
             }
             catch

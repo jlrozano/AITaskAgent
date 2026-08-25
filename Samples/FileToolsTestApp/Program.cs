@@ -1,25 +1,31 @@
 using AITaskAgent.Configuration;
+using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
-using AITaskAgent.Core.StepResults;
-using AITaskAgent.Core.Steps;
 using AITaskAgent.FileTools;
 using AITaskAgent.FileTools.Streaming;
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
+using AITaskAgent.LLM.Conversation.Context;
+using AITaskAgent.LLM.Conversation.Storage;
+using AITaskAgent.LLM.Models;
 using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Steps;
 using AITaskAgent.LLM.Streaming;
+using AITaskAgent.LLM.Results;
 using AITaskAgent.LLM.Tools.Abstractions;
+using AITaskAgent.LLM.Tools.Implementation;
 using AITaskAgent.Observability;
 using AITaskAgent.Observability.Events;
-using FileTools;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 
 using Serilog;
+using System.Text.RegularExpressions;
+using System.Text;
 
 namespace FileToolsTestApp;
 
@@ -27,345 +33,231 @@ class Program
 {
     static async Task Main(string[] args)
     {
-        // 1. Setup Project Directory and Paths
-        var projectDir = "C:\\Users\\juan.rozano\\Desktop\\AgenteAI\\AITaskAgentFramework";
-        var logsDir = Path.Combine(projectDir, "Samples", "FileToolsTestApp", "logs");
-
-        // Clean up logs from previous run
-        if (Directory.Exists(logsDir))
+        // 1. Setup paths
+        var projectDir = AppContext.BaseDirectory;
+        if (projectDir.Contains("bin"))
         {
-            try
-            {
-                Directory.Delete(logsDir, true);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Warning: Could not clear logs: {ex.Message}");
-            }
+            projectDir = Path.GetFullPath(Path.Combine(projectDir, "..", "..", ".."));
         }
+
+        // Clean logs directory path (remove redundancy)
+        var logsDir = Path.Combine(projectDir, "logs");
         Directory.CreateDirectory(logsDir);
+
+        // 2. Clear old logs
+        foreach (var file in Directory.GetFiles(logsDir))
+        {
+            try { File.Delete(file); } catch { }
+        }
 
         // 3. Load configuration
         var environmentName = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Development";
+        
+        // Expansion of environment variables ${VAR} in appsettings.json
+        var jsonConfig = File.ReadAllText("appsettings.json");
+        jsonConfig = Regex.Replace(jsonConfig, @"\$\{(\w+)\}", m => Environment.GetEnvironmentVariable(m.Groups[1].Value) ?? m.Value);
+        using var configStream = new MemoryStream(Encoding.UTF8.GetBytes(jsonConfig));
+
         var configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: false)
-            .AddJsonFile($"appsettings.{environmentName}.json", optional: true)
+            .AddJsonStream(configStream)
             .AddEnvironmentVariables()
             .Build();
 
+        // 4. Configure Serilog for MAX VERBOSITY
         Log.Logger = new LoggerConfiguration()
-            .ReadFrom.Configuration(configuration)
-
+            .MinimumLevel.Verbose() // Serilog Verbose = Trace
             .Enrich.FromLogContext()
+            .WriteTo.Console(restrictedToMinimumLevel: Serilog.Events.LogEventLevel.Information)
             .WriteTo.File(
-                Path.Combine(logsDir, "app.log"),
+                Path.Combine(logsDir, "trace.log"),
                 rollingInterval: RollingInterval.Day,
-                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}",
-                shared: true,
-                flushToDiskInterval: TimeSpan.FromSeconds(1))
-            .WriteTo.File(
-                formatter: new YamlLogFormatter(),
-                path: Path.Combine(logsDir, "app.yaml"),
-                rollingInterval: RollingInterval.Day,
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}",
                 shared: true,
                 flushToDiskInterval: TimeSpan.FromSeconds(1))
             .CreateLogger();
 
-        // 4. Setup DI
+        // 5. Setup Dependency Injection
         var services = new ServiceCollection();
-        services.AddSingleton<IConfiguration>(configuration);
-        services.AddLogging(builder =>
+        services.AddLogging(builder => 
         {
             builder.ClearProviders();
             builder.AddSerilog(dispose: true);
+            builder.SetMinimumLevel(LogLevel.Trace);
         });
+        services.AddSingleton<IConfiguration>(configuration);
 
-        services.AddAITaskAgent(configuration);
+        // 6. Register AITaskAgent and FileTools
+        services.AddAITaskAgent();
         services.AddFileTools();
-        FileToolsConfiguration.RootDirectory = projectDir;
+
+        // Register OpenAI specifically
         services.AddSingleton<ILlmService, OpenAILLmService.OpenAILlmService>();
+        services.AddSingleton<OpenAILLmService.OpenAILlmService>();
 
         var serviceProvider = services.BuildServiceProvider();
+        var logger = serviceProvider.GetRequiredService<ILogger<Program>>();
 
-        // Initialize Pipeline logger factory to enable logging in Steps
-        AITaskAgent.Core.Execution.Pipeline.LoggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
+        // 7. Initialize Framework
+        serviceProvider.UseAITaskAgent();
 
-        // 5. Run Demo Loopgging (jsonl)
-        var eventChannel = serviceProvider.GetRequiredService<IEventChannel>() as EventChannel;
-        if (eventChannel == null)
+        // Register tools in AvailableTools instance
+        var allTools = serviceProvider.GetServices<ITool>().ToList();
+        foreach (var t in allTools)
         {
-            Console.WriteLine("Warning: EventChannel not found or wrong type.");
-            return;
+            AvailableTools.Instance.Register(t);
+            logger.LogTrace("Registered tool: {ToolName}", t.Name);
         }
-        var eventsFile = Path.Combine(logsDir, "events.jsonl");
 
-        var cts = new CancellationTokenSource();
+        // Start event listener for console feedback
+        var eventChannel = serviceProvider.GetRequiredService<IEventChannel>();
         _ = Task.Run(async () =>
         {
-            var reader = eventChannel.Subscribe();
             try
             {
-                await foreach (var evt in reader.ReadAllAsync(cts.Token))
+                var subscription = eventChannel.Subscribe();
+                await foreach (var ev in subscription.ReadAllAsync())
                 {
-                    var json = JsonConvert.SerializeObject(evt);
-                    await File.AppendAllTextAsync(eventsFile, json + Environment.NewLine, cts.Token);
+                    if (ev.SuppressFromUser) continue;
+
+                    switch (ev)
+                    {
+                        case TagStartedEvent ts:
+                            Console.WriteLine($"\n📝 [{ts.TagName}] Iniciando... ");
+                            break;
+                        case TagCompletedEvent tc:
+                            if (!tc.Success) Console.WriteLine($"\n❌ [{tc.TagName}] Error: {tc.ErrorMessage}");
+                            break;
+                        case LlmResponseEvent resp when resp.FinishReason == FinishReason.Streaming:
+                            Console.Write(resp.Content);
+                            break;
+                        case ToolStartedEvent tool:
+                            Console.WriteLine($"\n🛠️  [Tool: {tool.ToolName}]");
+                            break;
+                        case ToolCompletedEvent toolComp:
+                            if (!toolComp.Success) Console.WriteLine($"\n❌ [Tool: {toolComp.ToolName}] Error: {toolComp.ErrorMessage}");
+                            break;
+                    }
                 }
             }
             catch (OperationCanceledException) { }
+            catch (Exception ex) { logger.LogError(ex, "Event loop error"); }
         });
 
-        // 8. Get FileTools
-        var llmProviderResolver = serviceProvider.GetRequiredService<ILlmProviderResolver>();
-        var llmService = serviceProvider.GetRequiredService<ILlmService>();
-        var allTools = serviceProvider.GetServices<ITool>().ToList();
+        // 8. Manual Hydration
+        var configSection = configuration.GetSection("AITaskAgent:LlmProviders");
+        var rawEnv = new LlmEnvironment();
+        configSection.Bind(rawEnv); 
 
-        // 9. Create shared Conversation (persists across all turns)
-        // We create an initial context just to get the Conversation instance
-        var initialContext = new PipelineContext(eventChannel);
-        var conversation = initialContext.Conversation;
+        var openAiService = serviceProvider.GetRequiredService<ILlmService>();
+        foreach (var kvp in rawEnv.Providers)
+        {
+            typeof(LlmProvider).GetProperty("Service")?.SetValue(kvp.Value, openAiService);
+        }
 
-        // 10. Configure Pipeline timeout for complex operations
-        Pipeline.DefaultStepTimeout = TimeSpan.FromMinutes(30);
+        var rolesSection = configSection.GetSection("Roles");
+        foreach (var roleKvp in rawEnv.Roles)
+        {
+            var r = roleKvp.Value;
+            var providerName = rolesSection.GetSection(roleKvp.Key).GetValue<string>("Provider");
+            if (!string.IsNullOrEmpty(providerName) && rawEnv.Providers.TryGetValue(providerName, out var p))
+            {
+                typeof(LlmRole).GetProperty("Provider")?.SetValue(r, p);
+            }
+            else if (rawEnv.Providers.Count > 0)
+            {
+                 typeof(LlmRole).GetProperty("Provider")?.SetValue(r, rawEnv.Providers.Values.First());
+            }
+        }
 
-        // CREATE STREAMING HANDLERS
+        // 9. Shared State
+        var conversation = new ConversationContext();
         var handlers = new List<IStreamingTagHandler>
         {
             new WriteFileTagHandler(projectDir, serviceProvider.GetRequiredService<ILogger<WriteFileTagHandler>>())
         };
 
         // 11. Define Agent Step
-        // The promptBuilder extracts the user message from input.Value
-        // BaseLlmStep.ConfigureJsonResponse then adds this message to the Conversation automatically
-        var profile = llmProviderResolver.GetProvider();
-        var agentStep = new LlmStep(
-            llmService,
+        var defaultProvider = rawEnv.Providers.Values.FirstOrDefault() 
+            ?? new LlmProvider { Service = openAiService };
+
+        var role = rawEnv.Roles.GetValueOrDefault("default") 
+            ?? rawEnv.Roles.GetValueOrDefault(rawEnv.DefaultRole ?? string.Empty)
+            ?? new LlmRole { Provider = defaultProvider, Model = "gpt-4o" };
+
+        var agentStep = new TemplateLlmStep<IStepResult, LlmStringStepResult>(
             name: "FileAgent",
-            profile: profile,
-            promptBuilder: (input, context) => Task.FromResult(input.Value?.ToString() ?? ""),
-            systemPrompt: $"""
-                Eres un asistente experto en sistemas de archivos. 
-                Tu directorio de trabajo autorizado es: {projectDir}
-                Solo puedes operar dentro de este directorio.
+            role: role,
+            templateProvider: null,
+            tools: allTools.Where(t => t.Name != "write_to_file").Select(t => t.Name).ToList(),
+            promtTemplateString: "{{input}}", // CRITICAL: TinyTemplate uses lowercase for property access
+            systemTemplateString: $"""
+                Eres un experto asistente de archivos. Tu objetivo es ayudar al usuario a gestionar sus archivos en el directorio: {projectDir}
+                
+                REGLAS CRÍTICAS:
+                1. Para crear o modificar archivos, DEBES usar el tag <write_file>.
+                2. FORMATO EXACTO DEL TAG: <write_file path="nombre_archivo.txt">Contenido</write_file>
+                   - Usa SIEMPRE comillas DOBLES (") para el path.
+                   - NO pongas espacios extra dentro de los corchetes del tag.
+                3. Para listar, leer o buscar, USA las herramientas (tools) disponibles.
+                4. Si el usuario te pide listar archivos, USA la herramienta 'list_dir'.
+                5. Responde siempre en español de forma concisa.
+                """
+        )
+        {
+            MaxToolIterations = 500,
+            StreamingHandlers = handlers
+        };
 
-                Responde siempre en español.
-                """,
-            tools: allTools.Where(t => t.Name != "write_to_file").ToList(),
-            maxToolIterations: 500,
-            streamingHandlers: handlers
-        );
-
-        Console.Clear();
         Console.WriteLine("========================================");
-        Console.WriteLine("    AITaskAgent Interactive Demo");
+        Console.WriteLine("    AITaskAgent Interactive Demo (TRACE)");
         Console.WriteLine("========================================");
         Console.WriteLine($"Project: {projectDir}");
-        Console.WriteLine($"Model:   {profile.Model}");
-        Console.WriteLine($"Logs:    {logsDir}");
+        Console.WriteLine($"Model:   {role.Model}");
+        Console.WriteLine($"Logs:    {Path.Combine(logsDir, "trace.log")}");
         Console.WriteLine($"Tools:   {string.Join(", ", allTools.Select(t => t.Name))}");
         Console.WriteLine("----------------------------------------");
-        Console.WriteLine("Escribe 'salir' o 'exit' para terminar.");
+        Console.WriteLine("Escribe 'salir' o 'exit' para terminar.\n");
 
-        // Initial Greeting
-        Console.WriteLine("\n[Agente]: Hola, ¿en qué puedo ayudarte hoy con tus archivos?");
+        Console.WriteLine("[Agente]: Hola, ¿en qué puedo ayudarte hoy con tus archivos?\n");
 
         while (true)
         {
-            Console.Write("\n[Usuario]: ");
-            var userInput = Console.ReadLine();
+            Console.Write("[Usuario]: ");
+            var input = Console.ReadLine();
 
-            if (string.IsNullOrWhiteSpace(userInput) ||
-                userInput.Equals("salir", StringComparison.OrdinalIgnoreCase) ||
-                userInput.Equals("exit", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(input) || input.ToLower() is "salir" or "exit")
                 break;
+
+            var turnContext = new PipelineContext(eventChannel, serviceProvider) 
+            { 
+                Conversation = conversation 
+            };
 
             try
             {
-                // Create NEW PipelineContext for each turn (new CorrelationId)
-                // but reuse the SAME Conversation to maintain history
-                var turnContext = new PipelineContext(eventChannel)
-                {
-                    Conversation = conversation  // ← Reuse the shared conversation
-                };
-                var turnCorrelationId = turnContext.CorrelationId;
-
-                var inputResult = new SuccessStepResult(new EmptyStep("UserInput"), userInput);
-
-                // Subscribe to streaming events for this turn (display in real-time)
-                var streamingCts = new CancellationTokenSource();
-                var isThinking = false;
-                var hasContent = false;
-
-                var streamingReader = eventChannel.Subscribe();
-                var streamingTask = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await foreach (var evt in streamingReader.ReadAllAsync(streamingCts.Token))
-                        {
-                            // Only process events for this turn
-                            if (evt.CorrelationId != turnCorrelationId)
-                                continue;
-
-                            // Handle Progress Events (tool execution)
-                            if (evt is StepProgressEvent progressEvt && !progressEvt.SuppressFromUser)
-                            {
-                                Console.ForegroundColor = ConsoleColor.DarkGray;
-                                Console.WriteLine($"  {progressEvt.Message}");
-                                Console.ResetColor();
-                            }
-
-                            // Handle Tag Started Events (streaming tag execution)
-                            if (evt is TagStartedEvent tagStarted)
-                            {
-                                Console.ForegroundColor = ConsoleColor.Cyan;
-                                var path = tagStarted.Attributes?.GetValueOrDefault("path") ?? "";
-                                Console.WriteLine($"  📝 [{tagStarted.TagName}] Iniciando... {path}");
-                                Console.ResetColor();
-                            }
-
-                            // Handle Tag Completed Events
-                            if (evt is TagCompletedEvent tagCompleted)
-                            {
-                                Console.ForegroundColor = tagCompleted.Success ? ConsoleColor.Green : ConsoleColor.Red;
-                                var status = tagCompleted.Success ? "✅" : "❌";
-                                Console.WriteLine($"  {status} [{tagCompleted.TagName}] Completado ({tagCompleted.Duration.TotalMilliseconds:F0}ms)");
-                                Console.ResetColor();
-                            }
-
-                            // Handle LLM Streaming Events
-                            if (evt is LlmResponseEvent llmEvt && llmEvt.FinishReason == FinishReason.Streaming)
-                            {
-                                // First content? Print prefix
-                                if (!hasContent)
-                                {
-                                    Console.Write("\n[Agente]: ");
-                                    hasContent = true;
-                                }
-
-                                // Handle thinking state transitions
-                                if (llmEvt.IsThinking && !isThinking)
-                                {
-                                    isThinking = true;
-                                    Console.ForegroundColor = ConsoleColor.Magenta;
-                                    Console.Write("<think>");
-                                }
-                                else if (!llmEvt.IsThinking && isThinking)
-                                {
-                                    isThinking = false;
-                                    Console.Write("</think>\n");
-                                    Console.ResetColor();
-                                }
-
-                                // Print content with appropriate color
-                                if (llmEvt.IsThinking)
-                                {
-                                    Console.ForegroundColor = ConsoleColor.Magenta;
-                                }
-                                else
-                                {
-                                    Console.ResetColor();
-                                }
-                                Console.Write(llmEvt.Content);
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException) { }
-                    finally
-                    {
-                        if (isThinking)
-                        {
-                            Console.Write("</think>\n");
-                        }
-                        Console.ResetColor();
-                    }
-                }, streamingCts.Token);
-
-                // Execute via Pipeline with the new context
-                var result = await Pipeline.ExecuteAsync(
-                    "FileChatPipeline",
-                    [agentStep],
-                    inputResult,
-                    turnContext
-                );
-
-                // Stop streaming display
-                await streamingCts.CancelAsync();
-                try { await streamingTask; } catch (OperationCanceledException) { }
-
-                // Handle errors (streaming already showed success content)
+                logger.LogTrace("Executing step with input: {Input}", input);
+                var stepInput = new LlmStringStepResult(agentStep) { Content = input };
+                var result = await ((IStep)agentStep).ExecuteAsync(stepInput, turnContext, 1, null, CancellationToken.None);
+                
                 if (result.HasError)
                 {
-                    var errorMessage = result.Error?.Message ?? "Unknown error";
-
-                    // Detect timeout errors
-                    if (errorMessage.Contains("canceled", StringComparison.OrdinalIgnoreCase) ||
-                        result.Error is OperationCanceledException)
-                    {
-                        var timeoutMessage = $"⏱️ La operación excedió el tiempo límite de {Pipeline.DefaultStepTimeout.TotalMinutes} minutos y fue cancelada.";
-                        Console.WriteLine($"\n[ERROR]: {timeoutMessage}");
-                        Log.Warning("Step timeout: {ErrorMessage}", errorMessage);
-                    }
-                    else
-                    {
-                        Console.WriteLine($"\n[ERROR]: {errorMessage}");
-                        Log.Error("Step execution failed: {ErrorMessage}. Error details: {ErrorDetails}",
-                            errorMessage, result.Error?.ToString() ?? "No details");
-                    }
+                    Console.WriteLine($"\n[ERROR]: {result.Error?.Message}");
                 }
                 else
                 {
-                    // If no streaming content was shown, display the final result
-                    if (!hasContent)
-                    {
-                        var finalContent = result.Value?.ToString() ?? "";
-                        if (!string.IsNullOrWhiteSpace(finalContent))
-                        {
-                            Console.WriteLine($"\n[Agente]: {finalContent}");
-                        }
-                    }
-                    else
-                    {
-                        // Just add a newline after streaming content
-                        Console.WriteLine();
-                    }
+                    Console.WriteLine();
                 }
-            }
-            catch (OperationCanceledException ex)
-            {
-                var timeoutMessage = $"⏱️ La operación excedió el tiempo límite de {Pipeline.DefaultStepTimeout.TotalMinutes} minutos y fue cancelada.";
-                Console.WriteLine($"\n[ERROR]: {timeoutMessage}");
-                Log.Warning(ex, "Step timeout occurred");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\n[CRITICAL ERROR]: {ex.Message}");
-                Log.Error(ex, "Error during agent execution");
+                logger.LogCritical(ex, "Fatal error in loop");
+                Console.WriteLine($"\n[FATAL ERROR]: {ex.Message}");
             }
+
+            Console.WriteLine();
         }
 
-        Console.WriteLine("\n========================================");
-        Console.WriteLine("   Demo terminada");
-        Console.WriteLine("========================================");
-
-        await cts.CancelAsync();
-        if (serviceProvider is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync();
-        else serviceProvider.Dispose();
-
-        await Log.CloseAndFlushAsync();
-    }
-
-    static string? FindProjectDir(string startDir)
-    {
-        var current = new DirectoryInfo(startDir);
-        while (current != null)
-        {
-            if (current.GetFiles("*.csproj").Length != 0)
-            {
-                return current.FullName;
-            }
-            current = current.Parent;
-        }
-        return null;
+        Console.WriteLine("Demo terminada.");
     }
 }

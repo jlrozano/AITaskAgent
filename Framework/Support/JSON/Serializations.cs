@@ -12,7 +12,7 @@ namespace AITaskAgent.Support.JSON
         {
             protected override JsonProperty CreateProperty(MemberInfo member, MemberSerialization memberSerialization)
             {
-                var property = base.CreateProperty(member, memberSerialization);
+                JsonProperty property = base.CreateProperty(member, memberSerialization);
 
                 // If the property is an Exception or derives from it, always ignore it
                 if (typeof(Exception).IsAssignableFrom(property.PropertyType))

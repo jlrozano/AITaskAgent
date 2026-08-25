@@ -4,6 +4,7 @@ using AITaskAgent.Core.Execution.Middlewares;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.StepResults;
 using AITaskAgent.Core.Steps;
+using AITaskAgent.Observability;
 using AITaskAgent.Observability.Events;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -12,26 +13,44 @@ using System.Diagnostics;
 namespace AITaskAgent.Core.Execution;
 
 /// <summary>
-/// Static pipeline executor with middleware composition.
-/// Middlewares are applied in order: User middlewares → Observability → Retry → Timeout → Step.
-/// Internal middlewares (Observability, Retry, Timeout) are ALWAYS present.
+/// Pipeline executor with middleware composition.
+/// Execution order: User middlewares → Observability → Timeout → Retry → Step.
+/// Timeout wraps Retry, so it is GLOBAL across all retry attempts (not per-attempt).
+/// Internal middlewares (Observability, Timeout, Retry) are ALWAYS present.
+/// Registered as singleton in DI for testability and to remove static state.
 /// </summary>
-public static class Pipeline
+public sealed class Pipeline : IPipeline
 {
-    internal static ILoggerFactory _loggerFactory = NullLoggerFactory.Instance;
+    private readonly ILogger<Pipeline> _logger;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly PipelineOptions _options;
 
     /// <summary>
     /// Default timeout for the entire pipeline execution.
     /// </summary>
-    public static TimeSpan DefaultPipelineTimeout { get; set; } = TimeSpan.FromMinutes(60);
+    public TimeSpan? DefaultPipelineTimeout { get; }
 
     /// <summary>
     /// Default timeout for individual steps.
     /// Individual steps can override this via IStep.Timeout.
     /// </summary>
-    public static TimeSpan DefaultStepTimeout { get; set; } = TimeSpan.FromMinutes(30);
+    public TimeSpan? DefaultStepTimeout { get; }
 
-    public static ILoggerFactory LoggerFactory { get => _loggerFactory; set => _loggerFactory = value ?? NullLoggerFactory.Instance; }
+    /// <summary>
+    /// Constructor with simplified parameters, independent of DI.
+    /// </summary>
+    public Pipeline(
+        TimeSpan? defaultPipelineTimeout = null,
+        TimeSpan? defaultStepTimeout = null,
+        ILoggerFactory? loggerFactory = null)
+    {
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _logger = _loggerFactory.CreateLogger<Pipeline>();
+        _options = new PipelineOptions();
+
+        DefaultPipelineTimeout = defaultPipelineTimeout ?? _options.DefaultPipelineTimeout;
+        DefaultStepTimeout = defaultStepTimeout ?? _options.DefaultStepTimeout;
+    }
 
     /// <summary>
     /// Delegate for step execution through middleware chain.
@@ -40,14 +59,51 @@ public static class Pipeline
     private delegate Task<IStepResult> StepExecutor(IStep step, IStepResult input, PipelineContext context, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Unique metadata key for the pending IResumeResponse in a given pipeline context.
+    /// CorrelationId prevents collisions between nested pipelines sharing the same context
+    /// and between parallel branches running concurrently.
+    /// </summary>
+    private static string PendingResumeKey(PipelineContext context) =>
+        $"__pipeline_pending_resume_{context.CorrelationId}__";
+
+    /// <summary>
+    /// Unique metadata key for a step's persisted resume state.
+    /// CorrelationId scopes the key to the specific pipeline context instance.
+    /// </summary>
+    private static string ResumeStateKey(PipelineContext context) =>
+        $"__resume_state_{context.CorrelationId}__";
+
+    /// <summary>
     /// Executes a pipeline of steps sequentially with middleware composition.
     /// </summary>
-    public static async Task<IStepResult> ExecuteAsync<T>(
+    public async Task<IStepResult> ExecuteAsync<T>(
         string name,
         IReadOnlyList<IStep> steps,
         T input,
         PipelineContext? context = null,
         TimeSpan? pipelineTimeout = null)
+    {
+        var timeout = pipelineTimeout ?? DefaultPipelineTimeout;
+
+        if (timeout.HasValue)
+        {
+            using CancellationTokenSource cts = new(timeout.Value);
+            return await ExecuteAsync(name, steps, input, context, pipelineTimeout, cts.Token);
+        }
+        else
+        {
+            return await ExecuteAsync(name, steps, input, context, pipelineTimeout, CancellationToken.None);
+        }
+    }
+
+    public async Task<IStepResult> ExecuteAsync<T>(
+        string name,
+        IReadOnlyList<IStep> steps,
+        T input,
+        PipelineContext? context = null,
+        TimeSpan? pipelineTimeout = null,
+        CancellationToken cancellationToken = default,
+        IEnumerable<Func<IProgressEvent, CancellationToken, Task>>? subscribers = null)
     {
         ArgumentNullException.ThrowIfNull(steps);
         ArgumentNullException.ThrowIfNull(input);
@@ -56,34 +112,45 @@ public static class Pipeline
             throw new ArgumentException("Pipeline must contain at least one step.", nameof(steps));
         }
 
-        if (!steps[0].InputType.IsAssignableFrom(typeof(T)) && !steps[0].InputType.IsAssignableFrom(input.GetType()))
+        StepValidation.ValidateUniqueStepNames(steps, name);
+
+        var isResume = context != null && context.Metadata.ContainsKey(ResumeStateKey(context));
+
+        var currentResult = isResume
+            ? (IStepResult)input
+            : input is IStepResult stepResult && steps[0].InputType.IsAssignableFrom(input.GetType())
+                ? stepResult
+                : StepResultFactory.CreateStepResult(steps[0].InputType, new EmptyStep(), input);
+
+        context ??= PipelineContextFactory.Create(subscribers: subscribers);
+
+        var logger = _logger;
+
+        if (isResume)
         {
-            throw new ArgumentException($"First step input type ({steps[0].InputType.Name}) must match pipeline input type ({input.GetType().Name}).", nameof(steps));
+            context.Metadata[PendingResumeKey(context)] = input;
         }
 
-        var currentResult = input is IStepResult stepResult && steps[0].InputType.IsAssignableFrom(input.GetType())
-            ? stepResult
-            : StepResultFactory.CreateStepResult(steps[0].InputType, new EmptyStep(), input);
-
-        context ??= PipelineContextFactory.Create();
-
-        var logger = LoggerFactory.CreateLogger(typeof(Pipeline));
-
-        var middlewares = new List<IPipelineMiddleware>([.. PipelineMiddlewareRegistry.GetMiddlewares(), .. CreateInternalMiddlewares(LoggerFactory)]);
-
-        // Build middleware chain ONCE - the terminal executes the step
+        List<IPipelineMiddleware> middlewares = new([.. PipelineMiddlewareRegistry.GetMiddlewares(), .. CreateInternalMiddlewares()]);
         var middlewareChain = BuildMiddlewareChain(middlewares);
 
-        // Create cancellation token with pipeline timeout
-        using var pipelineCts = pipelineTimeout.HasValue
-            ? new CancellationTokenSource(pipelineTimeout.Value)
-            : new CancellationTokenSource();
-
-        var pipelineCancellationToken = pipelineCts.Token;
+        CancellationToken pipelineCancellationToken;
+        CancellationTokenSource? linkedCts = null;
 
         if (pipelineTimeout.HasValue)
         {
+            CancellationTokenSource timeoutCts = new(pipelineTimeout.Value);
+            linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+            pipelineCancellationToken = linkedCts.Token;
             logger.LogDebug("Pipeline {Name} timeout set to {Timeout}", name, pipelineTimeout.Value);
+        }
+        else if (cancellationToken != CancellationToken.None)
+        {
+            pipelineCancellationToken = cancellationToken;
+        }
+        else
+        {
+            pipelineCancellationToken = CancellationToken.None;
         }
 
         using var pipelineActivity = Telemetry.Source.StartActivity(
@@ -92,70 +159,92 @@ public static class Pipeline
         pipelineActivity?.SetTag(AITaskAgentConstants.TelemetryTags.PipelineName, name);
         pipelineActivity?.SetTag(AITaskAgentConstants.TelemetryTags.CorrelationId, context.CorrelationId);
         pipelineActivity?.SetTag(AITaskAgentConstants.TelemetryTags.PipelineStepCount, steps.Count);
-        pipelineActivity?.SetTag(AITaskAgentConstants.TelemetryTags.PipelineTimeoutMs, pipelineTimeout?.TotalMilliseconds ?? DefaultPipelineTimeout.TotalMilliseconds);
+        pipelineActivity?.SetTag(AITaskAgentConstants.TelemetryTags.PipelineTimeoutMs, pipelineTimeout?.TotalMilliseconds ?? DefaultPipelineTimeout?.TotalMilliseconds);
 
         logger.LogInformation("Pipeline {Name} starting execution with {StepCount} steps, CorrelationId: {CorrelationId}",
             name, steps.Count, context.CorrelationId);
 
-        // Send pipeline started event
-        await context.SendEventAsync(new PipelineStartedEvent
+        try
         {
-            StepName = name,
-            PipelineName = name,
-            TotalSteps = steps.Count,
-            CorrelationId = context.CorrelationId
-        }, pipelineCancellationToken);
+            await context.SendEventAsync(new PipelineStartedEvent
+            {
+                StepName = name,
+                PipelineName = name,
+                TotalSteps = steps.Count,
+                CorrelationId = context.CorrelationId,
+                SchemaVersion = "1.0"
+            }, pipelineCancellationToken);
 
-        // Record pipeline execution metric
-        Metrics.PipelineExecutions.Add(1,
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.PipelineName, name));
+            Metrics.PipelineExecutions.Add(1,
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.PipelineName, name));
 
-        var pipelineStopwatch = Stopwatch.StartNew();
+            Stopwatch pipelineStopwatch = Stopwatch.StartNew();
 
-        // Execute main steps and handle NextSteps recursively 
-        currentResult = await ExecuteStepsWithNextStepsAsync(
-            steps, currentResult, context, middlewareChain, name, logger, pipelineActivity, pipelineCancellationToken);
+            currentResult = await ExecuteStepsWithNextStepsAsync(
+                steps, currentResult, context, middlewareChain, name, logger, pipelineActivity, pipelineCancellationToken, isBranchScope: false);
 
-        pipelineStopwatch.Stop();
-        pipelineActivity?.SetStatus(currentResult.HasError ? ActivityStatusCode.Error : ActivityStatusCode.Ok);
+            pipelineStopwatch.Stop();
+            pipelineActivity?.SetStatus(currentResult.HasError ? ActivityStatusCode.Error : ActivityStatusCode.Ok);
 
-        // Record pipeline duration metric
-        Metrics.PipelineDuration.Record(pipelineStopwatch.Elapsed.TotalMilliseconds,
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.PipelineName, name),
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.StepSuccess, !currentResult.HasError));
+            var isSuspended = currentResult.SuspendInfo != null;
+            var success = !currentResult.HasError && !isSuspended;
 
-        logger.LogInformation("Pipeline {Name} completed with status: {Status}, duration: {Duration}ms",
-            name, currentResult.HasError ? "Error" : "Success", pipelineStopwatch.ElapsedMilliseconds);
+            Metrics.PipelineDuration.Record(pipelineStopwatch.Elapsed.TotalMilliseconds,
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.PipelineName, name),
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.StepSuccess, success));
 
-        // Send pipeline completed event
-        await context.SendEventAsync(new PipelineCompletedEvent
+            logger.LogInformation("Pipeline {Name} completed with status: {Status}, duration: {Duration}ms",
+                name, currentResult.HasError ? "Error" : isSuspended ? "Suspended" : "Success", pipelineStopwatch.ElapsedMilliseconds);
+
+            await context.SendEventAsync(new PipelineCompletedEvent
+            {
+                StepName = name,
+                PipelineName = name,
+                Success = success,
+                Duration = pipelineStopwatch.Elapsed,
+                ErrorMessage = currentResult.HasError
+                    ? currentResult.Error?.Message
+                    : isSuspended
+                        ? "Suspended awaiting input"
+                        : null,
+                CorrelationId = context.CorrelationId,
+                SchemaVersion = "1.0"
+            }, pipelineCancellationToken);
+
+            return currentResult;
+        }
+        finally
         {
-            StepName = name,
-            PipelineName = name,
-            Success = !currentResult.HasError,
-            Duration = pipelineStopwatch.Elapsed,
-            ErrorMessage = currentResult.Error?.Message,
-            CorrelationId = context.CorrelationId
-        }, pipelineCancellationToken);
+            linkedCts?.Dispose();
 
-        return currentResult;
+            // Complete the local channel if it was created specifically for this execution (different from the DI singleton)
+            if (context?.EventChannel is IAsyncDisposable asyncDisposable)
+            {
+                var globalChannel = (IEventChannel?)context.ServiceProvider.GetService(typeof(IEventChannel));
+                if (context.EventChannel != globalChannel)
+                {
+                    await asyncDisposable.DisposeAsync();
+                }
+            }
+        }
     }
+
 
     /// <summary>
     /// Executes steps with NextSteps support. Used by ParallelStep.
     /// Creates middleware chain internally (middlewares are stateless).
     /// </summary>
-    internal static Task<IStepResult> ExecuteStepsWithNextStepsAsync(
+    internal Task<IStepResult> ExecuteStepsWithNextStepsAsync(
         IReadOnlyList<IStep> steps,
         IStepResult currentResult,
         PipelineContext context,
         string pipelineName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool isBranchScope = false)
     {
-        var middlewares = new List<IPipelineMiddleware>([.. PipelineMiddlewareRegistry.GetMiddlewares(), .. CreateInternalMiddlewares(LoggerFactory)]);
+        List<IPipelineMiddleware> middlewares = new([.. PipelineMiddlewareRegistry.GetMiddlewares(), .. CreateInternalMiddlewares()]);
         var chain = BuildMiddlewareChain(middlewares);
-        var logger = LoggerFactory.CreateLogger(typeof(Pipeline));
-        return ExecuteStepsWithNextStepsAsync(steps, currentResult, context, chain, pipelineName, logger, null, cancellationToken);
+        return ExecuteStepsWithNextStepsAsync(steps, currentResult, context, chain, pipelineName, _logger, null, cancellationToken, isBranchScope);
     }
 
     private static async Task<IStepResult> ExecuteStepsWithNextStepsAsync(
@@ -166,17 +255,17 @@ public static class Pipeline
         string pipelineName,
         ILogger logger,
         Activity? pipelineActivity,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool isBranchScope)
     {
-
         foreach (var step in steps)
         {
-
-
             // Create logging scope for this step
-            using (logger.BeginScope(new { Path = context.CurrentPath, Step = step.Name, context.CorrelationId }))
+            using (logger.BeginScope(new { Path = context.CurrentStepPath, Step = step.Name, context.CorrelationId }))
             {
-                // Execute the current step
+                var stepKey = $"{(string.IsNullOrWhiteSpace(context.CurrentStepPath) ? "" : $"{context.CurrentStepPath}/")}{step.Name}";
+
+                // 1. Execute the current step (or fetch from Cache/RAW)
                 currentResult = await ExecuteStepAsync(
                     step,
                     currentResult,
@@ -185,6 +274,8 @@ public static class Pipeline
                     logger,
                     cancellationToken);
 
+                // 2. If it errored or suspended natively, PAUSE execution & BUBBLE up
+                //    Notice we DO NOT cache it yet!
                 if (currentResult.HasError)
                 {
                     pipelineActivity?.SetStatus(ActivityStatusCode.Error, currentResult.Error?.Message);
@@ -194,26 +285,72 @@ public static class Pipeline
                     return currentResult;
                 }
 
+                if (currentResult.SuspendInfo != null)
+                {
+                    if (step.Resume == null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Step '{step.Name}' returned SuspendInfo but does not implement IResume. " +
+                            $"Either implement IResume on the step or remove the SuspendInfo from its result.");
+                    }
+
+                    // The state is stored separately in metadata and NOT written to baseResult.Value,
+                    // which preserves whatever partial value the step computed.
+                    var state = await step.Resume.SaveStateAsync(step);
+                    context.Metadata[ResumeStateKey(context)] = state;
+
+                    logger.LogInformation("Pipeline {Name} suspended at step {StepName} awaiting human input.", pipelineName, step.Name);
+                    await context.SendEventAsync(new PipelineSuspendedEvent
+                    {
+                        StepName = step.Name,
+                        CorrelationId = context.CorrelationId,
+                        Timestamp = DateTimeOffset.UtcNow,
+                        TargetStepPath = stepKey,
+                        IsBranchSuspension = isBranchScope,
+                        BranchName = isBranchScope
+                            ? (string.IsNullOrWhiteSpace(context.CurrentStepPath) ? null : context.CurrentStepPath.Split('/')[0])
+                            : null,
+                        SchemaVersion = "1.0"
+                    }, cancellationToken);
+                    context.StepResults[stepKey] = currentResult;
+                    return currentResult;
+                }
+
+                // 3. Process dynamic children (NextSteps)
                 if (currentResult.NextSteps.Count > 0)
                 {
                     context.AddPathPart(step.Name);
 
-                    // Copy NextSteps and CLEAR them immediately to prevent re-execution
-                    var stepsToExecute = currentResult.NextSteps.ToList();
+                    // Copy NextSteps and CLEAR them immediately to prevent re-execution on next run cache hits
+                    List<IStep> stepsToExecute = currentResult.NextSteps.ToList();
                     currentResult.NextSteps.Clear();
 
-                    currentResult = await ExecuteStepsWithNextStepsAsync(
-                        stepsToExecute.AsReadOnly(), // Use the copy
+                    var childrenResult = await ExecuteStepsWithNextStepsAsync(
+                        stepsToExecute.AsReadOnly(),
                         currentResult,
                         context,
                         middlewareChain,
                         pipelineName,
                         logger,
                         pipelineActivity,
-                        cancellationToken);
+                        cancellationToken,
+                        isBranchScope);
 
                     context.RemovePathPart();
+
+                    if (childrenResult.HasError || childrenResult.SuspendInfo != null)
+                    {
+                        return childrenResult;
+                    }
+
+                    // Otherwise, adopt the last child's result to continue standard linear flow
+                    currentResult = childrenResult;
                 }
+
+                // 4. CACHEO DIFERIDO (DEFERRED CACHE):
+                // We reached here ONLY because the step and all its recursive NextSteps finished successfully.
+                // We are now safe to commit the step to the DB cache.
+                context.StepResults[stepKey] = currentResult;
             }
         }
 
@@ -222,6 +359,7 @@ public static class Pipeline
 
     /// <summary>
     /// Executes a single step through the pre-built middleware chain.
+    /// Acts as a volatile dispatcher: does NOT cache the execution result itself.
     /// </summary>
     private static async Task<IStepResult> ExecuteStepAsync(
         IStep step,
@@ -229,26 +367,43 @@ public static class Pipeline
         PipelineContext context,
         StepExecutor middlewareChain,
         ILogger logger,
-        CancellationToken cancellationToken
-        )
+        CancellationToken cancellationToken)
     {
-
         try
         {
-            var key = $"{(string.IsNullOrWhiteSpace(context.CurrentPath) ? "" : $"{context.CurrentPath}/")}{step.Name}";
+            var key = $"{(string.IsNullOrWhiteSpace(context.CurrentStepPath) ? "" : $"{context.CurrentStepPath}/")}{step.Name}";
 
+            // Check if the step completed (or was suspended) in a prior run
             if (context.StepResults.TryGetValue(key, out var value))
             {
                 logger.LogDebug("Using stored result for step {StepName} with key {Key}", step.Name, key);
-                // Clear NextSteps from cached result - they were already executed
-                value.NextSteps.Clear();
-                return value;
+
+                if (value.SuspendInfo != null)
+                {
+                    if (context.Metadata.TryRemove(PendingResumeKey(context), out var pending)
+                        && (pending is IStepResult pendingResume)
+                        && context.Metadata.TryRemove(ResumeStateKey(context), out var state))
+                    {
+                        logger.LogDebug("Resuming suspended step {StepName} with IResumeResponse.", step.Name);
+                        if (step.Resume != null)
+                        {
+                            await step.Resume.RestoreStateAsync(step, state, pendingResume.Value);
+                        }
+
+                    }
+                    else
+                    {
+                        return value;
+                    }
+                }
+                else
+                {
+                    return value;
+                }
             }
+
+            // Execute the step (either fresh or resumed)
             var result = await middlewareChain(step, input, context, cancellationToken);
-
-            context.StepResults[key] = result;
-            logger.LogDebug("Stored result for step {StepName} with key {Key}", step.Name, key);
-
             return result;
         }
         catch (Exception ex)
@@ -256,7 +411,6 @@ public static class Pipeline
             logger.LogError(ex, "Step {Step} failed with exception", step.Name);
             return ErrorStepResult.FromException(new EmptyStep(), ex);
         }
-
     }
 
     /// <summary>
@@ -286,10 +440,10 @@ public static class Pipeline
     /// - Timeout: global timeout for ALL retry attempts
     /// - Retry: terminal middleware, executes step.ExecuteAsync directly (doesn't call next)
     /// </summary>
-    private static List<IPipelineMiddleware> CreateInternalMiddlewares(ILoggerFactory loggerFactory) =>
+    private List<IPipelineMiddleware> CreateInternalMiddlewares() =>
     [
         new ObservabilityMiddleware(),
-        new TimeoutMiddleware(loggerFactory.CreateLogger<TimeoutMiddleware>(), DefaultStepTimeout),
-        new RetryMiddleware(loggerFactory.CreateLogger<RetryMiddleware>())
+        new TimeoutMiddleware(_loggerFactory.CreateLogger<TimeoutMiddleware>(), DefaultStepTimeout),
+        new RetryMiddleware(_loggerFactory.CreateLogger<RetryMiddleware>())
     ];
 }

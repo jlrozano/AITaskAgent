@@ -1,6 +1,5 @@
 namespace AITaskAgent.LLM.Streaming;
 
-using AITaskAgent.Core;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Observability.Events;
 using Microsoft.Extensions.Logging;
@@ -21,10 +20,6 @@ public abstract class StreamingTagHandlerBase : IStreamingTagHandler
     /// <summary>Gets the logger for this handler.</summary>
     protected abstract ILogger Logger { get; }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // TEMPLATE METHOD PATTERN - Controls flow and emits events
-    // ═══════════════════════════════════════════════════════════════════════════
-
     /// <summary>
     /// Called when tag opening is detected. Emits TagStartedEvent and calls internal logic.
     /// </summary>
@@ -33,23 +28,23 @@ public abstract class StreamingTagHandlerBase : IStreamingTagHandler
         PipelineContext context,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        Stopwatch stopwatch = Stopwatch.StartNew();
 
         // Emit started event
-        var startedEvent = new TagStartedEvent
+        TagStartedEvent startedEvent = new()
         {
             StepName = "StreamingTag",
             TagName = TagName,
             Attributes = attributes,
             CorrelationId = context.CorrelationId
         };
-        var enrichedStartedEvent = EnrichStartedEvent(startedEvent, attributes, context);
+        TagStartedEvent enrichedStartedEvent = EnrichStartedEvent(startedEvent, attributes, context);
         await context.SendEventAsync(enrichedStartedEvent, cancellationToken);
 
         Logger.LogDebug("Tag {TagName} starting with {AttributeCount} attributes", TagName, attributes.Count);
 
         // Call internal logic
-        var tagContext = await InternalOnTagStartAsync(attributes, context, cancellationToken);
+        ITagContext? tagContext = await InternalOnTagStartAsync(attributes, context, cancellationToken);
 
         // Store stopwatch in context for duration calculation
         if (tagContext is StreamingTagContextBase baseContext)
@@ -78,7 +73,7 @@ public abstract class StreamingTagHandlerBase : IStreamingTagHandler
         ITagContext tagContext,
         CancellationToken cancellationToken)
     {
-        var stopwatch = (tagContext as StreamingTagContextBase)?.Stopwatch ?? Stopwatch.StartNew();
+        Stopwatch stopwatch = (tagContext as StreamingTagContextBase)?.Stopwatch ?? Stopwatch.StartNew();
         string? placeholder = null;
         string? errorMessage = null;
         var success = true;
@@ -102,7 +97,7 @@ public abstract class StreamingTagHandlerBase : IStreamingTagHandler
         finally
         {
             // Emit completed event
-            var completedEvent = new TagCompletedEvent
+            TagCompletedEvent completedEvent = new()
             {
                 StepName = "StreamingTag",
                 TagName = TagName,
@@ -111,8 +106,8 @@ public abstract class StreamingTagHandlerBase : IStreamingTagHandler
                 ErrorMessage = errorMessage,
                 CorrelationId = (tagContext as StreamingTagContextBase)?.CorrelationId
             };
-            var enrichedCompletedEvent = EnrichCompletedEvent(completedEvent, placeholder, tagContext);
-            var pipelineContext = (tagContext as StreamingTagContextBase)?.PipelineContext;
+            TagCompletedEvent enrichedCompletedEvent = EnrichCompletedEvent(completedEvent, placeholder, tagContext);
+            PipelineContext? pipelineContext = (tagContext as StreamingTagContextBase)?.PipelineContext;
             if (pipelineContext != null)
             {
                 await pipelineContext.SendEventAsync(enrichedCompletedEvent, cancellationToken);
@@ -131,10 +126,10 @@ public abstract class StreamingTagHandlerBase : IStreamingTagHandler
         PipelineContext context,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        Stopwatch stopwatch = Stopwatch.StartNew();
 
         // Emit started event
-        var startedEvent = new TagStartedEvent
+        TagStartedEvent startedEvent = new()
         {
             StepName = "BatchTag",
             TagName = TagName,
@@ -163,7 +158,7 @@ public abstract class StreamingTagHandlerBase : IStreamingTagHandler
         finally
         {
             // Emit completed event
-            var completedEvent = new TagCompletedEvent
+            TagCompletedEvent completedEvent = new()
             {
                 StepName = "BatchTag",
                 TagName = TagName,

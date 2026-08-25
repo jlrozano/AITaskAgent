@@ -42,13 +42,13 @@ public sealed class YamlFileConversationStorage : IConversationStorage
     {
         ArgumentNullException.ThrowIfNull(conversation);
 
-        var conversationId = NormalizeConversationId(conversation.ConversationId);
-        var filePath = GetFilePath(conversationId);
+        string conversationId = NormalizeConversationId(conversation.ConversationId);
+        string filePath = GetFilePath(conversationId);
 
         LegacySessionDocument document;
         if (File.Exists(filePath))
         {
-            var existingYaml = await File.ReadAllTextAsync(filePath, cancellationToken);
+            string existingYaml = await File.ReadAllTextAsync(filePath, cancellationToken);
             document = _deserializer.Deserialize<LegacySessionDocument>(existingYaml) ?? new LegacySessionDocument();
         }
         else
@@ -69,7 +69,7 @@ public sealed class YamlFileConversationStorage : IConversationStorage
 
         document.Events ??= [];
 
-        var yaml = _serializer.Serialize(document);
+        string yaml = _serializer.Serialize(document);
         await File.WriteAllTextAsync(filePath, yaml, cancellationToken);
     }
 
@@ -78,23 +78,23 @@ public sealed class YamlFileConversationStorage : IConversationStorage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
 
-        var normalizedId = NormalizeConversationId(conversationId);
-        var filePath = GetFilePath(normalizedId);
+        string normalizedId = NormalizeConversationId(conversationId);
+        string filePath = GetFilePath(normalizedId);
 
         if (!File.Exists(filePath))
         {
             return null;
         }
 
-        var yaml = await File.ReadAllTextAsync(filePath, cancellationToken);
-        var document = _deserializer.Deserialize<LegacySessionDocument>(yaml);
+        string yaml = await File.ReadAllTextAsync(filePath, cancellationToken);
+        LegacySessionDocument document = _deserializer.Deserialize<LegacySessionDocument>(yaml);
         if (document == null)
         {
             return null;
         }
 
-        var startedAt = TryParseUtcTimestamp(document.StartedAt) ?? DateTime.UtcNow;
-        var lastActivityAt = TryParseUtcTimestamp(document.CompletedAt) ?? startedAt;
+        DateTime startedAt = TryParseUtcTimestamp(document.StartedAt) ?? DateTime.UtcNow;
+        DateTime lastActivityAt = TryParseUtcTimestamp(document.CompletedAt) ?? startedAt;
 
         var metadata = new Dictionary<string, object?>
         {
@@ -112,9 +112,9 @@ public sealed class YamlFileConversationStorage : IConversationStorage
 
         if (document.Messages != null)
         {
-            foreach (var legacyMessage in document.Messages)
+            foreach (LegacySessionMessage legacyMessage in document.Messages)
             {
-                var message = FromLegacyMessage(legacyMessage);
+                Message? message = FromLegacyMessage(legacyMessage);
                 if (message == null)
                 {
                     continue;
@@ -122,7 +122,7 @@ public sealed class YamlFileConversationStorage : IConversationStorage
 
                 context.AddMessage(message);
 
-                var messageTimestamp = TryParseUtcTimestamp(legacyMessage.Timestamp);
+                DateTime? messageTimestamp = TryParseUtcTimestamp(legacyMessage.Timestamp);
                 if (messageTimestamp.HasValue && messageTimestamp.Value > context.LastActivityAt)
                 {
                     context.LastActivityAt = messageTimestamp.Value;
@@ -143,14 +143,14 @@ public sealed class YamlFileConversationStorage : IConversationStorage
 
     private string GetFilePath(string normalizedConversationId)
     {
-        var sessionId = EnsureSessionPrefix(normalizedConversationId);
-        var safeId = string.Join("_", sessionId.Split(Path.GetInvalidFileNameChars()));
+        string sessionId = EnsureSessionPrefix(normalizedConversationId);
+        string safeId = string.Join("_", sessionId.Split(Path.GetInvalidFileNameChars()));
         return Path.Combine(_basePath, $"{safeId}.yaml");
     }
 
     private static LegacySessionMessage ToLegacyMessage(Message message)
     {
-        var role = message.Role switch
+        string role = message.Role switch
         {
             LlmConstants.MessageRoles.User => "user",
             LlmConstants.MessageRoles.Assistant => string.Equals(message.Name, "orchestrator", StringComparison.OrdinalIgnoreCase)
@@ -175,7 +175,7 @@ public sealed class YamlFileConversationStorage : IConversationStorage
             return null;
         }
 
-        var frameworkRole = legacyMessage.Role switch
+        string frameworkRole = legacyMessage.Role switch
         {
             "user" => LlmConstants.MessageRoles.User,
             "orchestrator" or "agent" => LlmConstants.MessageRoles.Assistant,
@@ -192,17 +192,11 @@ public sealed class YamlFileConversationStorage : IConversationStorage
 
     private static DateTime? TryParseUtcTimestamp(string? timestamp)
     {
-        if (string.IsNullOrWhiteSpace(timestamp))
-        {
-            return null;
-        }
-
-        if (DateTime.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt))
-        {
-            return dt;
-        }
-
-        return null;
+        return string.IsNullOrWhiteSpace(timestamp)
+            ? null
+            : DateTime.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out global::System.DateTime dt)
+            ? dt
+            : null;
     }
 
     private static string FormatUtcTimestamp(DateTime? timestamp)
@@ -212,19 +206,22 @@ public sealed class YamlFileConversationStorage : IConversationStorage
 
     private static string? GetMetadataString(IDictionary<string, object?>? metadata, string key)
     {
-        if (metadata != null && metadata.TryGetValue(key, out var value) && value is string s)
-        {
-            return s;
-        }
-        return null;
+        return metadata != null && metadata.TryGetValue(key, out object? value) && value is string s ? s : null;
     }
 
     private static List<string>? GetMetadataStringList(IDictionary<string, object?>? metadata, string key)
     {
-        if (metadata != null && metadata.TryGetValue(key, out var value))
+        if (metadata != null && metadata.TryGetValue(key, out object? value))
         {
-            if (value is List<string> list) return list;
-            if (value is IEnumerable<object> objList) return objList.Select(o => o.ToString() ?? "").ToList();
+            if (value is List<string> list)
+            {
+                return list;
+            }
+
+            if (value is IEnumerable<object> objList)
+            {
+                return objList.Select(o => o.ToString() ?? "").ToList();
+            }
         }
         return null;
     }

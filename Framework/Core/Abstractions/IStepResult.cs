@@ -13,13 +13,14 @@ public interface IStepResult
     /// <summary>Gets error information if HasError is true.</summary>
     IStepError? Error { get; set; }
 
+    /// <summary>Gets or sets information related to suspension.</summary>
+    object? SuspendInfo { get; set; }
+
     /// <summary>Validates the result content.</summary>
     Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
         => Task.FromResult((true, (string?)null));
-
-    /// <summary>Gets the step that produced this result.</summary>
-    IStep Step { get; }
-
+    string StepName { get; }
+    string StepType { get; }
     /// <summary>Gets the result value.</summary>
     object? Value { get; }
 

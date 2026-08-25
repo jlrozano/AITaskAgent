@@ -1,7 +1,7 @@
 using AITaskAgent.Core.Abstractions;
-using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Observability.Events;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace AITaskAgent.Core.Steps;
@@ -21,20 +21,33 @@ public class SwitchStep<TIn>(
 
 {
     private readonly Func<TIn, PipelineContext, (IStep, IStepResult value)> _selector = selector ?? throw new ArgumentNullException(nameof(selector));
+    private Type _outType = typeof(IStepResult);
+    protected SwitchStep(string name) : this(name, (input, context) => (null!, null!))
+    {
+        _selector = SelectTargetStep;
+    }
+
+    protected virtual (IStep, IStepResult value) SelectTargetStep(TIn input, PipelineContext context)
+    {
+        throw new NotImplementedException();
+    }
 
     public string Name { get; } = name;
 
-    public Type InputType => typeof(TIn);
+    Type IStep.InputType => typeof(TIn);
 
-    public Type OutputType { get; set; } = typeof(IStepResult);
+    Type IStep.OutputType => _outType;
+
+    public IResume? Resume => null;
 
     async Task<IStepResult> IStep.ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken cancellationToken)
     {
-        var logger = Pipeline.LoggerFactory.CreateLogger<SwitchStep<TIn>>();
         try
         {
+            ILogger<SwitchStep<TIn>> logger = context.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<SwitchStep<TIn>>();
+
             // Execute selector to determine target step
-            (var targetStep, var value) = _selector((TIn)input, context);
+            (IStep? targetStep, IStepResult? value) = _selector((TIn)input, context);
 
             // exceptions break de pipeline. ErrorStepResult is used to continue the pipeline.
             if (targetStep == null || value == null)
@@ -42,8 +55,7 @@ public class SwitchStep<TIn>(
                 throw new InvalidOperationException("Selector returned null - no route selected");
             }
 
-            OutputType = value.GetType();
-            value.NextSteps.Clear();
+            _outType = value.GetType();
             value.NextSteps.Add(targetStep);
 
             // Send routing event
@@ -65,6 +77,7 @@ public class SwitchStep<TIn>(
         }
         catch (Exception ex)
         {
+            ILogger<SwitchStep<TIn>> logger = context.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<SwitchStep<TIn>>();
             logger.LogError(ex, "Selector failed in {StepName}", Name);
             throw;
         }

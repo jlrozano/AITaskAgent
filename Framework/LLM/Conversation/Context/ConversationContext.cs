@@ -1,5 +1,4 @@
 using AITaskAgent.LLM.Constants;
-using AITaskAgent.LLM.Conversation.Models;
 using AITaskAgent.LLM.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -69,7 +68,7 @@ public sealed class ConversationContext(
     /// </summary>
     public ConversationContext AddAssistantMessageWithToolCalls(IEnumerable<ToolCall> toolCalls)
     {
-        var toolCallList = toolCalls.ToList();
+        List<ToolCall> toolCallList = toolCalls.ToList();
         History.AddMessage(new Message
         {
             Role = LlmConstants.MessageRoles.Assistant,
@@ -128,7 +127,7 @@ public sealed class ConversationContext(
     /// </summary>
     public string CreateBookmark()
     {
-        var bookmark = History.CreateBookmark();
+        string bookmark = History.CreateBookmark();
         _logger.LogDebug("Created bookmark {BookmarkId} at position {Position} in conversation {ConversationId}",
             bookmark, History.Messages.Count, ConversationId);
         return bookmark;
@@ -139,7 +138,7 @@ public sealed class ConversationContext(
     /// </summary>
     public void RestoreBookmark(string bookmark)
     {
-        var messagesBefore = History.Messages.Count;
+        int messagesBefore = History.Messages.Count;
         History.ClearAfterBookmark(bookmark);
         _logger.LogDebug("Restored bookmark {BookmarkId} in conversation {ConversationId}, removed {RemovedCount} messages",
             bookmark, ConversationId, messagesBefore - History.Messages.Count);
@@ -173,7 +172,7 @@ public sealed class ConversationContext(
     /// </summary>
     public ConversationContext Clone()
     {
-        var clone = new ConversationContext(History.MaxTokens, History.TokenCounter, _logger)
+        ConversationContext clone = new(History.MaxTokens, History.TokenCounter, _logger)
         {
             ConversationId = ConversationId, // Keep same ID to represent same logical conversation in parallel branches
             Metadata = new Dictionary<string, object?>(Metadata),

@@ -1,91 +1,144 @@
 using AITaskAgent.Core.Abstractions;
-using AITaskAgent.Core.Execution;
+using AITaskAgent.Core.Attributes;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.StepResults;
+using AITaskAgent.Observability.Events;
 using Microsoft.Extensions.Logging;
-using System.Text;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace AITaskAgent.Core.Steps;
 
 /// <summary>
-/// A step that executes multiple branches in parallel and aggregates their results.
-/// All branches receive the same input and execute concurrently.
-/// Each branch passes through the full middleware chain (Observability, Timeout, Retry).
-/// Each branch gets its own cloned Conversation context to prevent conflicts.
-/// NextSteps from each branch are also executed.
+/// Non-generic base for parallel execution. Directly serializable from YAML via <c>!ParallelStep</c>.
+/// Executes all branches concurrently; each branch gets an isolated conversation context.
 /// </summary>
-/// <typeparam name="TIn">The input type for all branches.</typeparam>
-public sealed class ParallelStep<TIn> : TypedStep<TIn, ParallelResult>
-    where TIn : StepResult
+[StepTag("ParallelStep")]
+public class ParallelStep : StepBase
 {
-    private readonly List<IStep> _steps;
+    private readonly List<IStep> _branches = [];
 
-    public ParallelStep(string name, params IStep[] steps) : base(name)
+    /// <summary>Parameterless ctor for YAML deserialization.</summary>
+    public ParallelStep() : base("ParallelStep", typeof(IStepResult), typeof(ParallelResult))
     {
-        _steps = [.. steps];
-        MaxRetries = 1; // ParallelStep itself does not retry; 
+        MaxRetries = 1;
+    }
+
+    /// <summary>Programmatic ctor.</summary>
+    public ParallelStep(string name, params IStep[] branches)
+        : base(name, typeof(IStepResult), typeof(ParallelResult))
+    {
+        _branches.AddRange(branches);
+        MaxRetries = 1;
     }
 
     /// <summary>
-    /// Gets the steps that execute in parallel.
+    /// Branch steps to execute in parallel. Set via YAML deserialization or programmatic ctor.
     /// </summary>
-    public IReadOnlyList<IStep> Steps => _steps;
-
-    protected override async Task<ParallelResult> ExecuteAsync(
-        TIn input,
-        PipelineContext context,
-        int attempt,
-        ParallelResult? lastStepResult,
-        CancellationToken cancellationToken)
+    public List<IStep> Branches
     {
-        var result = new ParallelResult(this);
-        var errorMessages = new StringBuilder();
+        get => _branches;
+        init => _branches = value ?? [];
+    }
 
-        await Parallel.ForEachAsync(_steps, cancellationToken, async (step, ct) =>
+    /// <inheritdoc/>
+    protected override async Task<IStepResult> ExecuteAsync(
+        IStepResult input, PipelineContext context, int attempt,
+        IStepResult? lastStepResult, CancellationToken cancellationToken)
+    {
+        ParallelResult result = new(this);
+        ConcurrentBag<string> errorMessages = [];
+
+        await Parallel.ForEachAsync(_branches, cancellationToken, async (step, ct) =>
         {
-            // Clone context for this branch (isolated Conversation, shared StepResults/Metadata)
-            var branchContext = context.CloneForBranch();
-
+            PipelineContext branchContext = context.CloneForBranch();
+            var branchId = Guid.NewGuid().ToString();
             try
             {
-                // Build branch path: parentPath/ParallelStepName
-                context.AddPathPart(step.Name);
+                branchContext.AddPathPart(step.Name);
+                await branchContext.SendEventAsync(new BranchStartedEvent
+                {
+                    StepName = Name,
+                    StepPath = branchContext.CurrentStepPath,
+                    CorrelationId = branchContext.CorrelationId,
+                    Timestamp = DateTimeOffset.UtcNow,
+                    SchemaVersion = "1.0",
+                    BranchName = step.Name,
+                    BranchId = branchId
+                }, ct);
 
-                // Execute through full middleware chain with NextSteps support
-                var stepResult = await Pipeline.ExecuteStepsWithNextStepsAsync(
-                    [step],        // Single step list
-                    input,         // Input
-                    branchContext, // Cloned context
-                    Name,          // Pipeline name (for logging)
-                    ct);           // Cancellation token
-
-                context.RemovePathPart();
+                Stopwatch branchStopwatch = Stopwatch.StartNew();
+                IStepResult stepResult = await context.ExecuteStepsWithNextStepsAsync(
+                    [step], input, Name, ct, isBranchScope: true);
+                branchStopwatch.Stop();
                 result.AddResult(step.Name, stepResult);
 
                 if (stepResult.HasError)
                 {
-                    errorMessages.AppendLine($"Step {step.Name} error: {stepResult.Error?.Message}");
-                    Logger.LogWarning(
-                        "Parallel branch {StepName} completed with error: {Error}",
+                    errorMessages.Add($"Step {step.Name} error: {stepResult.Error?.Message}");
+                    Logger.LogWarning("Parallel branch {StepName} completed with error: {Error}",
                         step.Name, stepResult.Error?.Message);
                 }
+
+                await branchContext.SendEventAsync(new BranchCompletedEvent
+                {
+                    StepName = Name,
+                    StepPath = branchContext.CurrentStepPath,
+                    CorrelationId = branchContext.CorrelationId,
+                    Timestamp = DateTimeOffset.UtcNow,
+                    SchemaVersion = "1.0",
+                    BranchName = step.Name,
+                    BranchId = branchId,
+                    Success = !stepResult.HasError && stepResult.SuspendInfo == null,
+                    Duration = branchStopwatch.Elapsed,
+                    ErrorMessage = stepResult.HasError ? stepResult.Error?.Message : null
+                }, ct);
+
+                branchContext.RemovePathPart();
             }
             catch (Exception ex)
             {
                 Logger.LogError(ex, "Parallel branch {StepName} threw exception", step.Name);
                 result.AddResult(step.Name, ErrorStepResult.FromMessage(this, ex.Message));
-                errorMessages.AppendLine($"Step {step.Name} exception: {ex.Message}");
+                errorMessages.Add($"Step {step.Name} exception: {ex.Message}");
+
+                await branchContext.SendEventAsync(new BranchCompletedEvent
+                {
+                    StepName = Name,
+                    StepPath = branchContext.CurrentStepPath,
+                    CorrelationId = branchContext.CorrelationId,
+                    Timestamp = DateTimeOffset.UtcNow,
+                    SchemaVersion = "1.0",
+                    BranchName = step.Name,
+                    BranchId = branchId,
+                    Success = false,
+                    Duration = TimeSpan.Zero,
+                    ErrorMessage = ex.Message
+                }, ct);
+
+                branchContext.RemovePathPart();
             }
         });
 
-        if (errorMessages.Length > 0)
+        if (!errorMessages.IsEmpty)
         {
-            result.Error = new StepError
-            {
-                Message = errorMessages.ToString()
-            };
+            result.Error = new StepError { Message = string.Join(Environment.NewLine, errorMessages) };
         }
 
         return result;
+    }
+}
+
+/// <summary>
+/// Typed variant for programmatic use. Constrains input to <typeparamref name="TIn"/>.
+/// </summary>
+/// <typeparam name="TIn">The input type for all branches.</typeparam>
+public sealed class ParallelStep<TIn> : ParallelStep
+    where TIn : StepResult
+{
+    public ParallelStep(string name, params IStep[] branches)
+        : base(name, branches)
+    {
+        InputType = typeof(TIn);
     }
 }

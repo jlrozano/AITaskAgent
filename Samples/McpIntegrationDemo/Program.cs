@@ -1,13 +1,26 @@
+using AITaskAgent.Configuration;
+using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
+using AITaskAgent.LLM.Abstractions;
+using AITaskAgent.LLM.Configuration;
+using AITaskAgent.LLM.Constants;
+using AITaskAgent.LLM.Conversation.Context;
+using AITaskAgent.LLM.Models;
+using AITaskAgent.LLM.Tools.Abstractions;
 using AITaskAgent.LLM.Tools.Implementation;
+using GeminiLlmService;
 using McpIntegration.Configuration;
 using McpIntegration.Extensions;
 using McpIntegration.Providers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
+using OpenAILLmService;
 using Serilog;
+using System.Text.RegularExpressions;
 
 namespace Samples.McpIntegrationDemo;
 
@@ -17,16 +30,17 @@ namespace Samples.McpIntegrationDemo;
 /// </summary>
 public static class Program
 {
-    /// <summary>
-    /// Entry point for the demo application.
-    /// </summary>
-    /// <param name="args">Command line arguments.</param>
     public static async Task Main(string[] args)
     {
-        // Configure Serilog
+        // Configure Serilog from appsettings.json
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false)
+            .AddEnvironmentVariables()
+            .Build();
+
         Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Information()
-            .WriteTo.Console()
+            .ReadFrom.Configuration(configuration)
             .CreateLogger();
 
         try
@@ -52,178 +66,166 @@ public static class Program
         Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
 
+        var baseDir = AppContext.BaseDirectory;
+
         // Build configuration
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: false)
+        var jsonPath = Path.Combine(baseDir, "appsettings.json");
+        var jsonContent = File.ReadAllText(jsonPath);
+
+        // Expand ${VARIABLE} placeholders
+        jsonContent = Regex.Replace(jsonContent, @"\${(\w+)}", m => 
+            Environment.GetEnvironmentVariable(m.Groups[1].Value) ?? m.Value);
+
+        using var jsonStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(jsonContent));
+
+        var config = new ConfigurationBuilder()
+            .AddJsonStream(jsonStream)
+            .AddEnvironmentVariables()
             .Build();
 
         // Setup DI
         var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(config);
         services.AddLogging(builder => builder.AddSerilog());
 
-        var serviceProvider = services.BuildServiceProvider();
-        var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
+        // Register LLM services
+        services.AddSingleton<OpenAILLmService.OpenAILlmService>();
+        services.AddSingleton<GeminiLlmService.GeminiLlmService>();
+
+        // Register them as ILlmService
+        services.AddSingleton<ILlmService>(sp => sp.GetRequiredService<OpenAILLmService.OpenAILlmService>());
+        services.AddSingleton<ILlmService>(sp => sp.GetRequiredService<GeminiLlmService.GeminiLlmService>());
+
+        services.AddAITaskAgent();
+        
+        // Setup Tools
+        var toolsRegistry = AvailableTools.Instance;
+        services.AddSingleton<ITools>(toolsRegistry);
+
+        var sp = services.BuildServiceProvider();
+        sp.UseAITaskAgent();
+
+
+        var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
         var logger = loggerFactory.CreateLogger<McpToolProvider>();
 
-        // Read config manually (could also use Options pattern)
+        // Read MCP config
         var serverConfig = new McpServerConfig
         {
-            Name = configuration["McpServer:Name"] ?? "TestServer",
+            Name = config["McpServer:Name"] ?? "TestServer",
             TransportType = Enum.Parse<McpTransportType>(
-                configuration["McpServer:TransportType"] ?? "StreamableHttp"),
-            Url = configuration["McpServer:Url"],
-            TimeoutSeconds = int.Parse(configuration["McpServer:TimeoutSeconds"] ?? "30"),
-            Headers = configuration.GetSection("McpServer:Headers")
+                config["McpServer:TransportType"] ?? "StreamableHttp"),
+            Url = config["McpServer:Url"],
+            TimeoutSeconds = int.Parse(config["McpServer:TimeoutSeconds"] ?? "30"),
+            Headers = config.GetSection("McpServer:Headers")
                 .GetChildren()
                 .ToDictionary(x => x.Key, x => x.Value!)
         };
 
         Console.WriteLine($"📡 Connecting to MCP server: {serverConfig.Name}");
         Console.WriteLine($"   URL: {serverConfig.Url}");
-        Console.WriteLine($"   Transport: {serverConfig.TransportType}");
         Console.WriteLine();
 
-        // Create and connect provider
-        await using var provider = new McpToolProvider(serverConfig, logger);
+        await using var mcpProvider = new McpToolProvider(serverConfig, logger);
 
         try
         {
-            await provider.ConnectAsync();
-            Console.WriteLine("✅ Connected successfully!");
-            Console.WriteLine();
+            await mcpProvider.ConnectAsync();
+            Console.WriteLine("✅ Connected to MCP!");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"❌ Connection failed: {ex.Message}");
-            Console.WriteLine();
-            Console.WriteLine("This might be because:");
-            Console.WriteLine("  - The server is temporarily unavailable");
-            Console.WriteLine("  - Network connectivity issues");
-            Console.WriteLine("  - The server URL has changed");
-            Console.WriteLine();
-
-            // Try with SSE transport as fallback
-            Console.WriteLine("🔄 Trying SSE transport as fallback...");
-            var sseConfig = serverConfig with
-            {
-                TransportType = McpTransportType.Sse,
-                Url = serverConfig.Url?.Replace("/api/mcp", "/api/sse")
-            };
-
-            await using var sseProvider = new McpToolProvider(sseConfig, logger);
-            try
-            {
-                await sseProvider.ConnectAsync();
-                Console.WriteLine("✅ Connected via SSE!");
-                await DemoWithProvider(sseProvider, loggerFactory);
-            }
-            catch
-            {
-                Console.WriteLine("❌ SSE fallback also failed. Server might be down.");
-            }
             return;
         }
 
-        await DemoWithProvider(provider, loggerFactory);
+        // Register MCP tools
+        var registeredCount = await toolsRegistry.RegisterMcpToolsAsync(mcpProvider);
+        Console.WriteLine($"✅ Registered {registeredCount} tool(s) in ToolRegistry");
+        Console.WriteLine();
+
+        // --- Execute with OpenRouter ---
+        await ExecuteDemoWithLlmAsync("OpenRouter", "openrouter-role", sp);
+
+        // --- Execute with Gemini ---
+        await ExecuteDemoWithLlmAsync("Gemini", "gemini-role", sp);
     }
 
-    private static async Task DemoWithProvider(
-        McpToolProvider provider,
-        ILoggerFactory loggerFactory)
+    private static async Task ExecuteDemoWithLlmAsync(string name, string roleName, IServiceProvider sp)
     {
-        var demoLogger = loggerFactory.CreateLogger("Demo");
+        Console.WriteLine($"═══════════════════════════════════════════════════════════════");
+        Console.WriteLine($"  Executing with {name} (Role: {roleName})");
+        Console.WriteLine($"═══════════════════════════════════════════════════════════════");
 
-        // ═══════════════════════════════════════════════════════════════════════
-        // STEP 1: List available tools
-        // ═══════════════════════════════════════════════════════════════════════
-        Console.WriteLine("═══════════════════════════════════════════════════════════════");
-        Console.WriteLine("  STEP 1: Listing Available Tools");
-        Console.WriteLine("═══════════════════════════════════════════════════════════════");
-
-        var tools = await provider.GetToolsAsync();
-        Console.WriteLine($"Found {tools.Count} tool(s):");
-        Console.WriteLine();
-
-        foreach (var tool in tools)
+        var env = sp.GetRequiredService<IOptions<LlmEnvironment>>().Value;
+        if (!env.Roles.TryGetValue(roleName, out var role))
         {
-            Console.WriteLine($"  🔧 {tool.Name}");
-            Console.WriteLine($"     Description: {tool.Description}");
-
-            var definition = tool.GetDefinition();
-            Console.WriteLine($"     Schema: {definition.ParametersJsonSchema}");
-            Console.WriteLine();
+            Console.WriteLine($"❌ Role {roleName} not found!");
+            return;
         }
 
-        // ═══════════════════════════════════════════════════════════════════════
-        // STEP 2: Execute calculate_sum tool
-        // ═══════════════════════════════════════════════════════════════════════
-        Console.WriteLine("═══════════════════════════════════════════════════════════════");
-        Console.WriteLine("  STEP 2: Executing calculate_sum Tool");
-        Console.WriteLine("═══════════════════════════════════════════════════════════════");
+        var llmService = role.Provider?.Service ?? throw new InvalidOperationException("Role provider service not initialized");
+        var conversation = new ConversationContext();
+        conversation.AddUserMessage("Use the 'calculate_sum' tool to add the numbers [10, 20, 30, 40, 50]. Then tell me the result.");
 
-        var sumTool = tools.FirstOrDefault(t =>
-            t.Name.Equals("calculate_sum", StringComparison.OrdinalIgnoreCase));
+        var toolNames = new[] { "calculate_sum" };
+        var tools = sp.GetRequiredService<ITools>().GetTools(toolNames);
+        var toolDefinitions = tools.Select(t => t.GetDefinition()).ToList();
 
-        if (sumTool is not null)
+        var request = new LlmRequest
         {
-            var numbers = new[] { 1, 2, 3, 4, 5 };
-            var argsJson = JsonConvert.SerializeObject(new { numbers });
+            Conversation = conversation,
+            Model = role.Model,
+            BaseUrl = role.Provider.BaseUrl,
+            ApiKey = role.Provider.ApiKey,
+            Tools = toolDefinitions,
+            Temperature = role.Inference?.Temperature ?? 0.7f
+        };
 
-            Console.WriteLine($"  Input: {string.Join(" + ", numbers)}");
-            Console.WriteLine();
-
-            // Create a minimal pipeline context for execution
-            var context = new PipelineContext();
-
-            try
+        try
+        {
+            Console.WriteLine("  Sending request...");
+            var response = await llmService.InvokeAsync(request);
+            
+            Console.WriteLine($"  ✅ Response: {response.Content}");
+            
+            if (response.ToolCalls != null && response.ToolCalls.Count > 0)
             {
-                var result = await sumTool.ExecuteAsync(
-                    argsJson,
-                    context,
-                    "demo-step",
-                    demoLogger);
-
-                Console.WriteLine($"  ✅ Result: {result}");
-                Console.WriteLine($"  Expected: {numbers.Sum()}");
+                Console.WriteLine($"  🛠️ Tool calls: {response.ToolCalls.Count}");
+                foreach (var toolCall in response.ToolCalls)
+                {
+                    Console.WriteLine($"    - {toolCall.Name}({toolCall.Arguments})");
+                    
+                    // Optional: Execute the tool
+                    var tool = tools.FirstOrDefault(t => t.Name == toolCall.Name);
+                    if (tool != null)
+                    {
+                        var toolResult = await tool.ExecuteAsync(
+                            toolCall.Arguments,
+                            new PipelineContext(),
+                            "demo-step",
+                            sp.GetRequiredService<ILoggerFactory>().CreateLogger("ToolExecutor"));
+                        
+                        Console.WriteLine($"      ↪ Tool Result: {toolResult}");
+                        
+                        // Add to conversation and follow up
+                        conversation.AddAssistantMessageWithToolCalls(new[] { toolCall });
+                        conversation.AddToolMessage(toolCall.Id, toolResult);
+                        
+                        Console.WriteLine("  Sending follow-up request...");
+                        var followUpResponse = await llmService.InvokeAsync(request with { Conversation = conversation });
+                        Console.WriteLine($"  ✅ Follow-up Response: {followUpResponse.Content}");
+                    }
+                }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"  ❌ Execution failed: {ex.Message}");
-            }
         }
-        else
+        catch (Exception ex)
         {
-            Console.WriteLine("  ⚠️ calculate_sum tool not found");
+            Console.WriteLine($"  ❌ Failed: {ex.Message}");
+            if (ex.InnerException != null)
+                Console.WriteLine($"     Inner: {ex.InnerException.Message}");
         }
 
-        Console.WriteLine();
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // STEP 3: Register tools in IToolRegistry
-        // ═══════════════════════════════════════════════════════════════════════
-        Console.WriteLine("═══════════════════════════════════════════════════════════════");
-        Console.WriteLine("  STEP 3: Registering Tools in IToolRegistry");
-        Console.WriteLine("═══════════════════════════════════════════════════════════════");
-
-        var registry = new ToolRegistry();
-        var registeredCount = await registry.RegisterMcpToolsAsync(provider);
-
-        Console.WriteLine($"  ✅ Registered {registeredCount} tool(s) in ToolRegistry");
-        Console.WriteLine();
-
-        // List registered tools
-        var allRegisteredTools = registry.GetAllTools();
-        Console.WriteLine("  Registered tools:");
-        foreach (var tool in allRegisteredTools)
-        {
-            Console.WriteLine($"    - {tool.Name}");
-        }
-
-        Console.WriteLine();
-        Console.WriteLine("═══════════════════════════════════════════════════════════════");
-        Console.WriteLine("  Demo completed successfully! 🎉");
-        Console.WriteLine("═══════════════════════════════════════════════════════════════");
         Console.WriteLine();
     }
 }

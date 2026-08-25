@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 /// <summary>
 /// State machine parser for detecting and processing XML tags in streaming LLM responses.
 /// </summary>
-public sealed class StreamingTagParser(List<IStreamingTagHandler> handlers)
+public sealed partial class StreamingTagParser(List<IStreamingTagHandler> handlers)
 {
     private enum ParserState
     {
@@ -35,9 +35,9 @@ public sealed class StreamingTagParser(List<IStreamingTagHandler> handlers)
         PipelineContext context,
         CancellationToken cancellationToken)
     {
-        var outputBuilder = new StringBuilder();
+        StringBuilder outputBuilder = new();
 
-        foreach (var ch in chunk)
+        foreach (char ch in chunk)
         {
             switch (_state)
             {
@@ -65,7 +65,7 @@ public sealed class StreamingTagParser(List<IStreamingTagHandler> handlers)
                     else if (ch == '>')
                     {
                         // Complete tag opening: <tagname attr="value">
-                        var tagContent = _tagBuffer.ToString();
+                        string tagContent = _tagBuffer.ToString();
                         var (tagName, attributes) = ParseOpeningTag(tagContent);
 
                         if (tagName != null && _handlers.TryGetValue(tagName, out var handler))
@@ -99,7 +99,7 @@ public sealed class StreamingTagParser(List<IStreamingTagHandler> handlers)
                     else
                     {
                         // Invalid tag character, treat as normal text
-                        _normalBuffer.Append(_tagBuffer.ToString());
+                        _ = _normalBuffer.Append(_tagBuffer);
                         _state = ParserState.Normal;
                         _tagBuffer.Clear();
                     }
@@ -128,13 +128,13 @@ public sealed class StreamingTagParser(List<IStreamingTagHandler> handlers)
                     if (ch == '>')
                     {
                         // Complete closing tag: </tagname>
-                        var closeTag = _tagBuffer.ToString();
-                        var closingTagName = ParseClosingTag(closeTag);
+                        string closeTag = _tagBuffer.ToString();
+                        string? closingTagName = ParseClosingTag(closeTag);
 
                         if (closingTagName == _activeTagName && _activeHandler != null && _activeContext != null)
                         {
                             // End tag processing
-                            var placeholder = await _activeHandler.OnTagEndAsync(_activeContext, cancellationToken);
+                            string? placeholder = await _activeHandler.OnTagEndAsync(_activeContext, cancellationToken);
 
                             if (!string.IsNullOrEmpty(placeholder))
                             {
@@ -176,7 +176,7 @@ public sealed class StreamingTagParser(List<IStreamingTagHandler> handlers)
         // Flush remaining normal buffer
         if (_normalBuffer.Length > 0)
         {
-            outputBuilder.Append(_normalBuffer.ToString());
+            _ = outputBuilder.Append(_normalBuffer);
             _normalBuffer.Clear();
         }
 
@@ -187,16 +187,16 @@ public sealed class StreamingTagParser(List<IStreamingTagHandler> handlers)
     {
         // Example: <write_file path="test.md">
         // Remove < and >
-        var inner = tagContent.Trim('<', '>').Trim();
+        string inner = tagContent.Trim('<', '>').Trim();
 
-        var parts = inner.Split(' ', 2);
-        var tagName = parts[0];
+        string[] parts = inner.Split(' ', 2);
+        string tagName = parts[0];
         Dictionary<string, string> attributes = [];
 
         if (parts.Length > 1)
         {
             // Simple regex for key="value" pairs
-            var attrRegex = new Regex(@"(\w+)=""([^""]*)""");
+            var attrRegex = MyRegex();
             var matches = attrRegex.Matches(parts[1]);
 
             foreach (Match match in matches)
@@ -211,7 +211,10 @@ public sealed class StreamingTagParser(List<IStreamingTagHandler> handlers)
     private static string? ParseClosingTag(string tagContent)
     {
         // Example: </write_file>
-        var inner = tagContent.Trim('<', '>', '/').Trim();
+        string inner = tagContent.Trim('<', '>', '/').Trim();
         return inner;
     }
+
+    [GeneratedRegex(@"(\w+)=""([^""]*)""")]
+    private static partial Regex MyRegex();
 }

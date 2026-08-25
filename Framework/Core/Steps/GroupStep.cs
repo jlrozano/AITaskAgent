@@ -1,58 +1,73 @@
 using AITaskAgent.Core.Abstractions;
-using AITaskAgent.Core.Execution;
+using AITaskAgent.Core.Attributes;
 using AITaskAgent.Core.Models;
-using AITaskAgent.Core.StepResults;
 
 namespace AITaskAgent.Core.Steps;
 
 /// <summary>
-/// Groups multiple steps for sequential execution within the parent pipeline.
-/// Unlike PipelineStep, does NOT create a nested pipeline - instead returns 
-/// the input with NextSteps set to the internal step list, letting the parent
-/// Pipeline execute them in sequence.
+/// Non-generic base for sequential step grouping. Directly serializable from YAML via <c>!GroupStep</c>.
+/// Unlike <see cref="ParallelStep"/>, executes steps sequentially in the SAME pipeline context by
+/// appending them to <c>NextSteps</c> — the parent Pipeline runs them in order.
 /// </summary>
-/// <typeparam name="TIn">Input type (also output type - pass-through).</typeparam>
-public sealed class GroupStep<TIn> : TypedStep<TIn, TIn>
-    where TIn : IStepResult
-
+[StepTag("GroupStep")]
+public class GroupStep : StepBase
 {
-    private readonly IReadOnlyList<IStep> _steps;
+    private readonly List<IStep> _steps = [];
+
+    /// <summary>Parameterless ctor for YAML deserialization.</summary>
+    public GroupStep() : base("GroupStep", typeof(IStepResult), typeof(IStepResult))
+    {
+        MaxRetries = 1;
+    }
+
+    /// <summary>Programmatic ctor.</summary>
+    public GroupStep(string name, IReadOnlyList<IStep> steps)
+        : base(name, steps.Count > 0 ? steps[0].InputType : typeof(IStepResult),
+               steps.Count > 0 ? steps[^1].OutputType : typeof(IStepResult))
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        _steps.AddRange(steps);
+        MaxRetries = 1;
+    }
 
     /// <summary>
-    /// Creates a GroupStep with the specified steps.
+    /// Steps to execute sequentially. Set via YAML deserialization or programmatic ctor.
     /// </summary>
-    /// <param name="name">Name of this step group.</param>
-    /// <param name="steps">Steps to execute sequentially.</param>
-    public GroupStep(string name, IReadOnlyList<IStep> steps) : base(name)
+    public List<IStep> Steps
     {
-        ArgumentNullException.ThrowIfNull(steps, nameof(steps));
-        _steps = steps;
+        get => _steps;
+        init => _steps = value ?? [];
+    }
 
-        // Validate first step accepts TIn
+    /// <inheritdoc/>
+    protected override Task<IStepResult> ExecuteAsync(
+        IStepResult input, PipelineContext context, int attempt,
+        IStepResult? lastStepResult, CancellationToken cancellationToken)
+    {
+        input.NextSteps.Clear();
+        input.NextSteps.AddRange(_steps);
+        return Task.FromResult(input);
+    }
+}
+
+/// <summary>
+/// Typed variant for programmatic use. Constrains input to <typeparamref name="TIn"/>.
+/// </summary>
+/// <typeparam name="TIn">Input type (also output type — pass-through).</typeparam>
+public sealed class GroupStep<TIn> : GroupStep
+    where TIn : IStepResult
+{
+    public GroupStep(string name, IReadOnlyList<IStep> steps) : base(name, steps)
+    {
+        InputType = typeof(TIn);
         if (_steps.Count > 0 && !_steps[0].InputType.IsAssignableFrom(typeof(TIn)))
         {
             throw new ArgumentException(
                 $"First step '{_steps[0].Name}' expects input type '{_steps[0].InputType.Name}' " +
                 $"but GroupStep input is '{typeof(TIn).Name}'.");
         }
-        MaxRetries = 1; // No retries for GroupStep itself
-        OutputType = _steps.Count > 0 ? _steps[_steps.Count - 1].OutputType : typeof(TIn);
     }
 
-    /// <summary>
-    /// Gets the steps contained in this group.
-    /// </summary>
-    public IReadOnlyList<IStep> Steps => _steps;
-
-    /// <summary>
-    /// Returns the input with NextSteps set to the internal step list.
-    /// The parent Pipeline will execute these steps sequentially.
-    /// </summary>
-    protected override Task<TIn> ExecuteAsync(TIn input, PipelineContext context, int Attempt, TIn? LastStepResult, CancellationToken cancellationToken)
-    {
-        input.NextSteps.Clear();
-        input.NextSteps.AddRange(_steps);
-        return Task.FromResult(input);
-    }
-
+    // Access to _steps from parent — hold a local alias via Steps property
+    private List<IStep> _steps => base.Steps;
 }

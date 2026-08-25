@@ -1,8 +1,8 @@
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace AITaskAgent.FileTools.Tools;
 
@@ -24,38 +24,35 @@ public sealed class FindByNameTool : BaseFileTool
             Description = Description,
             ParametersJsonSchema = """
             {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "Excludes": {
-                        "type": "ARRAY",
-                        "items": { "type": "STRING" },
+                        "type": "array",
+                        "items": { "type": "string" },
                         "description": "Optional, exclude files/directories that match the given glob patterns"
                     },
                     "Extensions": {
-                        "type": "ARRAY",
-                        "items": { "type": "STRING" },
+                        "type": "array",
+                        "items": { "type": "string" },
                         "description": "Optional, file extensions to include (without leading .)"
                     },
                     "Pattern": {
-                        "type": "STRING",
+                        "type": "string",
                         "description": "Optional glob pattern. Defaults to '**/*' (all files recursively). Examples: '**/*.cs' for C# files"
                     },
                     "Directory": {
-                        "type": "STRING",
-                        "description": "The directory to search."
+                        "type": "string",
+                        "description": "The directory to search. Can be absolute or relative to project root. The '/workspace/' prefix is handled automatically."
                     },
                     "Skip": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "Optional number of results to skip (pagination). Default: 0"
                     },
                     "Take": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "Optional number of results to take (pagination). Default: 50. Max: 100"
                     }
-                },
-                "required": [
-                    "Directory"
-                ]
+                }
             }
             """
         };
@@ -71,14 +68,15 @@ public sealed class FindByNameTool : BaseFileTool
             argumentsJson,
             expectedSchemaHint: "...");
 
-        if (!success) return parseError!;
+        if (!success || args is null) return parseError ?? "TOOL_CALL_ERROR: Arguments are null.";
 
-        if (args is null || string.IsNullOrWhiteSpace(args.Directory))
+        var searchDir = args.Directory;
+        if (string.IsNullOrWhiteSpace(searchDir))
         {
-            return "TOOL_CALL_ERROR: Directory is required.";
+            searchDir = ".";
         }
-
-        var resolvedDirectory = ResolvePath(args.Directory);
+        var resolvedDirectory = ResolvePath(searchDir);
+        ValidatePath(resolvedDirectory);
 
         // Paginación
         var skip = args.Skip ?? 0;

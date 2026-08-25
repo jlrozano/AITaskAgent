@@ -42,6 +42,12 @@ public static partial class AITaskAgentConstants
 
         /// <summary>Event type for streaming tag completed.</summary>
         public const string TagCompleted = "tag.completed";
+
+        /// <summary>Event type for pipeline suspended (HITL waiting for input).</summary>
+        public const string PipelineSuspended = "pipeline.suspended";
+
+        /// <summary>Event type for loop exhausted (max iterations reached without break).</summary>
+        public const string LoopExhausted = "loop.exhausted";
     }
 }
 

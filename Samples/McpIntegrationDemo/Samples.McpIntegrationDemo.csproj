@@ -11,6 +11,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\McpIntegration\McpIntegration.csproj" />
     <ProjectReference Include="..\..\Framework\AITaskAgent.csproj" />
+    <ProjectReference Include="..\..\OpenAILLmService\OpenAILLmService.csproj" />
+    <ProjectReference Include="..\..\GeminiLlmService\GeminiLlmService.csproj" />
+    <ProjectReference Include="..\..\YAML\YAML.csproj" />
+    <ProjectReference Include="..\..\Js\AITaskAgent.Js.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,8 +23,12 @@
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.1" />
     <PackageReference Include="Serilog.Extensions.Logging" Version="10.0.0" />
+    <PackageReference Include="Serilog.Settings.Configuration" Version="9.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.0" />
   </ItemGroup>
 
   <ItemGroup>

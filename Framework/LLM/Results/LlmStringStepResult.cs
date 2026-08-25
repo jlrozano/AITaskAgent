@@ -16,11 +16,11 @@ public sealed class LlmStringStepResult(IStep step) : LlmStepResult<string>(step
     public override Task<(bool IsValid, string? Error)> ValidateAsync(PipelineContext context)
     {
         // Valid if either Content is present OR ToolCalls are present
-        var hasContent = !string.IsNullOrEmpty(Content);
-        var hasToolCalls = ToolCalls != null && ToolCalls.Count > 0;
+        bool hasContent = !string.IsNullOrEmpty(Content);
+        bool hasToolCalls = ToolCalls != null && ToolCalls.Count > 0;
 
-        var isValid = hasContent || hasToolCalls;
-        var error = isValid
+        bool isValid = hasContent || hasToolCalls;
+        string? error = isValid
             ? null
             : "Response must have either Content or ToolCalls";
 

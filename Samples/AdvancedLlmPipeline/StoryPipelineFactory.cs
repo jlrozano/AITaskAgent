@@ -17,6 +17,7 @@ internal static class StoryPipelineFactory
 {
     private static readonly ITemplateProvider TemplateProvider = new FileTemplateProvider(
         folderPath: Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates"),
+        templateEngine: new TinyTemplateRendered(),
         enableCache: true,
         ttl: TimeSpan.FromMinutes(5),
         maxCacheSizeBytes: 1_048_576, // 1MB
@@ -27,37 +28,33 @@ internal static class StoryPipelineFactory
     /// Creates the new story creation pipeline.
     /// </summary>
     public static GroupStep<UserIntentionResponse> CreateNewStoryPipeline(
-        ILlmService llmService,
-        LlmProviderConfig outlinerProfile,
-        LlmProviderConfig writersProfile,
-        LlmProviderConfig criticProfile,
-        LlmProviderConfig rewriterProfile,
-        LlmProviderConfig publisherProfile,
+        LlmRole outlinerRole,
+        LlmRole writersRole,
+        LlmRole criticRole,
+        LlmRole rewriterRole,
+        LlmRole publisherRole,
         Action<string> onStorySaved)
     {
-        var outlineStep = new StatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
-            llmService,
-            TemplateProvider,
+        var outlineStep = new CustomStatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
             name: "Outliner",
-            profile: outlinerProfile,
+            role: outlinerRole,
+            templateProvider: TemplateProvider,
             promptTemplateName: "outliner_prompt",
             systemPromptTemplateName: "outliner_system"
         );
 
-        var writerStep1 = new StatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
-            llmService,
-            TemplateProvider,
+        var writerStep1 = new CustomStatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
             name: "Writer1",
-            profile: writersProfile,
+            role: writersRole,
+            templateProvider: TemplateProvider,
             promptTemplateName: "writer1_prompt",
             systemPromptTemplateName: "writer1_system"
         );
 
-        var writerStep2 = new StatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
-            llmService,
-            TemplateProvider,
+        var writerStep2 = new CustomStatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
             name: "Writer2",
-            profile: writersProfile,
+            role: writersRole,
+            templateProvider: TemplateProvider,
             promptTemplateName: "writer2_prompt",
             systemPromptTemplateName: "writer2_system"
         );
@@ -66,29 +63,26 @@ internal static class StoryPipelineFactory
             "ParallelWriters",
             [writerStep1, writerStep2]);
 
-        var criticStep = new StatelessTemplateLlmStep<ParallelResult, CriticResult>(
-            llmService,
-            TemplateProvider,
+        var criticStep = new CustomStatelessTemplateLlmStep<ParallelResult, CriticResult>(
             name: "Critic",
-            profile: criticProfile,
+            role: criticRole,
+            templateProvider: TemplateProvider,
             promptTemplateName: "critic_prompt",
             systemPromptTemplateName: "critic_system"
         );
 
         var rewriterStep = new StatelessRewriterStep(
-            llmService,
-            TemplateProvider,
             name: "Rewriter",
-            profile: rewriterProfile,
+            role: rewriterRole,
+            templateProvider: TemplateProvider,
             promptTemplateName: "rewriter_prompt",
             systemPromptTemplateName: "rewriter_system"
         );
 
-        var publisherStep = new StatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
-            llmService,
-            TemplateProvider,
+        var publisherStep = new CustomStatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
             name: "Publisher",
-            profile: publisherProfile,
+            role: publisherRole,
+            templateProvider: TemplateProvider,
             promptTemplateName: "publisher_prompt",
             systemPromptTemplateName: "publisher_system"
         );
@@ -110,15 +104,13 @@ internal static class StoryPipelineFactory
     /// Creates the story review pipeline (stateless - uses self-contained optimizedPrompt).
     /// </summary>
     public static GroupStep<UserIntentionResponse> CreateReviewPipeline(
-        ILlmService llmService,
-        LlmProviderConfig nVideaProfile,
+        LlmRole storyReviewerRole,
         Action<string> onStorySaved)
     {
-        var reviewStep = new StatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
-            llmService,
-            TemplateProvider,
+        var reviewStep = new CustomStatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
             name: "StoryReviewer",
-            profile: nVideaProfile,
+            role: storyReviewerRole,
+            templateProvider: TemplateProvider,
             promptTemplateName: "reviewer_prompt",
             systemPromptTemplateName: "reviewer_system"
         );
@@ -140,14 +132,12 @@ internal static class StoryPipelineFactory
     /// Creates the questions pipeline for story-related queries.
     /// </summary>
     public static GroupStep<UserIntentionResponse> CreateQuestionsPipeline(
-        ILlmService llmService,
-        LlmProviderConfig nVideaProfile)
+        LlmRole questionsRole)
     {
-        var questionsStep = new StatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
-            llmService,
-            TemplateProvider,
+        var questionsStep = new CustomStatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
             name: "QuestionsAssistant",
-            profile: nVideaProfile,
+            role: questionsRole,
+            templateProvider: TemplateProvider,
             promptTemplateName: "questions_prompt",
             systemPromptTemplateName: "questions_system"
         );
@@ -178,39 +168,59 @@ internal static class StoryPipelineFactory
 }
 
 /// <summary>
+/// Custom local step to handle template names via overrides as requested.
+/// </summary>
+internal class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmStep<TIn, TOut>
+    where TIn : IStepResult
+    where TOut : ILlmStepResult
+{
+    public CustomStatelessTemplateLlmStep(
+        string name,
+        LlmRole role,
+        ITemplateProvider templateProvider,
+        string promptTemplateName,
+        string? systemPromptTemplateName = null)
+        : base(name, role, templateProvider)
+    {
+        Prompt = promptTemplateName;
+        SystemPrompt = systemPromptTemplateName;
+    }
+}
+
+/// <summary>
 /// Custom stateless rewriter step that merges critic result with parallel writer results.
 /// </summary>
 internal class StatelessRewriterStep(
-    ILlmService llmService,
-    ITemplateProvider templateProvider,
     string name,
-    LlmProviderConfig profile,
+    LlmRole role,
+    ITemplateProvider templateProvider,
     string promptTemplateName,
     string? systemPromptTemplateName = null)
-    : StatelessTemplateLlmStep<CriticResult, LlmStringStepResult>(
-        llmService,
-        templateProvider,
+    : CustomStatelessTemplateLlmStep<CriticResult, LlmStringStepResult>(
         name,
-        profile,
+        role,
+        templateProvider,
         promptTemplateName,
         systemPromptTemplateName)
 {
-    protected override async Task<LlmStringStepResult> ExecuteAsync(
-        CriticResult input,
+    protected override async Task<IStepResult> ExecuteAsync(
+        IStepResult input,
         PipelineContext context,
         int attempt,
-        LlmStringStepResult? lastStepResult,
+        IStepResult? lastStepResult,
         CancellationToken cancellationToken)
     {
-        // Merge critic result with parallel writer results for template
-        var results = (context.StepResults["Router/NewStoryPhase/ParallelWriters"] as ParallelResult)?.Value;
+        if (input is CriticResult criticResult)
+        {
+            // Merge critic result with parallel writer results for template
+            var results = (context.StepResults["Router/NewStoryPhase/ParallelWriters"] as ParallelResult)?.Value;
 
-        var writer1Content = (results?["Writer1"] as LlmStringStepResult)?.Content ?? "";
-        var writer2Content = (results?["Writer2"] as LlmStringStepResult)?.Content ?? "";
+            var writer1Content = (results?["Writer1"] as LlmStringStepResult)?.Content ?? "";
+            var writer2Content = (results?["Writer2"] as LlmStringStepResult)?.Content ?? "";
 
-        input.Writer1 = writer1Content;
-        input.Writer2 = writer2Content;
-
+            criticResult.Writer1 = writer1Content;
+            criticResult.Writer2 = writer2Content;
+        }
 
         return await base.ExecuteAsync(input, context, attempt, lastStepResult, cancellationToken);
     }

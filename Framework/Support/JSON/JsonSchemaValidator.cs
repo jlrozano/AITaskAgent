@@ -16,8 +16,8 @@ public sealed class JsonSchemaValidator
     {
         try
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
+            using JsonDocument doc = JsonDocument.Parse(json);
+            JsonElement root = doc.RootElement;
 
             foreach (var prop in requiredProperties)
             {
@@ -42,7 +42,7 @@ public sealed class JsonSchemaValidator
     {
         try
         {
-            var obj = JsonSerializer.Deserialize<T>(json);
+            T? obj = JsonSerializer.Deserialize<T>(json);
             return obj != null
                 ? (true, null)
                 : (false, "Deserialization resulted in null");

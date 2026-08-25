@@ -8,9 +8,14 @@ namespace AITaskAgent.LLM.Abstractions;
 public interface ILlmService
 {
     /// <summary>
+    /// Provider name for auto-registration in LlmServiceFactory.
+    /// </summary>
+    string Name { get; }
+
+    /// <summary>
     /// Invokes the LLM with a request and returns the complete response.
     /// </summary>
-    Task<LlmResponse> InvokeAsync(
+    Task<LlmResult> InvokeAsync(
         LlmRequest request,
         CancellationToken cancellationToken = default);
 

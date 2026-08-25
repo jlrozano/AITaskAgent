@@ -21,9 +21,18 @@ public static class LlmHelpers
             return content;
         }
 
-        var cleaned = content.Trim();
+        string cleaned = content.Trim();
 
-        // Remove ```json or ``` at start
+        // Find the first and last JSON markers to extract only the valid payload
+        int start = cleaned.IndexOfAny(['{', '[']);
+        int end = cleaned.LastIndexOfAny(['}', ']']);
+
+        if (start >= 0 && end > start)
+        {
+            return cleaned.Substring(start, end - start + 1);
+        }
+
+        // Fallback to markdown cleaning if markers not found (unlikely for valid JSON)
         if (cleaned.StartsWith("```json", StringComparison.OrdinalIgnoreCase))
         {
             cleaned = cleaned[7..];
@@ -33,7 +42,6 @@ public static class LlmHelpers
             cleaned = cleaned[3..];
         }
 
-        // Remove ``` at end
         if (cleaned.EndsWith("```"))
         {
             cleaned = cleaned[..^3];
@@ -48,16 +56,16 @@ public static class LlmHelpers
     /// </summary>
     public static string NormalizeToolCallKey(ToolCall toolCall)
     {
-        var functionName = toolCall.Name;
-        var argsString = toolCall.Arguments;
+        string functionName = toolCall.Name;
+        string argsString = toolCall.Arguments;
 
         try
         {
-            var args = JObject.Parse(argsString);
+            JObject args = JObject.Parse(argsString);
             if (args != null)
             {
                 // Sort properties alphabetically for consistent comparison
-                var normalizedArgs = JsonConvert.SerializeObject(
+                string normalizedArgs = JsonConvert.SerializeObject(
                     args.Properties()
                         .OrderBy(p => p.Name)
                         .ToDictionary(p => p.Name, p => p.Value));
@@ -79,8 +87,8 @@ public static class LlmHelpers
     /// </summary>
     public static string InjectSchemaInSystemPrompt(string? existingPrompt, JsonSchema schema)
     {
-        var schemaJson = schema.ToJson();
-        var schemaInstruction = LlmPromptTemplates.FormatSystemPrompt(schemaJson);
+        string schemaJson = schema.ToJson();
+        string schemaInstruction = LlmPromptTemplates.FormatSystemPrompt(schemaJson);
 
         return string.IsNullOrEmpty(existingPrompt)
             ? schemaInstruction.Trim()
@@ -93,7 +101,7 @@ public static class LlmHelpers
     /// </summary>
     public static string InjectSchemaInUserMessage(string message, JsonSchema schema)
     {
-        var schemaJson = schema.ToJson();
+        string schemaJson = schema.ToJson();
         return LlmPromptTemplates.FormatUserMessage(message, schemaJson);
     }
 

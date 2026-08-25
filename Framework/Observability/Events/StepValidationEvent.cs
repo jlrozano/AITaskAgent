@@ -11,6 +11,8 @@ public sealed record StepValidationEvent : ProgressEventBase
     /// <summary>Whether the validation passed.</summary>
     public bool IsValid { get; init; }
 
+    public string? StepPath { get; init; }
+
     /// <summary>Error message if validation failed.</summary>
     public string? ValidationError { get; init; }
 

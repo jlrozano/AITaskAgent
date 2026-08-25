@@ -2,6 +2,7 @@ namespace AITaskAgent.Observability;
 
 /// <summary>
 /// Base interface for all progress events in the system.
+/// Supports versioned schema evolution for backward compatibility.
 /// </summary>
 public interface IProgressEvent
 {
@@ -19,5 +20,8 @@ public interface IProgressEvent
 
     /// <summary>If true, event should not be shown to end users (only logging/debugging).</summary>
     bool SuppressFromUser { get; }
+
+    /// <summary>Schema version for backward compatibility and evolution tracking.</summary>
+    string SchemaVersion { get; }
 }
 
