@@ -69,6 +69,18 @@ public record LlmInferenceSettings
 
     // --- Helper Methods ---
 
+    /// <summary>
+    /// Reads a provider-specific option by name, case-insensitively.
+    /// </summary>
+    /// <remarks>
+    /// The typed properties above cover what every provider understands. Anything vendor-specific
+    /// - Gemini's TopK or ThinkingConfig, a gateway's routing hints - travels in
+    /// <see cref="Options"/>, and this is how an ILlmService implementation reads it without the
+    /// framework needing a property per vendor.
+    /// </remarks>
+    /// <returns>The value, or default when the key is absent.</returns>
+    public T? GetOption<T>(string key) => Get<T>(key);
+
     protected T? Get<T>(string key)
     {
         JToken? token = Options.GetValue(key, StringComparison.OrdinalIgnoreCase);

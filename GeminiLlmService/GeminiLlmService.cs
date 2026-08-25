@@ -31,15 +31,29 @@ public sealed class GeminiLlmService : ILlmService
     /// </summary>
     private static readonly HashSet<int> TransientHttpStatusCodes = [429, 500, 502, 503, 504];
 
+    private GeminiCacheManager? _cacheManager;
+    private GeminiFileManager? _fileManager;
+
     /// <summary>
     /// Manager for Context Caching operations.
     /// </summary>
-    public GeminiCacheManager CacheManager { get; private set; } = null!;
+    /// <remarks>
+    /// Both managers need a <c>Client</c>, and the client is built from the credentials carried by
+    /// each request - so neither exists until the service has been invoked at least once. Accessing
+    /// this before that used to throw a bare NullReferenceException; it now says what is wrong.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The service has not been invoked yet.</exception>
+    public GeminiCacheManager CacheManager => _cacheManager ?? throw NotReady(nameof(CacheManager));
 
     /// <summary>
-    /// Manager for Files API operations.
+    /// Manager for Files API operations. Same lifecycle as <see cref="CacheManager"/>.
     /// </summary>
-    public GeminiFileManager FileManager { get; private set; } = null!;
+    /// <exception cref="InvalidOperationException">The service has not been invoked yet.</exception>
+    public GeminiFileManager FileManager => _fileManager ?? throw NotReady(nameof(FileManager));
+
+    private static InvalidOperationException NotReady(string member) => new(
+        $"{member} is not available yet. It is created from the credentials of the first request, " +
+        "so invoke the service once before using it.");
 
     /// <summary>
     /// Creates a new Gemini LLM service instance.
@@ -68,45 +82,47 @@ public sealed class GeminiLlmService : ILlmService
 
     private (Client Client, string Model) GetClientAndModelForRequest(LlmRequest request)
     {
-        var profile = request.Profile;
-        var cacheKey = $"{profile.BaseUrl}|{profile.ApiKey}";
+        var model = request.Model;
+        var cacheKey = $"{request.BaseUrl}|{request.ApiKey}";
 
-        _logger.LogDebug("Getting client for model: {Model}, provider: {Provider}, baseUrl: {BaseUrl}",
-            profile.Model, profile.Provider, profile.BaseUrl);
+        _logger.LogDebug("Getting client for model: {Model}, baseUrl: {BaseUrl}",
+            model, request.BaseUrl);
 
         if (_clients.TryGetValue(cacheKey, out var cachedClient))
         {
-            _logger.LogDebug("Using cached client for {Model}", profile.Model);
-            return (cachedClient, profile.Model);
+            _logger.LogDebug("Using cached client for {Model}", model);
+            return (cachedClient, model);
         }
 
-        _logger.LogInformation("Creating new Gemini client for model: {Model}, provider: {Provider}",
-            profile.Model, profile.Provider);
+        _logger.LogInformation("Creating new Gemini client for model: {Model}", model);
 
         // Map BaseUrl and ApiVersion if provided
         HttpOptions? httpOptions = null;
-        if (!string.IsNullOrEmpty(profile.BaseUrl) || !string.IsNullOrEmpty(profile.ApiVersion))
+        if (!string.IsNullOrEmpty(request.BaseUrl) || !string.IsNullOrEmpty(request.ApiVersion))
         {
             httpOptions = new HttpOptions
             {
-                BaseUrl = string.IsNullOrEmpty(profile.BaseUrl) ? null : profile.BaseUrl,
-                ApiVersion = string.IsNullOrEmpty(profile.ApiVersion) ? null : profile.ApiVersion
+                BaseUrl = string.IsNullOrEmpty(request.BaseUrl) ? null : request.BaseUrl,
+                ApiVersion = string.IsNullOrEmpty(request.ApiVersion) ? null : request.ApiVersion
             };
         }
 
-        var newClient = new Client(apiKey: profile.ApiKey, httpOptions: httpOptions);
+        var newClient = new Client(apiKey: request.ApiKey, httpOptions: httpOptions);
 
         _clients.TryAdd(cacheKey, newClient);
 
         // Initialize managers with the first client
-        CacheManager ??= new GeminiCacheManager(newClient, _logger);
-        FileManager ??= new GeminiFileManager(newClient, _logger);
+        _cacheManager ??= new GeminiCacheManager(newClient, _logger);
+        _fileManager ??= new GeminiFileManager(newClient, _logger);
 
-        return (newClient, profile.Model);
+        return (newClient, model);
     }
 
     /// <inheritdoc/>
-    public async Task<LlmResponse> InvokeAsync(
+    public string Name => "gemini";
+
+    /// <inheritdoc/>
+    public async Task<LlmResult> InvokeAsync(
         LlmRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -135,7 +151,10 @@ public sealed class GeminiLlmService : ILlmService
                     config: config);
 
                 var usageMetadata = response.UsageMetadata;
-                var choices = response.Candidates?.Select(c => new LlmChoice
+
+                // Every Gemini candidate becomes an LlmResponse; LlmResult wraps the set along
+                // with the usage that applies to the call as a whole.
+                var candidates = response.Candidates?.Select(c => new LlmResponse
                 {
                     Index = c.Index ?? 0,
                     Content = ExtractTextContent(c),
@@ -144,30 +163,19 @@ public sealed class GeminiLlmService : ILlmService
                     RawFinishReason = c.FinishReason?.ToString()
                 }).ToList() ?? [];
 
-                var primaryCandidate = response.Candidates?.FirstOrDefault();
-
-                var llmResponse = new LlmResponse
-                {
-                    Content = ExtractTextContent(primaryCandidate),
-                    Choices = choices,
-                    TokensUsed = usageMetadata?.TotalTokenCount,
-                    PromptTokens = usageMetadata?.PromptTokenCount,
-                    CompletionTokens = usageMetadata?.CandidatesTokenCount,
-                    CostUsd = CalculateCost(request.Profile,
-                        usageMetadata?.PromptTokenCount ?? 0,
-                        usageMetadata?.CandidatesTokenCount ?? 0),
-                    FinishReason = MapFinishReason(primaryCandidate?.FinishReason),
-                    RawFinishReason = primaryCandidate?.FinishReason?.ToString(),
-                    Model = model,
-                    ToolCalls = ExtractToolCalls(primaryCandidate),
-                    NativeResponse = response
-                };
+                var llmResult = LlmResult.Success(
+                    candidates,
+                    tokensUsed: usageMetadata?.TotalTokenCount,
+                    promptTokens: usageMetadata?.PromptTokenCount,
+                    completionTokens: usageMetadata?.CandidatesTokenCount,
+                    model: model,
+                    nativeResponse: response);
 
                 _logger.LogInformation(
-                    "Gemini response: {Tokens} tokens, ${Cost:F4}, choices: {ChoiceCount}, finish: {Reason}",
-                    llmResponse.TokensUsed, llmResponse.CostUsd, llmResponse.Choices.Count, llmResponse.FinishReason);
+                    "Gemini response: {Tokens} tokens, candidates: {CandidateCount}, finish: {Reason}",
+                    llmResult.TokensUsed, candidates.Count, llmResult.FinishReason);
 
-                return llmResponse;
+                return llmResult;
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
@@ -430,12 +438,14 @@ public sealed class GeminiLlmService : ILlmService
             config.TopP = request.TopP.Value;
         }
 
-        if (request.TopK.HasValue)
+        // TopK is Gemini-specific, so it travels in Options rather than as a typed property.
+        var topK = request.GetOption<int?>("TopK");
+        if (topK.HasValue)
         {
-            config.TopK = request.TopK.Value;
+            config.TopK = topK.Value;
         }
 
-        if (request.Stop != null && request.Stop.Length > 0)
+        if (request.Stop != null && request.Stop.Count > 0)
         {
             config.StopSequences = [.. request.Stop];
         }
@@ -471,11 +481,11 @@ public sealed class GeminiLlmService : ILlmService
         // 2. Metadata (Legacy/Provider-specific way)
         // 3. Heuristic based on model name (Fallback for ease of use)
 
-        bool? enableThinkingConfig = request.EnableThinking ?? request.Profile.EnableThinking;
+        bool? enableThinkingConfig = request.GetOption<bool?>("EnableThinking");
         bool enableThinking = enableThinkingConfig ??
-                              (request.Profile.Model.Contains("thinking", StringComparison.OrdinalIgnoreCase) ||
-                               request.Profile.Model.Contains("gemini-2.5-flash", StringComparison.OrdinalIgnoreCase) ||
-                               request.Profile.Model.Contains("gemini-2.0-flash", StringComparison.OrdinalIgnoreCase));
+                              (request.Model.Contains("thinking", StringComparison.OrdinalIgnoreCase) ||
+                               request.Model.Contains("gemini-2.5-flash", StringComparison.OrdinalIgnoreCase) ||
+                               request.Model.Contains("gemini-2.0-flash", StringComparison.OrdinalIgnoreCase));
 
         // Metadata override
         if (request.Conversation.Metadata.TryGetValue("Gemini.IncludeThoughts", out var includeThoughtsObj) &&
@@ -492,7 +502,7 @@ public sealed class GeminiLlmService : ILlmService
             };
 
             // Budget hierarchy: Request -> Profile -> Metadata
-            int? budget = request.ThinkingBudget ?? request.Profile.ThinkingBudget;
+            int? budget = request.GetOption<int?>("ThinkingBudget");
 
             if (request.Conversation.Metadata.TryGetValue("Gemini.ThinkingBudget", out var budgetObj) &&
                 budgetObj is int budgetOverride)
@@ -521,7 +531,7 @@ public sealed class GeminiLlmService : ILlmService
         }
 
         // Choice Count
-        config.CandidateCount = request.ChoiceCount ?? request.Profile.ChoiceCount;
+        config.CandidateCount = request.GetOption<int?>("ChoiceCount");
 
         return config;
     }
@@ -660,15 +670,6 @@ public sealed class GeminiLlmService : ILlmService
         return functionCalls.Count > 0 ? functionCalls : null;
     }
 
-    private static decimal CalculateCost(LlmProviderConfig profile, int promptTokens, int completionTokens)
-    {
-        if (profile.InputTokenPricePerMillion.HasValue && profile.OutputTokenPricePerMillion.HasValue)
-        {
-            var promptCost = promptTokens / 1_000_000m * profile.InputTokenPricePerMillion.Value;
-            var completionCost = completionTokens / 1_000_000m * profile.OutputTokenPricePerMillion.Value;
-            return promptCost + completionCost;
-        }
-
-        return 0;
-    }
+    // Cost used to be computed here from the request profile. Pricing now lives on LlmProvider and
+    // is applied by BaseLlmStep once the call returns, so every provider is priced the same way.
 }
