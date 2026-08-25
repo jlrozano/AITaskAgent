@@ -2,6 +2,7 @@ using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
+using AITaskAgent.LLM.Support;
 using AITaskAgent.LLM.Tools.Implementation;
 using AITaskAgent.Support.Template;
 
@@ -62,7 +63,7 @@ public class TemplateLlmStep<TIn, TOut> : BaseLlmStep<TIn, TOut>
     protected override async Task<string?> BuildUserMessageAsync(IStepResult input, PipelineContext context)
     {
         var rawPrompt = await base.BuildUserMessageAsync(input, context);
-        return ResolvePromptAsync(rawPrompt ?? "", input, context);
+        return PromptTemplateResolver.Resolve(rawPrompt, input, context, _templateProvider, _variables);
     }
 
 
@@ -70,33 +71,7 @@ public class TemplateLlmStep<TIn, TOut> : BaseLlmStep<TIn, TOut>
     {
 
         var rawSystemPrompt = await base.BuildSystemMessageAsync(input, context);
-        return ResolvePromptAsync(rawSystemPrompt ?? "", input, context);
-    }
-
-    private string ResolvePromptAsync(string rawPrompt, IStepResult input, PipelineContext context)
-    {
-        if (string.IsNullOrWhiteSpace(rawPrompt))
-        {
-            return "";
-        }
-
-        var mergedContext = context.Metadata
-        .Concat(_variables)
-        .GroupBy(kvp => kvp.Key.ToLowerInvariant())
-        .ToDictionary(
-            g => g.Key,
-            g => g.Last().Value);
-
-        var model = new
-        {
-            Input = input.Value,     // acceso: {{ input.someproperty }}
-            Context = mergedContext  // acceso: {{ context.mykey }}
-                                     // dicts externos en Input: {{ input.mydict['OriginalKey'] }}
-        };
-
-        return _templateProvider != null
-            ? _templateProvider.Render(rawPrompt, model) ?? rawPrompt
-            : TinyTemplateRendered.Render(rawPrompt, model, strictMode: false, baseDirectory: context.CurrentStepPath) ?? rawPrompt;
+        return PromptTemplateResolver.Resolve(rawSystemPrompt, input, context, _templateProvider, _variables);
     }
 
 }

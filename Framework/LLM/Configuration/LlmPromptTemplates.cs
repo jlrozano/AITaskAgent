@@ -2,9 +2,8 @@ namespace AITaskAgent.LLM.Configuration;
 
 /// <summary>
 /// Default prompt templates for LLM JSON schema injection.
-/// Templates are now read-only constants. Per-profile overrides are configured via
-/// <see cref="LlmProviderConfig.SystemPromptSchemaTemplate"/> and
-/// <see cref="LlmProviderConfig.UserMessageSchemaTemplate"/>.
+/// Templates are read-only constants. To override one for a single call, pass
+/// <c>customTemplate</c> to <see cref="FormatSystemPrompt"/> or <see cref="FormatUserMessage"/>.
 /// </summary>
 public static class LlmPromptTemplates
 {
@@ -69,14 +68,14 @@ public static class LlmPromptTemplates
     /// <summary>
     /// The active system-prompt schema template.
     /// Read-only — equals <see cref="DefaultSystemPromptSchemaTemplate"/>.
-    /// To override for a specific profile, set <see cref="LlmProviderConfig.SystemPromptSchemaTemplate"/>.
+    /// To override, pass <c>customTemplate</c> to <see cref="FormatSystemPrompt"/>.
     /// </summary>
     public static string SystemPromptSchemaTemplate => DefaultSystemPromptSchemaTemplate;
 
     /// <summary>
     /// The active user-message schema template.
     /// Read-only — equals <see cref="DefaultUserMessageSchemaTemplate"/>.
-    /// To override for a specific profile, set <see cref="LlmProviderConfig.UserMessageSchemaTemplate"/>.
+    /// To override, pass <c>customTemplate</c> to <see cref="FormatUserMessage"/>.
     /// </summary>
     public static string UserMessageSchemaTemplate => DefaultUserMessageSchemaTemplate;
 

@@ -44,21 +44,51 @@ public abstract partial class BaseLlmStep(
 {
     private int _currentIndex = 0;
 
-    protected ILlmService LlmService => (_currentIndex == 0 ? role.Provider.Service :
-        role.Fallbacks?[_currentIndex - 1].Provider.Service) ?? new NullLlmService();
-    protected string Model => _currentIndex == 0 ? role.Model :
-        role.Fallbacks?[_currentIndex - 1].Model
+    /// <summary>
+    /// Active role. Held in a field rather than read from the constructor parameter so that
+    /// steps built before their role is known - YAML steps, deserialized by
+    /// <c>YamlPipelineFactory</c> before the profile is resolved - can have it supplied later
+    /// via <see cref="SetRole"/>.
+    /// </summary>
+    private LlmRole _role = role;
+
+    /// <summary>
+    /// Replaces the role after construction and rewinds the fallback chain. Intended for
+    /// deferred resolution; steps constructed with a real role never need it.
+    /// Refreshes <see cref="Tools"/> and <see cref="SystemPrompt"/> only when they are still
+    /// unset, so anything configured explicitly survives.
+    /// </summary>
+    protected internal void SetRole(LlmRole newRole)
+    {
+        _role = newRole ?? throw new ArgumentNullException(nameof(newRole));
+        _currentIndex = 0;
+
+        if (Tools.Count == 0 && newRole.Tools is { Count: > 0 })
+        {
+            Tools = newRole.Tools;
+        }
+
+        if (string.IsNullOrWhiteSpace(SystemPrompt))
+        {
+            SystemPrompt = newRole.SystemPrompt;
+        }
+    }
+
+    protected ILlmService LlmService => (_currentIndex == 0 ? _role.Provider.Service :
+        _role.Fallbacks?[_currentIndex - 1].Provider.Service) ?? new NullLlmService();
+    protected string Model => _currentIndex == 0 ? _role.Model :
+        _role.Fallbacks?[_currentIndex - 1].Model
         ?? throw new InvalidOperationException("Model not set");
-    protected LlmProvider Provider => _currentIndex == 0 ? role.Provider :
-        role.Fallbacks?[_currentIndex - 1].Provider
+    protected LlmProvider Provider => _currentIndex == 0 ? _role.Provider :
+        _role.Fallbacks?[_currentIndex - 1].Provider
         ?? throw new InvalidOperationException("Provider not set");
     protected LlmInferenceSettings Inference =>
-        (_currentIndex == 0 ? role.Inference : role.Fallbacks?[_currentIndex - 1].Inference)
+        (_currentIndex == 0 ? _role.Inference : _role.Fallbacks?[_currentIndex - 1].Inference)
         ?? Provider.Inference ?? new();
 
     public int MaxToolIterations { get; init; } = 5;
 
-    public IList<ITool> Tools { get; init; } = role.Tools ?? [];
+    public IList<ITool> Tools { get; set; } = role.Tools ?? [];
     public List<IStreamingTagHandler> StreamingHandlers { get; init; } = [];
 
     // Per-invocation state (reset in FinalizeAsync)
@@ -73,7 +103,7 @@ public abstract partial class BaseLlmStep(
 
     protected override bool SwitchToNextFallback(IStepResult error, int attempt)
     {
-        if (_currentIndex < (role.Fallbacks?.Count ?? 0))
+        if (_currentIndex < (_role.Fallbacks?.Count ?? 0))
         {
             _currentIndex++;
             if (string.IsNullOrWhiteSpace(Model) || Provider == null || LlmService == null)

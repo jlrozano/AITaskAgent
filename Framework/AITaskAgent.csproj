@@ -13,8 +13,6 @@
     <!-- Exclude backup folder from compilation -->
     <Compile Remove="OldSteps.bak\**" />
     <None Remove="OldSteps.bak\**" />
-    <Compile Remove="YAML\**\*.cs" />
-    <None Remove="YAML\**\*" />
   </ItemGroup>
 
   <ItemGroup>
@@ -34,6 +32,8 @@
     <PackageReference Include="NJsonSchema.CodeGeneration.CSharp" Version="11.6.1" />
     <PackageReference Include="OpenAI" Version="2.7.0" />
     <PackageReference Include="YamlDotNet" Version="13.0.1" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="Microsoft.ClearScript.V8" Version="7.5.0" />
   </ItemGroup>
 
 </Project>

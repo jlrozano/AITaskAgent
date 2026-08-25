@@ -3,9 +3,9 @@ using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Configuration;
 using AITaskAgent.LLM.Conversation.Context;
-using AITaskAgent.LLM.Models;
 using AITaskAgent.LLM.Results;
 using AITaskAgent.LLM.Steps;
+using AITaskAgent.LLM.Support;
 using AITaskAgent.Support.Template;
 using AITaskAgent.YAML.Abstractions;
 using AITaskAgent.YAML.Attributes;
@@ -15,39 +15,49 @@ namespace AITaskAgent.YAML.Steps;
 
 /// <summary>
 /// YAML-deserializable LLM step.
-/// Inherits all execution logic (retry, tools, telemetry, streaming) from BaseLlmStep.
-/// Only overrides the three virtual hooks to wire YAML-declared prompts and profile.
+/// Inherits all execution logic (retry, tools, telemetry, streaming, provider fallback) from
+/// BaseLlmStep. Only overrides the hooks needed to wire YAML-declared prompts and role.
 /// InputType and OutputType are fixed to IStepResult / LlmStringStepResult;
 /// the SchemaCompiler injects JSON validation via OutputType on BaseLlmStep.
 /// </summary>
+/// <remarks>
+/// YamlDotNet constructs this step before the pipeline factory knows which role it should use,
+/// so it is built against <see cref="UnresolvedRole"/> - a placeholder backed by NullLlmService
+/// that throws loudly if it is ever invoked. <c>YamlPipelineFactory</c> calls
+/// <see cref="ApplyRole"/> during dependency injection to supply the real one.
+/// </remarks>
 [YamlStepTag("LlmStep")]
-public class YamlLlmStep(ILlmService llmService, ITemplateProvider? templateProvider = null)
+public class YamlLlmStep(ITemplateProvider? templateProvider = null)
     : BaseLlmStep(
-        llmService,
         $"YamlLlmStep-{Guid.NewGuid()}",
+        UnresolvedRole,
         typeof(IStepResult),
         typeof(LlmStringStepResult),
-        new LlmProviderConfig(),
-        templateProvider: templateProvider),
+        prompt: string.Empty),
       IYamlStep
 {
+    /// <summary>
+    /// Placeholder role used between deserialization and role resolution. Its service throws on
+    /// any call, so a pipeline that reaches execution without a resolved role fails with a clear
+    /// message instead of silently talking to the wrong provider.
+    /// </summary>
+    private static LlmRole UnresolvedRole => new()
+    {
+        Provider = new LlmProvider { Service = new NullLlmService() },
+        Model = string.Empty
+    };
+
     /// <summary>Unique identifier for this step within the pipeline.</summary>
     public required string StepId { get => Name; init { Name = value; } }
 
-    /// <summary>Name of the input JSON schema (resolved by SchemaCompiler).</summary>
-    public required string InputSchema { get; init; }
-
-    /// <summary>Name of the output JSON schema (resolved by SchemaCompiler).</summary>
-    public required string OutputSchema { get; init; }
+    // InputSchema and OutputSchema are inherited from StepBase, which declares them for exactly
+    // this purpose. Redeclaring them here would shadow the base members the SchemaCompiler reads.
 
     /// <summary>Step IDs this step depends on (DAG edges).</summary>
     public string[]? DependsOn { get; init; }
 
-    /// <summary>LLM profile name to resolve at factory time. Optional.</summary>
+    /// <summary>Name of the LLM role to resolve at factory time. Optional; falls back to the default role.</summary>
     public string? ProfileName { get; init; }
-
-    /// <summary>Prompt sent as system message. Supports @templatename.</summary>
-    public string? SystemPrompt { get; init; }
 
     /// <summary>Prompt sent as user message. Supports @templatename.</summary>
     public string? UserPrompt { get; init; }
@@ -60,22 +70,24 @@ public class YamlLlmStep(ILlmService llmService, ITemplateProvider? templateProv
     public bool UseConversationHistory { get; init; } = true;
 
     /// <summary>
-    /// Resolved LlmProviderConfig — set by YamlPipelineFactory after deserialization.
+    /// Supplies the role resolved from <see cref="ProfileName"/>. Called by YamlPipelineFactory
+    /// after deserialization, before the pipeline runs.
     /// </summary>
-    internal LlmProviderConfig? ResolvedProfile { get; set; }
+    public void ApplyRole(LlmRole role) => SetRole(role);
 
     // ── BaseLlmStep hooks ────────────────────────────────────────────────────
 
-    protected override Task<string> BuildUserMessageAsync(IStepResult input, PipelineContext context)
-        => UserPrompt != null
-           ? ResolvePromptAsync(UserPrompt, input, context)
-           : Task.FromResult(JsonConvert.SerializeObject(input.Value ?? input));
+    protected override Task<string?> BuildUserMessageAsync(IStepResult input, PipelineContext context)
+        => Task.FromResult<string?>(
+            UserPrompt != null
+                ? PromptTemplateResolver.Resolve(UserPrompt, input, context, templateProvider)
+                : JsonConvert.SerializeObject(input.Value ?? input));
 
-    protected override async Task<string?> BuildSystemMessageAsync(IStepResult input, PipelineContext context)
-        => SystemPrompt != null ? await ResolvePromptAsync(SystemPrompt, input, context) : null;
-
-    protected override LlmRequest ConfigureLlmRequest(LlmRequest request, PipelineContext context)
-        => ResolvedProfile != null ? request with { Profile = ResolvedProfile } : request;
+    protected override Task<string?> BuildSystemMessageAsync(IStepResult input, PipelineContext context)
+        => Task.FromResult<string?>(
+            SystemPrompt != null
+                ? PromptTemplateResolver.Resolve(SystemPrompt, input, context, templateProvider)
+                : null);
 
     protected override ConversationContext GetConversationContext(PipelineContext context)
         => UseConversationHistory

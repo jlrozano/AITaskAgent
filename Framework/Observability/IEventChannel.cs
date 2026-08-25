@@ -35,6 +35,8 @@ public interface IEventChannel
     /// For SSE/WebSocket use cases needing async enumeration.
     /// Dispose to unsubscribe and complete the underlying channel.
     /// </summary>
+    /// <param name="capacity">Bounded channel capacity; events are dropped once a slow consumer fills it.</param>
     /// <param name="correlationId">Optional filter. See Subscribe for semantics.</param>
+    /// <returns>A subscription that unsubscribes and completes the channel on dispose.</returns>
     IEventSubscription CreateSubscription(int capacity = 100, string? correlationId = null);
 }

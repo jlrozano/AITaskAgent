@@ -7,6 +7,7 @@ using AITaskAgent.YAML.Attributes;
 using AITaskAgent.YAML.Compilation;
 using AITaskAgent.YAML.Steps;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using System.Reflection;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -25,7 +26,7 @@ internal sealed class YamlPipelineDocument
 /// <summary>
 /// A built pipeline ready for execution.
 /// </summary>
-public sealed class YamlPipeline(string name, IReadOnlyList<IStep> steps)
+public sealed class YamlPipeline(string name, IReadOnlyList<IStep> steps, IPipeline pipeline)
 {
     public string Name { get; } = name;
     public IReadOnlyList<IStep> Steps { get; } = steps;
@@ -34,7 +35,7 @@ public sealed class YamlPipeline(string name, IReadOnlyList<IStep> steps)
         T input,
         PipelineContext? context = null,
         CancellationToken cancellationToken = default)
-        => Pipeline.ExecuteAsync(Name, Steps, input, context);
+        => pipeline.ExecuteAsync(Name, Steps, input, context, cancellationToken: cancellationToken);
 }
 
 /// <summary>
@@ -51,7 +52,8 @@ public sealed class YamlPipeline(string name, IReadOnlyList<IStep> steps)
 public sealed class YamlPipelineFactory(
     IServiceProvider serviceProvider,
     SchemaCompiler schemaCompiler,
-    ILlmProviderResolver? providerResolver = null)
+    IPipeline pipeline,
+    IOptions<LlmEnvironment>? llmEnvironment = null)
 {
     /// <summary>Creates a pipeline from all *.yaml files in a folder tree.</summary>
     public async Task<YamlPipeline> CreateFromFolderAsync(string pipelineFolder)
@@ -71,13 +73,11 @@ public sealed class YamlPipelineFactory(
         var deserializer = BuildDeserializer();
         var doc = deserializer.Deserialize<YamlPipelineDocument>(mergedYaml);
 
-        // Inject LlmProviderConfig into any YamlLlmStep that has a ProfileName
+        // Resolve each YamlLlmStep's role. Steps are deserialized against a placeholder role
+        // (NullLlmService) because the profile name is only known after parsing.
         foreach (var step in doc.Steps.OfType<YamlLlmStep>())
         {
-            if (step.ProfileName != null && providerResolver != null)
-            {
-                step.ResolvedProfile = providerResolver.GetProvider(step.ProfileName);
-            }
+            step.ApplyRole(ResolveRole(step.ProfileName, step.StepId));
         }
 
         // Inject compiled InputType / OutputType
@@ -85,16 +85,16 @@ public sealed class YamlPipelineFactory(
         {
             if (step is AITaskAgent.Core.Steps.StepBase stepBase)
             {
-                stepBase.InputType = schemaCompiler.GetCompiledType(step.InputSchema);
-                stepBase.OutputType = schemaCompiler.GetCompiledType(step.OutputSchema);
-                
+                stepBase.InputType = schemaCompiler.GetCompiledType(RequireSchema(step.InputSchema, step.StepId, "inputSchema"));
+                stepBase.OutputType = schemaCompiler.GetCompiledType(RequireSchema(step.OutputSchema, step.StepId, "outputSchema"));
+
             }
         }
 
         // Fail-fast DAG validation
         var orderedSteps = ValidateAndOrder(doc.Steps);
 
-        return new YamlPipeline(doc.Name, orderedSteps);
+        return new YamlPipeline(doc.Name, orderedSteps, pipeline);
     }
 
     // ── Private ──────────────────────────────────────────────────────────────
@@ -136,6 +136,46 @@ public sealed class YamlPipelineFactory(
     /// Topological sort (Kahn's algorithm) + schema-mismatch check.
     /// Throws ConfigurationException on cycle or schema mismatch.
     /// </summary>
+    /// <summary>
+    /// Every YAML step must declare both schemas: they are what lets the factory compile real
+    /// types and check that adjacent steps agree before anything runs.
+    /// </summary>
+    private static string RequireSchema(string? schema, string stepId, string yamlKey)
+        => string.IsNullOrWhiteSpace(schema)
+            ? throw new InvalidOperationException(
+                $"Step '{stepId}' is missing '{yamlKey}'. Every YAML step must declare both " +
+                "inputSchema and outputSchema so their types can be compiled and validated.")
+            : schema;
+
+    /// <summary>
+    /// Resolves the role a step should run with.
+    ///
+    /// A step names its role via <c>profileName</c>; when it does not, the environment's
+    /// <see cref="LlmEnvironment.DefaultRole"/> applies. Both misses are hard errors: running a
+    /// step against the wrong model silently is worse than refusing to start.
+    /// </summary>
+    private LlmRole ResolveRole(string? profileName, string stepId)
+    {
+        var env = llmEnvironment?.Value
+            ?? throw new InvalidOperationException(
+                $"Step '{stepId}' declares an LLM step but no LlmEnvironment is configured. " +
+                "Register the framework services and provide the AITaskAgent:LlmProviders section.");
+
+        var roleName = profileName ?? env.DefaultRole;
+
+        if (!env.Roles.TryGetValue(roleName, out var role))
+        {
+            var available = env.Roles.Count > 0
+                ? string.Join(", ", env.Roles.Keys)
+                : "(none configured)";
+            throw new InvalidOperationException(
+                $"Step '{stepId}' requests LLM role '{roleName}', which is not configured. " +
+                $"Available roles: {available}.");
+        }
+
+        return role;
+    }
+
     private static List<IStep> ValidateAndOrder(List<IYamlStep> steps)
     {
         var byId = steps.ToDictionary(s => s.StepId);

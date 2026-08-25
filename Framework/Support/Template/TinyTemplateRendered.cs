@@ -81,6 +81,12 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
                 var jpath = ToJPath(expr);
                 var token = rootToken.SelectToken(jpath);
 
+                // El serializer baja las propiedades C# a minúsculas, así que {{Content}} no
+                // encuentra "content". Se reintenta en minúsculas sólo cuando la búsqueda exacta
+                // falla, de modo que las keys de diccionario — que conservan su caso literal —
+                // siguen resolviéndose por el camino exacto.
+                token ??= rootToken.SelectToken(jpath.ToLowerInvariant());
+
                 return token is null or { Type: JTokenType.Null }
                     ? defaultVal ?? string.Empty
                     : pipeExpr is not null ? ApplyPipeFilter(token, pipeExpr) ?? token.ToString() : token.ToString();
