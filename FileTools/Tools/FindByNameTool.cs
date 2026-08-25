@@ -13,6 +13,9 @@ namespace AITaskAgent.FileTools.Tools;
 public sealed class FindByNameTool : BaseFileTool
 {
     public override string Name => "find_by_name";
+
+    /// <inheritdoc/>
+    public override bool IsReadOnly => true;
     public override string Description => "Search for ALL files and subdirectories RECURSIVELY within a directory using glob patterns. Use this when user asks for 'all files' or 'every file'. If no Pattern is specified, defaults to '**/*' which finds ALL files in ALL subdirectories. Results are paginated (default 50). Use Skip/Take arguments to paginate through large result sets.";
     public override string? UsageGuidelines => "When user asks for 'all files' or 'list everything', use Pattern='**/*' with the root directory. Results are paginated (default 50). If you need more, use the Skip argument to fetch subsequent pages. Do NOT repeat the same query without changing Skip.";
 

@@ -10,6 +10,9 @@ namespace AITaskAgent.FileTools.Tools;
 public sealed class ListDirTool : BaseFileTool
 {
     public override string Name => "list_dir";
+
+    /// <inheritdoc/>
+    public override bool IsReadOnly => true;
     public override string Description => "List the contents of a directory, i.e. all files and subdirectories that are children of the directory. Directory path must be an absolute path to a directory that exists. For each child in the directory, output will have: relative path to the directory, whether it is a directory or file, size in bytes if file, and number of children (recursive) if directory. Number of children may be missing if the workspace is too large, since we are not able to track the entire workspace.";
     public override string? UsageGuidelines => "Use for exploring a specific directory's immediate contents. For recursive/deep searches, use find_by_name instead.";
 

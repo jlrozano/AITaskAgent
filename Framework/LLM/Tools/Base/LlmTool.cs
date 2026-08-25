@@ -27,6 +27,9 @@ public abstract class LlmTool : ITool
     /// </summary>
     public virtual string? UsageGuidelines => null;
 
+    /// <inheritdoc/>
+    public virtual bool IsReadOnly => false;
+
     /// <summary>Gets the JSON schema for the tool parameters.</summary>
     protected abstract BinaryData ParametersSchema { get; }
 

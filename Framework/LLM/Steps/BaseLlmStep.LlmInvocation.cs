@@ -96,6 +96,12 @@ public abstract partial class BaseLlmStep
         primaryCandidate = CanonicalizeToolCallsResponse(primaryCandidate);
 
         var toolCalls = primaryCandidate.ToolCalls!;
+
+        if (IsStuckRepeatingToolCalls(toolCalls, out var stuckMessage))
+        {
+            return StopWithMessage(result, primaryCandidate, stuckMessage);
+        }
+
         if (Logger.IsEnabled(LogLevel.Information))
         {
             Logger.LogInformation(
@@ -151,6 +157,88 @@ public abstract partial class BaseLlmStep
             model: nextResult.Model,
             nativeResponse: nextResult.NativeResponse
         );
+    }
+
+    /// <summary>Keys of the tool calls requested in the previous iteration.</summary>
+    private HashSet<string>? _lastToolCallKeys;
+
+    /// <summary>How many consecutive iterations have asked for exactly the same calls.</summary>
+    private int _consecutiveIdenticalToolCalls;
+
+    /// <summary>
+    /// Detects a model looping on the same tool calls.
+    ///
+    /// MaxToolIterations already bounds the loop, but waiting for it wastes several round-trips and
+    /// tells the model nothing. Comparing each iteration against the previous one cuts the loop as
+    /// soon as it is clear no progress is being made.
+    ///
+    /// Read-only calls get more rope (3 repeats) than mutating ones (1): re-reading a file can be
+    /// legitimate exploration, whereas repeating a write with identical arguments cannot.
+    /// </summary>
+    private bool IsStuckRepeatingToolCalls(List<ToolCall> toolCalls, out string message)
+    {
+        message = "";
+
+        var keys = toolCalls.Select(LlmHelpers.NormalizeToolCallKey).ToHashSet();
+
+        if (_lastToolCallKeys is null || !keys.SetEquals(_lastToolCallKeys))
+        {
+            _lastToolCallKeys = keys;
+            _consecutiveIdenticalToolCalls = 0;
+            return false;
+        }
+
+        _consecutiveIdenticalToolCalls++;
+
+        var allReadOnly = toolCalls.All(call =>
+            Tools.FirstOrDefault(t => t.Name.Equals(call.Name, StringComparison.OrdinalIgnoreCase))?.IsReadOnly == true);
+
+        var threshold = allReadOnly ? 3 : 1;
+
+        if (_consecutiveIdenticalToolCalls <= threshold)
+        {
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                Logger.LogDebug(
+                    "Step {StepName} repeated the same tool calls ({Count}/{Threshold} before stopping)",
+                    Name, _consecutiveIdenticalToolCalls, threshold);
+            }
+            return false;
+        }
+
+        var names = string.Join(", ", toolCalls.Select(c => c.Name).Distinct());
+        Logger.LogWarning(
+            "Step {StepName} stopped: tool calls [{Tools}] repeated {Count} times without progress",
+            Name, names, _consecutiveIdenticalToolCalls + 1);
+
+        message =
+            $"Execution stopped: [{names}] was called {_consecutiveIdenticalToolCalls + 1} times in a row " +
+            "with identical arguments and no progress. Answer with the information you already have.";
+
+        return true;
+    }
+
+    /// <summary>
+    /// Turns a tool-calling response into a final one carrying <paramref name="message"/>, so the
+    /// model learns why it was cut off instead of the step failing opaquely.
+    /// </summary>
+    private static LlmResult StopWithMessage(LlmResult result, LlmResponse candidate, string message)
+    {
+        var stopped = candidate with
+        {
+            Content = string.IsNullOrWhiteSpace(candidate.Content) ? message : candidate.Content,
+            ToolCalls = null,
+            FinishReason = FinishReason.Stop
+        };
+
+        return LlmResult.Success(
+            [stopped],
+            tokensUsed: result.TokensUsed,
+            promptTokens: result.PromptTokens,
+            completionTokens: result.CompletionTokens,
+            costUsd: result.CostUsd,
+            model: result.Model,
+            nativeResponse: result.NativeResponse);
     }
 
     private List<ToolCall> DeduplicateToolCalls(List<ToolCall> toolCalls)
@@ -439,6 +527,14 @@ public abstract partial class BaseLlmStep
                 promptTokens: promptTokens,
                 completionTokens: completionTokens,
                 model: Model);
+        }
+
+        // Services report tokens but not cost: they never see the provider's model catalogue.
+        // Filling it here covers every provider at once and keeps LlmProvider.Models - which
+        // declares the per-million prices - from being configuration nobody reads.
+        if (result.CostUsd is null && result.IsSuccess)
+        {
+            result.CostUsd = Provider.CalculateCost(result.Model ?? Model, result.PromptTokens, result.CompletionTokens);
         }
 
         // ── Normalización post-ensamblado ──

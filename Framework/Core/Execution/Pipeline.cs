@@ -398,6 +398,10 @@ public sealed class Pipeline : IPipeline
                 }
                 else
                 {
+                    // Completed in a prior run. Results are cached only once the step AND its
+                    // NextSteps have all succeeded, so the children already ran - returning them
+                    // still attached would run them a second time on resume.
+                    value.NextSteps.Clear();
                     return value;
                 }
             }

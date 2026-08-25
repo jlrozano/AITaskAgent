@@ -26,8 +26,22 @@ internal sealed class RetryMiddleware(ILogger<RetryMiddleware> logger) : IPipeli
         int attempt = 1;
         while (attempt <= step.MaxRetries)
         {
-            // Store current attempt in context for observability middelware
-            context.Metadata["__current_attempt__"] = attempt;
+            // Announce every retry. ObservabilityMiddleware emits the StepStartedEvent for the
+            // first attempt, but it cannot see the later ones: this middleware calls
+            // step.ExecuteAsync directly rather than next(), so the retry loop lives *inside*
+            // Observability's single call and never surfaces through it.
+            if (attempt > 1)
+            {
+                await context.SendEventAsync(new StepStartedEvent
+                {
+                    StepName = step.Name,
+                    StepPath = context.CurrentStepPath,
+                    CorrelationId = context.CorrelationId,
+                    Timestamp = DateTimeOffset.UtcNow,
+                    SchemaVersion = "1.0",
+                    AttemptNumber = attempt
+                }, cancellationToken);
+            }
 
             try
             {

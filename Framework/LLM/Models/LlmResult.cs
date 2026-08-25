@@ -20,8 +20,12 @@ public sealed class LlmResult
     /// <summary>Completion tokens generated.</summary>
     public int? CompletionTokens { get; init; }
 
-    /// <summary>Estimated cost in USD.</summary>
-    public decimal? CostUsd { get; init; }
+    /// <summary>
+    /// Estimated cost in USD. Settable within the assembly because services report tokens but
+    /// cannot price them - they never see the provider's model catalogue - so BaseLlmStep fills
+    /// it in from <c>LlmProvider.CalculateCost</c> once the call returns.
+    /// </summary>
+    public decimal? CostUsd { get; internal set; }
 
     /// <summary>Model used for generation.</summary>
     public string? Model { get; init; }

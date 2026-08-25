@@ -159,12 +159,25 @@ public static class ServiceCollectionExtensions
                 var serviceType = r.ServiceType ?? providerName;
 
                 var service = availableServices.FirstOrDefault(s => s.Name.Equals(serviceType, StringComparison.OrdinalIgnoreCase))
-                           ?? availableServices.FirstOrDefault(s => s.Name.Contains(serviceType, StringComparison.OrdinalIgnoreCase))
-                           ?? availableServices.FirstOrDefault();
+                           ?? availableServices.FirstOrDefault(s => s.Name.Contains(serviceType, StringComparison.OrdinalIgnoreCase));
 
+                // Never fall back to "whatever service is registered": silently sending a prompt
+                // to a different vendor than the one configured is far worse than refusing to start.
                 if (service == null)
                 {
-                    continue;
+                    var registered = availableServices.Count > 0
+                        ? string.Join(", ", availableServices.Select(s => s.Name))
+                        : "(none registered)";
+                    throw new InvalidOperationException(
+                        $"LLM provider '{providerName}' requests service type '{serviceType}', but no matching " +
+                        $"ILlmService is registered. Registered services: {registered}. " +
+                        "Register the provider's service, or correct the 'ServiceType' value.");
+                }
+
+                if (string.IsNullOrWhiteSpace(r.BaseUrl))
+                {
+                    throw new InvalidOperationException(
+                        $"LLM provider '{providerName}' has no BaseUrl configured.");
                 }
 
                 LlmProvider provider = new()
@@ -180,9 +193,10 @@ public static class ServiceCollectionExtensions
                 options.Providers[providerName] = provider;
             }
 
+            // A fallback that quietly vanishes because of a typo is the worst possible outcome:
+            // it only shows up as an outage when the primary provider is already failing.
             var globalFallbacks = raw.FallbackProviders
-                .Where(f => options.Providers.ContainsKey(f.Provider) && !string.IsNullOrWhiteSpace(f.Model))
-                .Select(f => new LlmFallback(f.Model, options.Providers[f.Provider], f.Inference))
+                .Select(f => BuildFallback(f, options.Providers, "FallbackProviders"))
                 .ToList();
 
             // 2. Build Roles
@@ -191,26 +205,32 @@ public static class ServiceCollectionExtensions
                 var r = kvp.Value;
                 var roleName = kvp.Key;
 
-                if (string.IsNullOrEmpty(r.Provider) || !options.Providers.TryGetValue(r.Provider, out var provider))
+                // Same reasoning as above: a role pointing at a provider that does not exist is a
+                // configuration bug, not something to paper over with the first provider at hand.
+                if (string.IsNullOrEmpty(r.Provider))
                 {
-                    if (options.Providers.Count > 0)
-                    {
-                        provider = options.Providers.Values.First();
-                    }
-                    else
-                    {
-                        continue;
-                    }
+                    throw new InvalidOperationException(
+                        $"LLM role '{roleName}' does not declare a Provider.");
                 }
+
+                if (!options.Providers.TryGetValue(r.Provider, out var provider))
+                {
+                    var available = options.Providers.Count > 0
+                        ? string.Join(", ", options.Providers.Keys)
+                        : "(none configured)";
+                    throw new InvalidOperationException(
+                        $"LLM role '{roleName}' references provider '{r.Provider}', which is not configured. " +
+                        $"Available providers: {available}.");
+                }
+
                 if (string.IsNullOrWhiteSpace(r.Model))
                 {
-                    continue;
+                    throw new InvalidOperationException(
+                        $"LLM role '{roleName}' does not declare a Model.");
                 }
 
                 var roleFallbacks = r.Fallbacks != null && r.Fallbacks.Count > 0
-                    ? [.. r.Fallbacks
-                        .Where(f => options.Providers.ContainsKey(f.Provider) && !string.IsNullOrWhiteSpace(f.Model))
-                        .Select(f => new LlmFallback(f.Model, options.Providers[f.Provider], f.Inference))]
+                    ? [.. r.Fallbacks.Select(f => BuildFallback(f, options.Providers, $"role '{roleName}'"))]
                     : globalFallbacks;
                 LlmRole role = new()
                 {
@@ -224,6 +244,42 @@ public static class ServiceCollectionExtensions
                 options.Roles[roleName] = role;
             }
 
+            // Steps that name no role fall back to this one, so a missing default is a failure
+            // waiting to happen at the first such step rather than at startup.
+            if (options.Roles.Count > 0 && !options.Roles.ContainsKey(options.DefaultRole))
+            {
+                throw new InvalidOperationException(
+                    $"Default LLM role '{options.DefaultRole}' is not configured. " +
+                    $"Available roles: {string.Join(", ", options.Roles.Keys)}.");
+            }
+        }
+
+        /// <summary>
+        /// Builds a fallback entry, failing loudly when it names a provider that does not exist or
+        /// omits the model.
+        /// </summary>
+        private static LlmFallback BuildFallback(
+            FallbackProviderSettings f,
+            Dictionary<string, LlmProvider> providers,
+            string origin)
+        {
+            if (!providers.TryGetValue(f.Provider, out var provider))
+            {
+                var available = providers.Count > 0
+                    ? string.Join(", ", providers.Keys)
+                    : "(none configured)";
+                throw new InvalidOperationException(
+                    $"Fallback in {origin} references provider '{f.Provider}', which is not configured. " +
+                    $"Available providers: {available}.");
+            }
+
+            if (string.IsNullOrWhiteSpace(f.Model))
+            {
+                throw new InvalidOperationException(
+                    $"Fallback in {origin} for provider '{f.Provider}' does not declare a Model.");
+            }
+
+            return new LlmFallback(f.Model, provider, f.Inference);
         }
     }
 

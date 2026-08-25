@@ -68,7 +68,10 @@ public class ParallelStep : StepBase
                 }, ct);
 
                 Stopwatch branchStopwatch = Stopwatch.StartNew();
-                IStepResult stepResult = await context.ExecuteStepsWithNextStepsAsync(
+                // Execute on branchContext, not the shared one: CloneForBranch exists precisely to
+                // give each branch its own conversation and step path. Running on `context` while
+                // only the events used `branchContext` left every branch sharing state.
+                IStepResult stepResult = await branchContext.ExecuteStepsWithNextStepsAsync(
                     [step], input, Name, ct, isBranchScope: true);
                 branchStopwatch.Stop();
                 result.AddResult(step.Name, stepResult);

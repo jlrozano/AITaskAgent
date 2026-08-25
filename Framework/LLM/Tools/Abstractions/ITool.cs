@@ -22,6 +22,18 @@ public interface ITool
     /// </summary>
     string? UsageGuidelines => null;
 
+    /// <summary>
+    /// Whether the tool only reads state. Defaults to false - assume a tool has side effects
+    /// unless it says otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Used by the tool-calling loop to decide how much repetition to tolerate: re-reading the
+    /// same file is often legitimate exploration, whereas repeating a write with identical
+    /// arguments means the model is stuck. Declared by each tool rather than inferred from a list
+    /// of known names, so the framework stays independent of any particular tool package.
+    /// </remarks>
+    bool IsReadOnly => false;
+
     /// <summary>Gets the provider-agnostic tool definition.</summary>
     ToolDefinition GetDefinition();
 

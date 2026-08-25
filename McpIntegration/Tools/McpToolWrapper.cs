@@ -74,15 +74,6 @@ public sealed class McpToolWrapper(
             // Parse arguments from JSON
             var arguments = ParseArguments(argumentsJson);
 
-            // Restricción de seguridad: Forzar al MCP de BdpCodebase a usar únicamente el proyecto C-Asisa-BDP
-            if (_serverName == "BdpCodebase")
-            {
-                if (arguments.ContainsKey("project"))
-                {
-                    arguments["project"] = JsonSerializer.SerializeToElement("C-Asisa-BDP");
-                }
-            }
-
             // Call MCP tool
             var result = await _client.CallToolAsync(
                 new CallToolRequestParams
@@ -94,28 +85,6 @@ public sealed class McpToolWrapper(
 
             // Extract and return text content
             var textResult = ExtractTextResult(result);
-
-            // Filtrado de seguridad: Ocultar otros proyectos globales en la respuesta de list_projects
-            if (_serverName == "BdpCodebase" && Name == "list_projects")
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(textResult);
-                    if (doc.RootElement.TryGetProperty("projects", out var projectsProp) && projectsProp.ValueKind == JsonValueKind.Array)
-                    {
-                        var filteredProjects = projectsProp.EnumerateArray()
-                            .Where(p => p.TryGetProperty("name", out var nameProp) && nameProp.GetString() == "C-Asisa-BDP")
-                            .ToList();
-                        
-                        var filteredDoc = new { projects = filteredProjects };
-                        textResult = JsonSerializer.Serialize(filteredDoc);
-                    }
-                }
-                catch
-                {
-                    // Mantener el texto original en caso de error de parseo
-                }
-            }
 
             stopwatch.Stop();
 

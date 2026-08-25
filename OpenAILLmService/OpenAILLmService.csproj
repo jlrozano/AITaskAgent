@@ -9,7 +9,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.ClientModel" Version="1.8.1" />
     <ProjectReference Include="..\Framework\AITaskAgent.csproj" />
   </ItemGroup>
 

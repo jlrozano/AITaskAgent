@@ -15,6 +15,9 @@ public sealed class ViewCodeItemTool : BaseFileTool
 {
     public override string Name => "view_code_item";
 
+    /// <inheritdoc/>
+    public override bool IsReadOnly => true;
+
     public override string Description => "View specific code definitions (classes, methods, properties) from a C# file without loading the entire file.";
     public override string? UsageGuidelines => "Use after view_file_outline to see specific method/class implementations without loading full file.";
 

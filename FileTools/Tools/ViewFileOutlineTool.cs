@@ -15,6 +15,9 @@ namespace AITaskAgent.FileTools.Tools;
 public sealed class ViewFileOutlineTool : BaseFileTool
 {
     public override string Name => "view_file_outline";
+
+    /// <inheritdoc/>
+    public override bool IsReadOnly => true;
     public override string Description => "View the outline of the input file. Contains breakdown of functions and classes. Preferable first step for exploring files.";
     public override string? UsageGuidelines => "Start here when exploring code files. Shows classes, methods, properties without full content.";
 

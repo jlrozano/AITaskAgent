@@ -18,11 +18,10 @@ public sealed class ConsoleStepTracer : IStepTracer
             _ => "ℹ️"
         };
 
+        // A substring check for "Loop exhausted" used to live here. Nothing ever emitted such a
+        // trace, and an exhausted loop now reports through LoopExhaustedEvent on the event channel,
+        // which carries the fact as a type instead of as prose.
         string message = evt.Message != null ? $": {evt.Message}" : "";
-        if (evt.Message != null && evt.Message.Contains("Loop exhausted"))
-        {
-            icon = "⚠️";
-        }
         Console.WriteLine($"{icon} [{evt.StepName}] {evt.Status}{message}");
 
         if (evt.StreamingContent != null)

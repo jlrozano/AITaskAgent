@@ -36,21 +36,15 @@ internal sealed class ObservabilityMiddleware : IPipelineMiddleware
         // ENRICHMENT: Allow step to add custom tags before execution
         enrichable?.EnrichActivityBefore(activity, input, context);
 
-        // Get attempt number from context if available (set by RetryMiddleware)
-        var attemptNumber = 1;
-        if (context.Metadata.TryGetValue("__current_attempt__", out var attemptObj))
-        {
-            attemptNumber = attemptObj is int attempt ? attempt : 1;
-            context.Metadata.TryRemove("__current_attempt__", out var _);
-        }
-
-        // Create and enrich started event
+        // Always the first attempt: RetryMiddleware runs the step directly instead of calling
+        // next(), so its retry loop is nested inside this single call and cannot report back here.
+        // Retries emit their own StepStartedEvent from RetryMiddleware.
         StepStartedEvent startedEvent = new()
         {
             StepName = step.Name,
             StepPath = context.CurrentStepPath,
             CorrelationId = context.CorrelationId,
-            AttemptNumber = attemptNumber,
+            AttemptNumber = 1,
             SchemaVersion = "1.0"
         };
         StepStartedEvent enrichedStartedEvent = enrichable?.EnrichStartedEvent(startedEvent, input, context) ?? startedEvent;

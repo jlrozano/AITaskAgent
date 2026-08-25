@@ -10,6 +10,9 @@ namespace AITaskAgent.FileTools.Tools;
 public sealed class ViewFileTool : BaseFileTool
 {
     public override string Name => "view_file";
+
+    /// <inheritdoc/>
+    public override bool IsReadOnly => true;
     public override string Description => "View the contents of a file from the local filesystem. This tool supports some binary files such as images and videos.\nText file usage:\n- The lines of the file are 1-indexed\n- The first time you read a new file the tool will enforce reading 800 lines to understand as much about the file as possible\n- The output of this tool call will be the file contents from StartLine to EndLine (inclusive)\n- You can view at most 800 lines at a time\n- To view the whole file do not pass StartLine or EndLine arguments\nBinary file usage:\n- Do not provide StartLine or EndLine arguments, this tool always returns the entire file";
     public override string? UsageGuidelines => "Use to read file contents. For file structure overview, use view_file_outline first.";
 

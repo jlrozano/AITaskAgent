@@ -15,6 +15,9 @@ namespace AITaskAgent.FileTools.Tools;
 public sealed class GrepSearchTool : BaseFileTool
 {
     public override string Name => "grep_search";
+
+    /// <inheritdoc/>
+    public override bool IsReadOnly => true;
     public override string Description => "Use this tool to find exact pattern matches within files or directories. Results returned in JSON format including Filename, LineNumber, and LineContent. Total results capped at 50.";
     public override string? UsageGuidelines => "Use to find text patterns or code references across files. Supports regex.";
 
