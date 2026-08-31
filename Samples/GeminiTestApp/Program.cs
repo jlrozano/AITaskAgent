@@ -21,6 +21,14 @@ var providerConfig = configuration.GetSection("AITaskAgent:LlmProviders:Provider
     .Get<GeminiSettings>()
     ?? throw new InvalidOperationException("Gemini provider configuration not found");
 
+// Fallback: the config binding only picks up the fully-qualified variable
+// (AITaskAgent__LlmProviders__Providers__Gemini__ApiKey), so accept the short
+// GEMINI_API_KEY name too - it is what the API key docs hand out.
+if (string.IsNullOrEmpty(providerConfig.ApiKey))
+{
+    providerConfig.ApiKey = System.Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
+}
+
 Console.WriteLine($"Model: {providerConfig.Model}");
 Console.WriteLine($"BaseUrl: {providerConfig.BaseUrl}\n");
 
@@ -30,8 +38,9 @@ if (string.IsNullOrEmpty(providerConfig.ApiKey) || providerConfig.ApiKey.Contain
     Console.ForegroundColor = ConsoleColor.Yellow;
     Console.WriteLine("⚠️  API Key not configured!");
     Console.WriteLine("Set your API key in one of these ways:");
-    Console.WriteLine("  1. Edit appsettings.json and replace <YOUR_GEMINI_API_KEY>");
+    Console.WriteLine("  1. Edit appsettings.json and fill in the empty ApiKey field");
     Console.WriteLine("  2. Set environment variable: GEMINI_API_KEY");
+    Console.WriteLine("  3. Set environment variable: AITaskAgent__LlmProviders__Providers__Gemini__ApiKey");
     Console.WriteLine("\nGet your API key at: https://ai.google.dev/");
     Console.ResetColor();
     return;
@@ -39,13 +48,20 @@ if (string.IsNullOrEmpty(providerConfig.ApiKey) || providerConfig.ApiKey.Contain
 
 Console.WriteLine($"API Key: {providerConfig.ApiKey.Substring(0, 5)}... (Configured)");
 
-// 2. Setup logger
+// 2. Setup logger - to file, so framework messages never cut into streamed output
+const ConsoleColor ThinkingColor = ConsoleColor.DarkGray;
+const ConsoleColor AnswerColor = ConsoleColor.Green;
+
+var logPath = Path.Combine(AppContext.BaseDirectory, "logs", "gemini-demo.log");
+using var logProvider = new GeminiTestApp.FileLoggerProvider(logPath);
 using var loggerFactory = LoggerFactory.Create(builder =>
 {
-    builder.AddConsole();
+    builder.AddProvider(logProvider);
     builder.SetMinimumLevel(LogLevel.Information);
 });
 var logger = loggerFactory.CreateLogger<GeminiLlmService.GeminiLlmService>();
+
+Console.WriteLine($"Logs: {logProvider.FilePath}");
 
 // 3. Create service
 var service = new GeminiLlmService.GeminiLlmService(logger);
@@ -96,6 +112,26 @@ async Task ListModelsAsync(GeminiLlmService.GeminiLlmService svc, string apiKey,
     }
 }
 
+// ============ Helper: Locate this file's source ============
+// The caching demo feeds its own source to the model. A bare "Program.cs" only
+// resolves when the app is launched from the project folder, so walk up from the
+// binary location until the file shows up.
+string ResolveSelfSource()
+{
+    for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+    {
+        var candidate = Path.Combine(dir.FullName, "Program.cs");
+        if (System.IO.File.Exists(candidate))
+        {
+            return candidate;
+        }
+    }
+
+    throw new FileNotFoundException(
+        "Program.cs not found above " + AppContext.BaseDirectory +
+        ". Run the caching demo from a build that still has its sources alongside it.");
+}
+
 // ============ Demo: Google Search Grounding ============
 async Task DemoGoogleSearchAsync(GeminiLlmService.GeminiLlmService svc, GeminiSettings config)
 {
@@ -134,30 +170,24 @@ async Task DemoGoogleSearchAsync(GeminiLlmService.GeminiLlmService svc, GeminiSe
         // Iterate over the stream
         await foreach (var chunk in svc.InvokeStreamingAsync(request))
         {
-            // Handle state transitions for thinking
-            if (chunk.IsThinking && !isThinking)
+            // Mark the boundaries of the thinking block
+            if (chunk.IsThinking != isThinking)
             {
-                isThinking = true;
-                Console.ForegroundColor = ConsoleColor.Gray;
-                Console.Write("\n<think>");
-            }
-            else if (!chunk.IsThinking && isThinking)
-            {
-                isThinking = false;
-                Console.Write("</think>\n\n");
-                Console.ResetColor();
-                Console.ForegroundColor = ConsoleColor.Green;
+                isThinking = chunk.IsThinking;
+                Console.ForegroundColor = ThinkingColor;
+                Console.Write(isThinking ? "\n<think>" : "</think>\n\n");
             }
 
-            // Print the content
+            // Thinking and answer each keep their own color, whichever comes first
+            Console.ForegroundColor = isThinking ? ThinkingColor : AnswerColor;
             Console.Write(chunk.Delta);
         }
 
         // Close thinking if it was open at the end (unlikely but safe)
         if (isThinking)
         {
+            Console.ForegroundColor = ThinkingColor;
             Console.Write("</think>\n");
-            Console.ResetColor();
         }
 
         Console.ResetColor();
@@ -208,7 +238,7 @@ async Task DemoContextCachingAsync(GeminiLlmService.GeminiLlmService svc, Gemini
     var cacheManager = svc.CacheManager;
 
     // Create a large context (repeated to exceed token limit for demo)
-    var docContent = System.IO.File.ReadAllText("Program.cs"); // Read self as part of context
+    var docContent = System.IO.File.ReadAllText(ResolveSelfSource()); // Read self as part of context
     var largeContext = new System.Text.StringBuilder();
     largeContext.AppendLine("Eres un experto en el framework AITaskAgent.");
 

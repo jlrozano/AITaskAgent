@@ -10,6 +10,10 @@
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="Tests/AITaskAgent.Tests.csproj" />
+    <Project Path="GeminiLlmService.Tests/GeminiLlmService.Tests.csproj" />
+    <Project Path="OpenAILLmService.Tests/OpenAILLmService.Tests.csproj" />
+    <Project Path="FileTools.Tests/FileTools.Tests.csproj" />
+    <Project Path="McpIntegration.Tests/McpIntegration.Tests.csproj" />
   </Folder>
   <Folder Name="/Samples/">
     <Project Path="Samples/AdvancedLlmPipeline/Samples.AdvancedLlmPipeline.csproj" />

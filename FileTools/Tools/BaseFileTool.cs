@@ -271,47 +271,35 @@ public abstract partial class BaseFileTool : LlmTool
     }
 
     /// <summary>
-    /// Validates if the path is within the configured RootDirectory.
+    /// Validates that the path sits inside one of the allowed directories.
     /// </summary>
+    /// <exception cref="UnauthorizedAccessException">Thrown when it sits outside all of them.</exception>
     protected static void ValidatePath(string path)
     {
-        if (string.IsNullOrWhiteSpace(FileToolsConfiguration.RootDirectory))
+        if (FileToolsConfiguration.IsAllowed(path))
         {
             return;
         }
 
-        var fullPath = Path.GetFullPath(path);
-        var rootPath = Path.GetFullPath(FileToolsConfiguration.RootDirectory);
-
-        // Normalize both paths to use consistent separator and end with it
-        var sep = Path.DirectorySeparatorChar.ToString();
-        var altSep = Path.AltDirectorySeparatorChar.ToString();
-
-        var normalizedFullPath = fullPath.Replace(altSep, sep);
-        var normalizedRootPath = rootPath.Replace(altSep, sep);
-
-        if (!normalizedFullPath.EndsWith(sep)) normalizedFullPath += sep;
-        if (!normalizedRootPath.EndsWith(sep)) normalizedRootPath += sep;
-
-        // Check if fullPath is the same as rootPath OR starts with rootPath
-        if (!normalizedFullPath.Equals(normalizedRootPath, StringComparison.OrdinalIgnoreCase) &&
-            !normalizedFullPath.StartsWith(normalizedRootPath, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException($"Access denied: Path '{path}' is outside the authorized root directory '{FileToolsConfiguration.RootDirectory}'.");
-        }
+        throw new UnauthorizedAccessException(
+            $"Access denied: Path '{path}' is outside the authorized directories: "
+            + string.Join(", ", FileToolsConfiguration.AllowedDirectories) + ".");
     }
 
     /// <summary>
-    /// Resolves a relative path against the configured RootDirectory.
-    /// If path is null/empty, returns RootDirectory.
-    /// If path is absolute, returns it (after validation).
-    /// If path is relative, combines with RootDirectory.
+    /// Resolves a path against the primary root directory.
+    /// If path is null/empty, returns the root.
+    /// If path is absolute, returns it as-is (callers validate it separately).
+    /// If path is relative, combines it with the root.
     /// </summary>
+    /// <remarks>
+    /// Only the primary root takes part here: directories added via
+    /// <see cref="FileToolsConfiguration.AddAllowedDirectory"/> widen what is permitted, not what
+    /// a relative path can point at, so a relative path always means the same location.
+    /// </remarks>
     protected static string ResolvePath(string? path)
     {
-        var root = string.IsNullOrWhiteSpace(FileToolsConfiguration.RootDirectory)
-            ? Directory.GetCurrentDirectory()
-            : FileToolsConfiguration.RootDirectory;
+        var root = FileToolsConfiguration.RootDirectory;
 
         if (string.IsNullOrWhiteSpace(path))
         {

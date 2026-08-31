@@ -31,16 +31,37 @@ using System.Text.RegularExpressions;
 var environmentName =
     Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ??
     Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ??
-    "Production";
+    "Development";
 
-// Leer appsettings.json y expandir variables de entorno ${VAR}
-var jsonConfig = File.ReadAllText("appsettings.json");
-jsonConfig = Regex.Replace(jsonConfig, @"\$\{(\w+)\}", m => Environment.GetEnvironmentVariable(m.Groups[1].Value) ?? m.Value);
-using var configStream = new MemoryStream(Encoding.UTF8.GetBytes(jsonConfig));
+// Reads a settings file next to the binary, expanding ${VAR} placeholders from the
+// environment. Returns null when the file is absent (the environment overlay is optional).
+static MemoryStream? ReadSettings(string fileName)
+{
+    var path = Path.Combine(Directory.GetCurrentDirectory(), fileName);
+    if (!File.Exists(path)) return null;
 
-IConfiguration configuration = new ConfigurationBuilder()
+    var json = Regex.Replace(
+        File.ReadAllText(path),
+        @"\$\{(\w+)\}",
+        m => Environment.GetEnvironmentVariable(m.Groups[1].Value) ?? m.Value);
+    return new MemoryStream(Encoding.UTF8.GetBytes(json));
+}
+
+using var configStream = ReadSettings("appsettings.json")
+    ?? throw new FileNotFoundException("appsettings.json not found in the working directory.");
+// The environment overlay carries the API keys (gitignored) and must win over the base file.
+using var envConfigStream = ReadSettings($"appsettings.{environmentName}.json");
+
+var configBuilder = new ConfigurationBuilder()
     .SetBasePath(Directory.GetCurrentDirectory())
-    .AddJsonStream(configStream)
+    .AddJsonStream(configStream);
+
+if (envConfigStream != null)
+{
+    configBuilder.AddJsonStream(envConfigStream);
+}
+
+IConfiguration configuration = configBuilder
     .AddEnvironmentVariables()
     .Build();
 
@@ -80,7 +101,7 @@ services.AddAITaskAgent();
 
 // Registro de Servicios LLM
 services.AddSingleton<ILlmService, OpenAILLmService.OpenAILlmService>();
-services.AddSingleton<GeminiProxy>();
+services.AddSingleton<GeminiLlmService.GeminiLlmService>();
 
 services.AddSingleton<IStepTracer, NullStepTracer>();
 services.AddSingleton<IConversationStorage>(new FileConversationStorage("conversations"));
@@ -96,14 +117,14 @@ var rawEnv = new LlmEnvironment();
 configuration.GetSection("AITaskAgent:LlmProviders").Bind(rawEnv); // Standard bind for simple properties
 
 var openAiService = serviceProvider.GetRequiredService<ILlmService>();
-var geminiProxy = serviceProvider.GetRequiredService<GeminiProxy>();
+var geminiService = serviceProvider.GetRequiredService<GeminiLlmService.GeminiLlmService>();
 
 // Manual Hydration of Providers
 foreach (var kvp in rawEnv.Providers)
 {
     var provider = kvp.Value;
-    ILlmService service = (kvp.Key.Contains("Gemini", StringComparison.OrdinalIgnoreCase) || kvp.Key.Contains("Google", StringComparison.OrdinalIgnoreCase)) 
-        ? geminiProxy : openAiService;
+    ILlmService service = (kvp.Key.Contains("Gemini", StringComparison.OrdinalIgnoreCase) || kvp.Key.Contains("Google", StringComparison.OrdinalIgnoreCase))
+        ? geminiService : openAiService;
     typeof(LlmProvider).GetProperty("Service")?.SetValue(provider, service);
 }
 
@@ -336,15 +357,6 @@ while (true)
 }
 
 // --- Internal classes ---
-
-public class GeminiProxy(ILlmService openAiService) : ILlmService
-{
-    public string Name => "gemini";
-    public Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken ct) => openAiService.InvokeAsync(request, ct);
-    public IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(LlmRequest request, CancellationToken ct) => openAiService.InvokeStreamingAsync(request, ct);
-    public int EstimateTokenCount(string text) => openAiService.EstimateTokenCount(text);
-    public int GetMaxContextTokens(string? model) => openAiService.GetMaxContextTokens(model);
-}
 
 internal class UserInputResult(string input) : StepResult(new EmptyStep("User"), input)
 {

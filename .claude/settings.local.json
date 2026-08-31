@@ -1,4 +1,13 @@
 {
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false,
+    "pro-workflow@pro-workflow": false,
+    "frontend-design@claude-plugins-official": false,
+    "playwright@claude-plugins-official": false,
+    "context7@claude-plugins-official": false,
+    "code-review@claude-plugins-official": false,
+    "security-guidance@claude-plugins-official": false
+  },
   "permissions": {
     "allow": [
       "Bash(head:*)",

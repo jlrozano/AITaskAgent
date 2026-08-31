@@ -3,6 +3,7 @@ using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Models;
 using AITaskAgent.LLM.Support;
+using AITaskAgent.Resilience;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -28,9 +29,30 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
 
     private static readonly HashSet<int> TransientStatusCodes = [429, 500, 502, 503, 504];
 
-    public OpenAILlmService(ILogger<OpenAILlmService> logger)
+    private readonly int _retryMaxAttempts;
+    private readonly TimeSpan _retryInitialDelay;
+    private readonly TimeSpan _retryMaxDelay;
+
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="retryPolicy">
+    /// Retry settings for transient failures. Only the attempt count and delays are used: whether
+    /// a given failure is transient is decided by <see cref="LlmResult.IsRetriable"/>.
+    /// </param>
+    public OpenAILlmService(ILogger<OpenAILlmService> logger, RetryPolicy? retryPolicy = null)
     {
         _logger = logger;
+
+        var policy = retryPolicy ?? new RetryPolicy
+        {
+            MaxAttempts = 3,
+            InitialDelay = TimeSpan.FromSeconds(2),
+            MaxDelay = TimeSpan.FromSeconds(60)
+        };
+
+        _retryMaxAttempts = Math.Max(1, policy.MaxAttempts);
+        _retryInitialDelay = policy.InitialDelay;
+        _retryMaxDelay = policy.MaxDelay;
+
         if (_logger.IsEnabled(LogLevel.Information))
             _logger.LogInformation("OpenAILlmService initialized.");
     }
@@ -48,6 +70,14 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
 
     private static bool IsRetriable(int statusCode) =>
         TransientStatusCodes.Contains(statusCode);
+
+    /// <summary>How much of an unexpected response body reaches the log.</summary>
+    private const int RawBodyLogLimit = 4000;
+
+    private static string Truncate(string value, int maxLength) =>
+        string.IsNullOrEmpty(value) || value.Length <= maxLength
+            ? value
+            : value[..maxLength] + $"... [truncated, {value.Length} chars total]";
 
     private HttpClient GetOrCreateClient(LlmRequest request)
     {
@@ -87,13 +117,23 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
         return client;
     }
 
+    /// <summary>
+    /// Framework facade properties (see LlmInferenceSettings) that share the Options JObject with
+    /// vendor-specific passthrough keys. They are already handled explicitly above, or don't map
+    /// to anything in the OpenAI protocol, so they must not be forwarded as raw body fields.
+    /// </summary>
+    private static readonly HashSet<string> FrameworkFacadeOptionKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Temperature", "TopP", "MaxTokens", "UseStreaming", "JsonSupport", "ToolSupport", "Stop"
+    };
+
     private static string GetEndpoint(LlmRequest request)
     {
         var baseUrl = request.BaseUrl?.TrimEnd('/') ?? "https://api.openai.com/v1";
         return $"{baseUrl}/chat/completions";
     }
 
-    private static JObject BuildRequestBody(LlmRequest request, bool stream = false)
+    internal static JObject BuildRequestBody(LlmRequest request, bool stream = false)
     {
         var messages = new JArray();
 
@@ -138,9 +178,15 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
 
         // Custom parameters: sin AsyncLocal, sin pipeline policy, sin re-serialización.
         // Cualquier campo vendor-specific (thinking, provider, etc.) va aquí directamente.
+        // Las claves de fachada del framework (Temperature, JsonSupport, ...) viven en el mismo
+        // JObject que las opciones de proveedor (LlmInferenceSettings) pero ya se traducen arriba
+        // a sus campos OpenAI correspondientes (o no aplican al protocolo), así que se excluyen
+        // aquí para no reenviarlas en crudo - algunos endpoints (OpenRouter, Gemini compat) las
+        // rechazan con 400 al no reconocerlas.
         if (request.Options != null)
             foreach (var prop in request.Options.Properties())
-                body[prop.Name] = prop.Value.DeepClone();
+                if (!FrameworkFacadeOptionKeys.Contains(prop.Name))
+                    body[prop.Name] = prop.Value.DeepClone();
 
         if (stream)
         {
@@ -158,9 +204,51 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
     // InvokeAsync
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Sends the request, retrying transient failures with exponential backoff.
+    /// </summary>
+    /// <remarks>
+    /// The retry lives here because this service converts transport failures into a failed
+    /// <see cref="LlmResult"/> instead of letting them surface as exceptions, so an
+    /// exception-driven policy would never see them.
+    /// </remarks>
     public async Task<LlmResult> InvokeAsync(
         LlmRequest request,
         CancellationToken cancellationToken = default)
+    {
+        var delay = _retryInitialDelay;
+        LlmResult result;
+
+        for (var attempt = 1; ; attempt++)
+        {
+            result = await InvokeOnceAsync(request, cancellationToken);
+
+            if (result.IsSuccess || !result.IsRetriable || attempt >= _retryMaxAttempts)
+            {
+                if (!result.IsSuccess && result.IsRetriable && attempt >= _retryMaxAttempts)
+                {
+                    _logger.LogError(
+                        "Giving up after {Attempts} attempts for model {Model}.",
+                        attempt, request.Model);
+                }
+
+                return result;
+            }
+
+            _logger.LogWarning(
+                "Attempt {Attempt}/{MaxAttempts} failed for model {Model}, retrying in {Delay}ms. Reason: {Reason}",
+                attempt, _retryMaxAttempts, request.Model, delay.TotalMilliseconds,
+                result.Error?.Message);
+
+            await Task.Delay(delay, cancellationToken);
+            delay = TimeSpan.FromMilliseconds(
+                Math.Min(delay.TotalMilliseconds * 2, _retryMaxDelay.TotalMilliseconds));
+        }
+    }
+
+    private async Task<LlmResult> InvokeOnceAsync(
+        LlmRequest request,
+        CancellationToken cancellationToken)
     {
         var client   = GetOrCreateClient(request);
         var endpoint = GetEndpoint(request);
@@ -204,7 +292,20 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
             return LlmResult.Failure(ex, isRetriable: false);
         }
 
-        var choicesRaw = root["choices"] as JArray ?? [];
+        // A 200 with no usable choices is not a success: providers signal upstream failures and
+        // free-tier limits this way, with the reason only present in the body. Returning success
+        // here would discard the one piece of evidence about what went wrong.
+        if (root["choices"] is not JArray { Count: > 0 })
+        {
+            var ex = new HttpRequestException(
+                $"Response contained no choices. Body: {Truncate(rawJson, RawBodyLogLimit)}");
+            _logger.LogError(
+                "Response contained no choices for model {Model}. Raw body: {Body}",
+                request.Model, Truncate(rawJson, RawBodyLogLimit));
+            return LlmResult.Failure(ex, isRetriable: true);
+        }
+
+        var choicesRaw = (JArray)root["choices"]!;
         var usageRaw   = root["usage"];
         var model      = root["model"]?.Value<string>() ?? request.Model;
 

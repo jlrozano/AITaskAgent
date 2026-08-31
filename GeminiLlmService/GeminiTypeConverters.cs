@@ -1,6 +1,7 @@
 using AITaskAgent.LLM.Models;
 using Google.GenAI.Types;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using STJ = System.Text.Json;
 
 namespace GeminiLlmService;
@@ -60,7 +61,10 @@ internal static class GeminiTypeConverters
                     {
                         Name = toolCall.Name,
                         Args = argsDict
-                    }
+                    },
+                    // Gemini 3 rejects a functionCall echoed back without its thoughtSignature.
+                    // It is carried on the native Part captured when the call was streamed.
+                    ThoughtSignature = ExtractThoughtSignature(toolCall)
                 });
             }
         }
@@ -162,8 +166,8 @@ internal static class GeminiTypeConverters
         }
 
         // Parse JSON schema to build Gemini Schema
-        var schemaDict = JsonConvert.DeserializeObject<Dictionary<string, object>>(tool.ParametersJsonSchema);
-        var geminiSchema = ConvertJsonSchemaToGeminiSchema(schemaDict);
+        var schemaObj = JObject.Parse(tool.ParametersJsonSchema);
+        var geminiSchema = ConvertJsonSchemaToGeminiSchema(schemaObj);
 
         return new Tool
         {
@@ -182,6 +186,31 @@ internal static class GeminiTypeConverters
     /// <summary>
     /// Converts Gemini FunctionCall to framework ToolCall.
     /// </summary>
+    /// <summary>
+    /// Wraps a Gemini Part as a NativeObject so provider metadata that lives on the Part
+    /// (notably ThoughtSignature) survives the round-trip through the framework models.
+    /// </summary>
+    public static NativeObject ToNativeToolCallObject(this Part part) => new()
+    {
+        Provider = ProviderName,
+        Value = part,
+        TypeName = part.GetType().AssemblyQualifiedName!
+    };
+
+    /// <summary>
+    /// Recovers the thoughtSignature Gemini emitted alongside a function call, if this tool call
+    /// originated from Gemini. Returns null for tool calls from any other provider.
+    /// </summary>
+    private static byte[]? ExtractThoughtSignature(ToolCall toolCall)
+    {
+        if (toolCall.Native?.Provider != ProviderName) return null;
+        return toolCall.Native.Value switch
+        {
+            Part part => part.ThoughtSignature,
+            _ => null
+        };
+    }
+
     public static ToolCall ToFrameworkToolCall(this FunctionCall functionCall)
     {
         var arguments = functionCall.Args != null
@@ -229,20 +258,27 @@ internal static class GeminiTypeConverters
     #region Schema Conversion
 
     /// <summary>
-    /// Converts a JSON Schema dictionary to Gemini Schema.
+    /// Converts a parsed JSON Schema object to Gemini Schema.
     /// </summary>
-    private static Schema ConvertJsonSchemaToGeminiSchema(Dictionary<string, object>? schemaDict)
+    /// <remarks>
+    /// Walks <see cref="Newtonsoft.Json.Linq.JObject"/>/<see cref="Newtonsoft.Json.Linq.JArray"/>
+    /// directly rather than a <c>Dictionary&lt;string, object&gt;</c>: Newtonsoft deserializes nested
+    /// JSON objects/arrays targeting <c>object</c> into JObject/JArray, not plain
+    /// Dictionary/List, so matching against those types silently dropped every nested
+    /// properties/required/items block.
+    /// </remarks>
+    internal static Schema ConvertJsonSchemaToGeminiSchema(JObject? schemaObj)
     {
-        if (schemaDict == null)
+        if (schemaObj == null)
         {
             return new Schema { Type = Google.GenAI.Types.Type.OBJECT };
         }
 
         var schema = new Schema();
 
-        if (schemaDict.TryGetValue("type", out var typeValue))
+        if (schemaObj.TryGetValue("type", out var typeValue))
         {
-            schema.Type = typeValue?.ToString()?.ToUpperInvariant() switch
+            schema.Type = typeValue.Value<string>()?.ToUpperInvariant() switch
             {
                 "OBJECT" => Google.GenAI.Types.Type.OBJECT,
                 "STRING" => Google.GenAI.Types.Type.STRING,
@@ -254,34 +290,31 @@ internal static class GeminiTypeConverters
             };
         }
 
-        if (schemaDict.TryGetValue("description", out var descValue))
+        if (schemaObj.TryGetValue("description", out var descValue))
         {
-            schema.Description = descValue?.ToString();
+            schema.Description = descValue.Value<string>();
         }
 
-        if (schemaDict.TryGetValue("properties", out var propsValue) &&
-            propsValue is Dictionary<string, object> props)
+        if (schemaObj.TryGetValue("properties", out var propsValue) && propsValue is JObject propsObj)
         {
             schema.Properties = new Dictionary<string, Schema>();
-            foreach (var (key, value) in props)
+            foreach (var prop in propsObj.Properties())
             {
-                if (value is Dictionary<string, object> propSchema)
+                if (prop.Value is JObject propSchema)
                 {
-                    schema.Properties[key] = ConvertJsonSchemaToGeminiSchema(propSchema);
+                    schema.Properties[prop.Name] = ConvertJsonSchemaToGeminiSchema(propSchema);
                 }
             }
         }
 
-        if (schemaDict.TryGetValue("required", out var requiredValue) &&
-            requiredValue is List<object> required)
+        if (schemaObj.TryGetValue("required", out var requiredValue) && requiredValue is JArray requiredArr)
         {
-            schema.Required = required.Select(r => r.ToString()!).ToList();
+            schema.Required = requiredArr.Select(r => r.Value<string>()!).ToList();
         }
 
-        if (schemaDict.TryGetValue("items", out var itemsValue) &&
-            itemsValue is Dictionary<string, object> items)
+        if (schemaObj.TryGetValue("items", out var itemsValue) && itemsValue is JObject itemsObj)
         {
-            schema.Items = ConvertJsonSchemaToGeminiSchema(items);
+            schema.Items = ConvertJsonSchemaToGeminiSchema(itemsObj);
         }
 
         return schema;

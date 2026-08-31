@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Framework\AITaskAgent.csproj" />
     <ProjectReference Include="..\..\OpenAILLmService\OpenAILLmService.csproj" />
+    <ProjectReference Include="..\..\GeminiLlmService\GeminiLlmService.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -27,6 +27,7 @@ public class Program
         var config = new ConfigurationBuilder()
             .SetBasePath(baseDir)
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
             .AddEnvironmentVariables()
             .Build();
 
@@ -136,7 +137,7 @@ public class Program
                     Console.ResetColor();
                     Console.ForegroundColor = ConsoleColor.DarkCyan;
                     Console.WriteLine(llmResponse.Reasoning.Trim());
-                    Console.WriteLine(new string('─', Console.WindowWidth - 1));
+                    Console.WriteLine(new string('─', SeparatorWidth()));
                     Console.ResetColor();
                 }
 
@@ -160,6 +161,14 @@ public class Program
                 Console.ResetColor();
             }
         }
+
+        Log.CloseAndFlush();
+    }
+
+    private static int SeparatorWidth()
+    {
+        try { return Math.Max(1, Console.WindowWidth - 1); }
+        catch (IOException) { return 79; }
     }
 }
 

@@ -16,4 +16,8 @@
     <ProjectReference Include="..\Framework\AITaskAgent.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileTools.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -12,6 +12,7 @@ using NJsonSchema;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace GeminiLlmService;
 
@@ -158,6 +159,7 @@ public sealed class GeminiLlmService : ILlmService
                 {
                     Index = c.Index ?? 0,
                     Content = ExtractTextContent(c),
+                    Reasoning = ExtractReasoningContent(c),
                     ToolCalls = ExtractToolCalls(c),
                     FinishReason = MapFinishReason(c.FinishReason),
                     RawFinishReason = c.FinishReason?.ToString()
@@ -409,9 +411,82 @@ public sealed class GeminiLlmService : ILlmService
         return contents;
     }
 
+    /// <summary>
+    /// Option names this service understands, spelled as the Gemini API spells them so a role's
+    /// Inference.Options can be copied straight from Google's docs.
+    /// </summary>
+    private static class GeminiOptionKeys
+    {
+        public const string TopK = "TopK";
+        public const string ThinkingConfig = "ThinkingConfig";
+        public const string IncludeThoughts = "IncludeThoughts";
+        public const string ThinkingBudget = "ThinkingBudget";
+        public const string EnableThinking = "EnableThinking";
+
+        /// <summary>Top-level keys consumed either by this service or by the framework facade.</summary>
+        public static readonly HashSet<string> Recognized = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Gemini-specific
+            TopK, ThinkingConfig, EnableThinking, ThinkingBudget,
+            // Framework facade properties, which persist into the same Options bag
+            "Temperature", "TopP", "MaxTokens", "UseStreaming", "JsonSupport", "ToolSupport", "Stop"
+        };
+
+        /// <summary>Keys accepted inside a nested ThinkingConfig object.</summary>
+        public static readonly HashSet<string> RecognizedThinking = new(StringComparer.OrdinalIgnoreCase)
+        {
+            IncludeThoughts, ThinkingBudget
+        };
+    }
+
+    /// <summary>
+    /// Fallback when a role says nothing about thinking: infer it from the model family.
+    /// </summary>
+    private static bool ModelImpliesThinking(string model) =>
+        model.Contains("thinking", StringComparison.OrdinalIgnoreCase) ||
+        model.Contains("gemini-2.0-flash", StringComparison.OrdinalIgnoreCase) ||
+        model.Contains("gemini-2.5-flash", StringComparison.OrdinalIgnoreCase) ||
+        model.Contains("gemini-3", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Logs a warning for every Inference.Options key this service will silently ignore.
+    /// Misspelled or misplaced options are otherwise invisible: the call succeeds and the setting
+    /// simply never takes effect.
+    /// </summary>
+    private void WarnOnUnrecognizedOptions(LlmRequest request)
+    {
+        foreach (var property in request.Options.Properties())
+        {
+            if (!GeminiOptionKeys.Recognized.Contains(property.Name))
+            {
+                _logger.LogWarning(
+                    "Gemini: ignoring unrecognized inference option '{Option}'. Recognized options: {Recognized}",
+                    property.Name, string.Join(", ", GeminiOptionKeys.Recognized));
+                continue;
+            }
+
+            if (!string.Equals(property.Name, GeminiOptionKeys.ThinkingConfig, StringComparison.OrdinalIgnoreCase)
+                || property.Value is not JObject nested)
+            {
+                continue;
+            }
+
+            foreach (var thinkingProperty in nested.Properties())
+            {
+                if (!GeminiOptionKeys.RecognizedThinking.Contains(thinkingProperty.Name))
+                {
+                    _logger.LogWarning(
+                        "Gemini: ignoring unrecognized ThinkingConfig option '{Option}'. Recognized options: {Recognized}",
+                        thinkingProperty.Name, string.Join(", ", GeminiOptionKeys.RecognizedThinking));
+                }
+            }
+        }
+    }
+
     private GenerateContentConfig BuildGenerateContentConfig(LlmRequest request)
     {
         var config = new GenerateContentConfig();
+        WarnOnUnrecognizedOptions(request);
 
         // System instruction
         if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
@@ -439,7 +514,7 @@ public sealed class GeminiLlmService : ILlmService
         }
 
         // TopK is Gemini-specific, so it travels in Options rather than as a typed property.
-        var topK = request.GetOption<int?>("TopK");
+        var topK = request.GetOption<int?>(GeminiOptionKeys.TopK);
         if (topK.HasValue)
         {
             config.TopK = topK.Value;
@@ -481,11 +556,14 @@ public sealed class GeminiLlmService : ILlmService
         // 2. Metadata (Legacy/Provider-specific way)
         // 3. Heuristic based on model name (Fallback for ease of use)
 
-        bool? enableThinkingConfig = request.GetOption<bool?>("EnableThinking");
-        bool enableThinking = enableThinkingConfig ??
-                              (request.Model.Contains("thinking", StringComparison.OrdinalIgnoreCase) ||
-                               request.Model.Contains("gemini-2.5-flash", StringComparison.OrdinalIgnoreCase) ||
-                               request.Model.Contains("gemini-2.0-flash", StringComparison.OrdinalIgnoreCase));
+        // Canonical form mirrors the Gemini API itself: Options.ThinkingConfig.IncludeThoughts.
+        // EnableThinking stays supported as a flat alias, but the nested form wins.
+        JObject? thinkingOptions = request.GetOption<JObject>(GeminiOptionKeys.ThinkingConfig);
+        bool? includeThoughtsOption =
+            thinkingOptions?.GetValue(GeminiOptionKeys.IncludeThoughts, StringComparison.OrdinalIgnoreCase)?.ToObject<bool?>()
+            ?? request.GetOption<bool?>(GeminiOptionKeys.EnableThinking);
+
+        bool enableThinking = includeThoughtsOption ?? ModelImpliesThinking(request.Model);
 
         // Metadata override
         if (request.Conversation.Metadata.TryGetValue("Gemini.IncludeThoughts", out var includeThoughtsObj) &&
@@ -501,8 +579,10 @@ public sealed class GeminiLlmService : ILlmService
                 IncludeThoughts = true
             };
 
-            // Budget hierarchy: Request -> Profile -> Metadata
-            int? budget = request.GetOption<int?>("ThinkingBudget");
+            // Budget hierarchy: nested ThinkingConfig -> flat alias -> Metadata
+            int? budget =
+                thinkingOptions?.GetValue(GeminiOptionKeys.ThinkingBudget, StringComparison.OrdinalIgnoreCase)?.ToObject<int?>()
+                ?? request.GetOption<int?>(GeminiOptionKeys.ThinkingBudget);
 
             if (request.Conversation.Metadata.TryGetValue("Gemini.ThinkingBudget", out var budgetObj) &&
                 budgetObj is int budgetOverride)
@@ -517,6 +597,13 @@ public sealed class GeminiLlmService : ILlmService
 
             config.ThinkingConfig = thinkingConfig;
         }
+
+        _logger.LogDebug(
+            "Gemini thinking resolved: enabled={Enabled}, budget={Budget}, source={Source}, options=[{Options}]",
+            enableThinking,
+            config.ThinkingConfig?.ThinkingBudget,
+            includeThoughtsOption.HasValue ? "explicit" : "model-heuristic",
+            string.Join(", ", request.Options.Properties().Select(x => x.Name)));
 
         // Google Search Grounding (via Metadata)
         if (request.Conversation.Metadata.TryGetValue("Gemini.EnableGoogleSearch", out var searchObj) &&
@@ -538,12 +625,12 @@ public sealed class GeminiLlmService : ILlmService
 
     private static Schema? BuildSchema(JsonSchema jsonSchema)
     {
-        // Convert framework JsonSchema to Gemini Schema
-        return new Schema
-        {
-            Type = Google.GenAI.Types.Type.OBJECT,
-            Description = jsonSchema.Description
-        };
+        // Reuses the same JSON-Schema -> Gemini Schema walk as tool parameter conversion
+        // (GeminiTypeConverters.ConvertJsonSchemaToGeminiSchema), instead of emitting a bare
+        // {Type: OBJECT} with no properties/required - which left the model unconstrained and
+        // free to omit required fields (e.g. an empty SelectedOption).
+        var schemaObj = JObject.Parse(jsonSchema.ToJson());
+        return GeminiTypeConverters.ConvertJsonSchemaToGeminiSchema(schemaObj);
     }
 
     private static string ExtractTextContent(Candidate? candidate)
@@ -553,10 +640,28 @@ public sealed class GeminiLlmService : ILlmService
             return string.Empty;
         }
 
+        // Thinking parts (Part.Thought == true) go through ExtractReasoningContent instead;
+        // mixing them in here corrupted structured-output parsing, since the model's thinking
+        // prose would land ahead of (or instead of) the actual JSON answer.
         return string.Concat(
             candidate.Content.Parts
-                .Where(p => p.Text != null)
+                .Where(p => p.Text != null && p.Thought != true)
                 .Select(p => p.Text));
+    }
+
+    private static string? ExtractReasoningContent(Candidate? candidate)
+    {
+        if (candidate?.Content?.Parts == null)
+        {
+            return null;
+        }
+
+        var reasoning = string.Concat(
+            candidate.Content.Parts
+                .Where(p => p.Text != null && p.Thought == true)
+                .Select(p => p.Text));
+
+        return string.IsNullOrEmpty(reasoning) ? null : reasoning;
     }
 
     private List<ToolCall>? ExtractToolCalls(Candidate? candidate)
@@ -603,6 +708,7 @@ public sealed class GeminiLlmService : ILlmService
             var isComplete = candidate.FinishReason.HasValue;
             var toolCallUpdates = ExtractToolCallUpdates(candidate);
             var choiceIndex = candidate.Index ?? 0;
+            var emittedAnyPart = false;
 
             // Process parts individually to separate Thinking from Text
             foreach (var part in candidate.Content.Parts)
@@ -628,7 +734,26 @@ public sealed class GeminiLlmService : ILlmService
                         ChoiceIndex = choiceIndex,
                         NativeChunk = response
                     };
+                    emittedAnyPart = true;
                 }
+            }
+
+            // A candidate can consist solely of functionCall parts (Text == null). Without this
+            // the whole chunk is dropped and the tool calls never reach the caller.
+            if (!emittedAnyPart && toolCallUpdates is { Count: > 0 })
+            {
+                yield return new LlmStreamChunk
+                {
+                    Delta = string.Empty,
+                    IsThinking = false,
+                    IsComplete = isComplete,
+                    FinishReason = MapFinishReason(candidate.FinishReason),
+                    RawFinishReason = candidate.FinishReason?.ToString(),
+                    TokensUsed = usageMetadata?.TotalTokenCount,
+                    ToolCallUpdates = toolCallUpdates,
+                    ChoiceIndex = choiceIndex,
+                    NativeChunk = response
+                };
             }
         }
     }
@@ -663,7 +788,12 @@ public sealed class GeminiLlmService : ILlmService
                 Index = index,
                 ToolCallId = $"call_{index}",
                 FunctionName = p.FunctionCall!.Name,
-                FunctionArgumentsUpdate = p.FunctionCall.Args?.ToString()
+                // Args is a Dictionary: ToString() yields the CLR type name, not JSON. Reuse the
+                // same conversion as the non-streaming path so the args round-trip as JSON.
+                FunctionArgumentsUpdate = p.FunctionCall.ToFrameworkToolCall().Arguments,
+                // Keep the whole Part, not just the FunctionCall: Gemini 3 requires the
+                // thoughtSignature to be echoed back and it lives on the Part, not the call.
+                Native = p.ToNativeToolCallObject()
             })
             .ToList();
 

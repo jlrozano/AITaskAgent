@@ -75,6 +75,15 @@ public abstract partial class BaseLlmStep
         {
             if (result.IsSuccess)
             {
+                // A successful call that carries no candidate leaves nothing to work with. Log it:
+                // otherwise this failure surfaces to the user with no trace of where it came from.
+                Logger.LogError(
+                    "LLM reported success with no candidates (model: {Model}, iteration: {Iteration}, "
+                    + "tokens: {Tokens}). Check the provider response logged by the LLM service.",
+                    Model,
+                    toolIteration,
+                    result.TokensUsed);
+
                 return LlmResult.Failure(new Exception("No response from LLM"), true);
             }
             return result;
@@ -366,7 +375,7 @@ public abstract partial class BaseLlmStep
             // Accumulators per choice index to support multiple candidates (n > 1)
             Dictionary<int, StringBuilder> contentBuilders = [];
             Dictionary<int, StringBuilder> reasoningBuilders = [];
-            Dictionary<int, Dictionary<int, (string? Id, string? Name, StringBuilder Args)>> choiceToolCallBuilders = [];
+            Dictionary<int, Dictionary<int, (string? Id, string? Name, StringBuilder Args, NativeObject? Native)>> choiceToolCallBuilders = [];
             Dictionary<int, FinishReason> finishReasons = [];
             Dictionary<int, string?> rawFinishReasons = [];
             var totalTokens = 0;
@@ -432,12 +441,13 @@ public abstract partial class BaseLlmStep
                     {
                         if (!toolBuilders.TryGetValue(update.Index, out var builder))
                         {
-                            builder = (null, null, new StringBuilder());
+                            builder = (null, null, new StringBuilder(), null);
                         }
 
                         if (update.ToolCallId != null) builder.Id = update.ToolCallId;
                         if (update.FunctionName != null) builder.Name = update.FunctionName;
                         if (update.FunctionArgumentsUpdate != null) builder.Args.Append(update.FunctionArgumentsUpdate);
+                        if (update.Native != null) builder.Native = update.Native;
 
                         toolBuilders[update.Index] = builder;
                     }
@@ -474,14 +484,15 @@ public abstract partial class BaseLlmStep
                 {
                     foreach (var kvp in toolBuilders.OrderBy(k => k.Key))
                     {
-                        (var id, var toolName, var args) = kvp.Value;
+                        (var id, var toolName, var args, var native) = kvp.Value;
                         if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(toolName))
                         {
                             toolCalls.Add(new ToolCall
                             {
                                 Id = id,
                                 Name = toolName,
-                                Arguments = args?.ToString() ?? string.Empty
+                                Arguments = args?.ToString() ?? string.Empty,
+                                Native = native
                             });
                         }
                     }

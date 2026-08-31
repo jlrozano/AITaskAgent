@@ -16,5 +16,11 @@ public sealed record ToolCallUpdate
 
     /// <summary>Incremental function arguments update.</summary>
     public string? FunctionArgumentsUpdate { get; init; }
+
+    /// <summary>
+    /// Native provider-specific object carrying metadata the provider requires on the way back
+    /// (e.g. Gemini's thoughtSignature). Aggregated into <see cref="ToolCall.Native"/>.
+    /// </summary>
+    public NativeObject? Native { get; init; }
 }
 
