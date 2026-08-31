@@ -59,6 +59,18 @@ A provider is a connection target. A role is the behaviour of one step: which pr
 model, which system prompt, which fallbacks. Several roles can share one provider, and a role can
 fall back onto a different provider entirely.
 
+![The provider × role model: the configuration matrix, how a provider binds to an ILlmService, and where each inference setting comes from](../assets/images/llm-role-provider-matrix.png)
+
+<!-- Source: docs/assets/diagrams/llm-role-provider-matrix.excalidraw -->
+
+Three things in that diagram are easy to get wrong from the tables alone:
+
+- **A role holds a resolved `LlmProvider` object, not a provider name.** The name only exists while
+  configuration is being bound.
+- **`ServiceType` is matched twice**, first by case-insensitive equality against `ILlmService.Name`
+  and then by `Contains`. A miss on both is a startup failure, never a silent pick.
+- **`Models[].Inference` is never read.** `Models` feeds `CalculateCost` and nothing else.
+
 ---
 
 ## appsettings.json
@@ -163,7 +175,7 @@ Everything lives under the single `AITaskAgent` root section. `LlmProviders` is 
 | `ApiVersion` | `string?` | Passed through to the service (e.g. Gemini's `v1beta`). |
 | `ServiceType` | `string?` | Which registered `ILlmService` to bind. Defaults to the provider key itself. |
 | `Inference` | `LlmInferenceSettings?` | Provider-wide inference defaults. |
-| `Models` | `LlmModelSettings[]` | `Name`, `InputPricePerMillion`, `OutputPricePerMillion`, `Inference`. Drives `CalculateCost`. |
+| `Models` | `LlmModelSettings[]` | `Name`, `InputPricePerMillion`, `OutputPricePerMillion`, `Inference`. Drives `CalculateCost` **only** — the per-model `Inference` is not read by anything. |
 
 `ServiceType` is matched against `ILlmService.Name`, first by exact case-insensitive equality and
 then by `Contains`. Several providers may share the same service (all four OpenAI-compatible

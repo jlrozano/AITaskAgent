@@ -5,23 +5,9 @@ Tools are functions that LLMs can call to perform actions or get information. Th
 1. **`LlmTool` (Recommended)** - Abstract base class with automatic observability
 2. **`ITool`** - Interface for full control
 
-```mermaid
-flowchart TB
-    step["BaseLlmStep<br/><i>Tools = the tools it may call</i>"]
-    llm["LLM"]
-    done(["final response"])
-    dispatch["the step matches each call by Name<br/><i>and runs them one after another</i>"]
-    tool1["<b>LlmTool</b><br/><i>traces, metrics and events around your InternalExecuteAsync</i>"]
-    tool2["<b>ITool</b><br/><i>your ExecuteAsync only; nothing is observed unless you emit it</i>"]
-    msg["each result appended to the conversation as a tool message"]
+![The tool loop with its two guards: the iteration cap and the repetition detector](../assets/images/tool-invocation-loop.png)
 
-    step --> llm
-    llm -- "no tool calls" --> done
-    llm -- "tool calls" --> dispatch
-    dispatch --> tool1 --> msg
-    dispatch --> tool2 --> msg
-    msg --> llm
-```
+<!-- Source: docs/assets/diagrams/tool-invocation-loop.excalidraw -->
 
 > [!TIP]
 > For advanced topics including recursive execution, observability enrichment, and best practices, see the [Tools Advanced Guide](tools-advanced.md).

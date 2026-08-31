@@ -23,26 +23,9 @@ You have two options when creating tools:
 
 `LlmTool` is an abstract base class that implements `ITool` with built-in observability and the Template Method pattern.
 
-```mermaid
-flowchart TB
-    entry["<b>ExecuteAsync</b><br/><i>non-virtual: the flow is fixed</i>"]
-    activity["start the Tool activity and add the base tags"]
-    hook1["EnrichActivityBefore"]
-    started["ToolStartedEvent, passed through EnrichStartedEvent"]
-    yours["<b>InternalExecuteAsync</b><br/><i>your code, the only member you must implement</i>"]
-    hook2["EnrichActivityAfter"]
-    metrics["record the execution counter and the duration histogram"]
-    completed["ToolCompletedEvent, passed through EnrichCompletedEvent"]
-    ret["result string returned to the step"]
-    rethrow["exception rethrown to the step"]
+![The fixed LlmTool flow, with InternalExecuteAsync as the only part you write](../assets/images/llm-tool-template-method.png)
 
-    entry --> activity --> hook1 --> started --> yours
-    yours -- "returns" --> hook2
-    yours -- "throws" --> hook2
-    hook2 --> metrics --> completed
-    completed --> ret
-    completed --> rethrow
-```
+<!-- Source: docs/assets/diagrams/llm-tool-template-method.excalidraw -->
 
 The tail runs in a `finally`, so a tool that throws still records its metrics and still emits
 `ToolCompletedEvent` with `Success = false` before the exception reaches the step.
@@ -145,33 +128,8 @@ record WeatherArgs(string Location, string? Unit = "celsius");
 
 `LlmTool` automatically emits observability data **without any extra code**:
 
-```mermaid
-flowchart LR
-    tool["LlmTool.ExecuteAsync"]
-
-    subgraph trace ["Trace"]
-        act["Activity <i>Tool.name</i><br/><i>tool.name, step.name, correlation_id, duration_ms, success</i>"]
-    end
-
-    subgraph metrics ["Metrics"]
-        counter["aitaskagent.tool.executions"]
-        hist["aitaskagent.tool.duration<br/><i>milliseconds</i>"]
-    end
-
-    subgraph events ["Events"]
-        started["ToolStartedEvent"]
-        completed["ToolCompletedEvent<br/><i>success or error</i>"]
-    end
-
-    otel["OpenTelemetry exporters"]
-    subs["IEventChannel subscribers"]
-
-    tool --> act --> otel
-    tool --> counter --> otel
-    tool --> hist --> otel
-    tool --> started --> subs
-    tool --> completed --> subs
-```
+The same three outputs appear at every level — see
+[the telemetry diagram](../assets/images/telemetry-fanout.png) in [OpenTelemetry](opentelemetry.md).
 
 All of this lives in `LlmTool`. A tool that implements `ITool` directly emits none of it — no
 activity, no metrics, no events — unless it does the work itself.
@@ -281,26 +239,8 @@ protected override ToolCompletedEvent EnrichCompletedEvent(
 
 Tools are executed **recursively** until the LLM returns a final response without tool calls.
 
-```mermaid
-flowchart TB
-    invoke["InvokeLlmWithToolsAsync<br/><i>request, iteration</i>"]
-    guard{"iteration reached<br/>MaxToolIterations?"}
-    boom["InvalidOperationException"]
-    llm["call the provider"]
-    calls{"did it ask for tools?"}
-    done(["final response<br/><i>tokens and cost accumulated across iterations</i>"])
-    stuck{"same calls as the previous iteration?<br/><i>3 repeats allowed if every tool IsReadOnly, 1 otherwise</i>"}
-    cut["rewritten as a final response telling the model why it was cut off"]
-    run["run the calls in order, appending each result to the conversation"]
-
-    invoke --> guard
-    guard -- "yes" --> boom
-    guard -- "no" --> llm --> calls
-    calls -- "no" --> done
-    calls -- "yes" --> stuck
-    stuck -- "over the threshold" --> cut --> done
-    stuck -- "no" --> run --> invoke
-```
+See [the tool loop diagram](../assets/images/tool-invocation-loop.png) in [Tools](tools.md) for the
+full loop, both guards and the three ways out of it.
 
 Two independent brakes: `MaxToolIterations` is the hard ceiling and throws, while the repetition
 check cuts the loop early and gracefully when the model keeps asking for the same calls.

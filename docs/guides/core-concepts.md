@@ -34,34 +34,8 @@ globally through `PipelineMiddlewareRegistry`.
 
 ## Step Lifecycle
 
-```mermaid
-flowchart TB
-    input["input IStepResult"]
-
-    subgraph obs ["ObservabilityMiddleware · runs once per step"]
-        before["<b>Activity + StepStartedEvent</b><br/><i>EnrichActivityBefore, EnrichStartedEvent</i>"]
-        after["<b>metrics + StepCompletedEvent</b><br/><i>EnrichActivityAfter, EnrichCompletedEvent</i>"]
-    end
-
-    timeout["TimeoutMiddleware<br/><i>one budget for all attempts</i>"]
-
-    subgraph retry ["RetryMiddleware · loops up to MaxRetries"]
-        exec["step.ExecuteAsync<br/><i>input, context, attempt, lastResult</i>"]
-        structural{"result.ValidateAsync<br/><i>structural</i>"}
-        semantic{"step.Validators<br/><i>semantic</i>"}
-        finalize["step.FinalizeAsync"]
-    end
-
-    out["result cached in context.StepResults<br/><i>NextSteps pushed onto the stack</i>"]
-
-    input --> before --> timeout --> exec --> structural
-    structural -- "invalid" --> exec
-    structural -- "valid" --> semantic
-    semantic -- "invalid" --> exec
-    semantic -- "valid" --> finalize
-    exec -- "exception, or error with OriginalException" --> finalize
-    finalize --> after --> out
-```
+See [Middlewares](middlewares.md) for the full chain, the two validation layers, and the four
+ways out of the retry loop.
 
 `FinalizeAsync` runs once, after the last attempt — success or final failure — never per attempt.
 The retry loop happens inside Observability's single call, so only the first attempt's

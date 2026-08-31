@@ -8,19 +8,16 @@ skipping everything that already succeeded.
 
 ## The shape of it
 
-```
-run 1:  StepA ──► StepB ──► StepC (suspends)          ✗ StepD
-                                    │
-                            state captured, PipelineSuspendedEvent
-                                    │
-                              (hours later)
-                                    │
-run 2:  StepA ─╌╌► StepB ─╌╌► StepC (resumes with the answer) ──► StepD
-        └── skipped, results served from the context ──┘
-```
+![Two runs of the same steps: the first suspends, the second skips what already succeeded](../assets/images/suspend-resume-fastforward.png)
+
+<!-- Source: docs/assets/diagrams/suspend-resume-fastforward.excalidraw -->
 
 The fast-forward is not an optimisation detail — it is the point. Steps that already called an LLM
 or wrote to a database must not run twice because someone took an hour to click a button.
+
+What makes it correct is the caching rule: a result is written **only after the step and all of its
+`NextSteps` have succeeded**. So `StepC` is absent from the cache and runs again, while `StepA` and
+`StepB` are genuinely finished and are served from it.
 
 ## Suspending
 

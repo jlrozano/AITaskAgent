@@ -26,21 +26,9 @@ Prevents cascading failures by tracking consecutive errors.
 
 ### States
 
-```mermaid
-stateDiagram-v2
-    [*] --> Closed
-    Closed --> Closed: call succeeds, failure counter resets
-    Closed --> Open: consecutive failures reach failureThreshold
-    Open --> Open: call rejected with CircuitBreakerOpenException
-    Open --> HalfOpen: first call attempted after openDuration
-    HalfOpen --> Closed: that call succeeds
-    HalfOpen --> Open: that call fails
-    note right of Open
-        The transition out of Open is lazy: it happens
-        when a call arrives, not on a timer.
-        Reset() forces Closed from any state.
-    end note
-```
+![The three circuit states, and why the way out of Open is lazy rather than timed](../assets/images/circuit-breaker-states.png)
+
+<!-- Source: docs/assets/diagrams/circuit-breaker-states.excalidraw -->
 
 ### Usage
 
@@ -87,17 +75,10 @@ Token bucket algorithm for rate limiting.
 
 ### How It Works
 
-```
-Bucket: [●●●●●●●●●●] (10 tokens)
-         ↓
-Request: Consume 1 token
-         ↓
-Bucket: [●●●●●●●●●○] (9 tokens)
-         ↓
-... time passes ...
-         ↓
-Refill: Add tokens back
-```
+A bucket holds up to `maxTokens`. Each call consumes one; `tokensPerRefill` are added back every
+`refillInterval`. `WaitAsync` blocks until one is available, `TryAcquire` returns false instead.
+
+Like `CircuitBreaker`, it is a standalone class: the framework configures it but never uses it.
 
 ### Usage
 
@@ -185,9 +166,17 @@ public interface IFallbackable
 `role.Fallbacks` (or the global `FallbackProviders` list), so `LlmService`, `Model`, `Provider` and
 `Inference` all point at the next entry.
 
+![The fallback chain: each hop reassigns the provider, resets the attempt counter and rewinds the conversation](../assets/images/llm-fallback-chain.png)
+
+<!-- Source: docs/assets/diagrams/llm-fallback-chain.excalidraw -->
+
 The important detail is in `RetryMiddleware`: **when a fallback switch succeeds, the attempt
 counter resets to 1**. A fresh provider therefore gets its full retry budget instead of inheriting
 the exhausted one from the provider that just failed.
+
+A second detail is easy to miss: the switch also calls `RestoreBookmark` on the conversation, so
+the new provider starts from the same clean history the first one saw rather than inheriting a
+transcript of someone else's failure.
 
 ```json
 "Roles": {

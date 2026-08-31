@@ -68,24 +68,9 @@ if (!validated)
 
 Manage context size by keeping recent messages:
 
-```mermaid
-flowchart TB
-    start["GetMessagesWithSlidingWindow<br/><i>keepFirstN, maxTokens</i>"]
-    small{"history shorter<br/>than keepFirstN?"}
-    all["return every message"]
-    head["take the first N messages<br/><i>system + initial context</i>"]
-    walk["walk backwards from the newest message"]
-    fits{"does it still fit<br/>in maxTokens?"}
-    keep["prepend it to the recent block"]
-    stop["stop: everything older is dropped"]
-    out["first N + recent block"]
+![The window keeps the first N messages and the most recent that fit, dropping the middle](../assets/images/sliding-window-shape.png)
 
-    start --> small
-    small -- "yes" --> all
-    small -- "no" --> head --> walk --> fits
-    fits -- "yes" --> keep --> walk
-    fits -- "no" --> stop --> out
-```
+<!-- Source: docs/assets/diagrams/sliding-window-shape.excalidraw -->
 
 The first N messages are charged against `maxTokens` too, and the backwards walk stops at the
 first message that does not fit — it does not skip it and keep looking for a smaller one.

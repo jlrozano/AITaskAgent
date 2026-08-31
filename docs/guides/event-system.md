@@ -6,27 +6,9 @@ AITaskAgent includes a real-time event system for observability. Events flow thr
 `IEventChannel` to subscribers, and are **routed by `CorrelationId`** so concurrent pipeline
 executions never bleed into each other.
 
-```mermaid
-flowchart LR
-    subgraph runs ["Concurrent executions"]
-        a["Pipeline run A<br/><i>CorrelationId = A</i>"]
-        b["Pipeline run B<br/><i>CorrelationId = B</i>"]
-    end
+![One singleton channel filters events by correlation id into per-subscriber bounded buffers](../assets/images/event-correlation-routing.png)
 
-    channel["<b>IEventChannel</b><br/><i>singleton, one bounded buffer per subscriber</i>"]
-
-    subgraph consumers ["Subscribers"]
-        sa["Request handler A<br/><i>Subscribe(handler, 'A')</i>"]
-        sb["Request handler B<br/><i>CreateSubscription(correlationId: 'B')</i>"]
-        g["Logger / dashboard<br/><i>correlationId null</i>"]
-    end
-
-    a -- "SendAsync" --> channel
-    b -- "SendAsync" --> channel
-    channel -- "only CorrelationId A" --> sa
-    channel -- "only CorrelationId B" --> sb
-    channel -- "everything" --> g
-```
+<!-- Source: docs/assets/diagrams/event-correlation-routing.excalidraw -->
 
 A subscriber with a `correlationId` sees only that execution; one with `null` is global and sees
 every event. That is what makes a single channel safe for a server running many pipelines at once.
@@ -187,6 +169,18 @@ yourself.
 | `TagCompletedEvent` | `tag.completed` | `StreamingTagHandlerBase` | Artifact generation ends |
 
 The string literals are available as constants on `AITaskAgentConstants.EventTypes`.
+
+The table gives you the emitter. What it cannot show is *when* each one fires and how they nest,
+which is what a progress UI actually has to model:
+
+![Each event placed at its scope: run, step, or inside one step](../assets/images/event-lifecycle-map.png)
+
+<!-- Source: docs/assets/diagrams/event-lifecycle-map.excalidraw -->
+
+Two consequences are worth stating outright, because they break the obvious implementation:
+`StepStartedEvent` arrives **more than once** for the same step (once per attempt, from two
+different middlewares), while `StepCompletedEvent` arrives **once** — so pairing them one-to-one
+will leak. And a run that suspends never emits `PipelineCompletedEvent` at all.
 
 ### Declared but not yet emitted
 

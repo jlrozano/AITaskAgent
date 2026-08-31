@@ -6,27 +6,9 @@ AITaskAgent has built-in OpenTelemetry support. The framework emits traces via `
 
 ## Built-in Telemetry
 
-```mermaid
-flowchart LR
-    subgraph fw ["AITaskAgent"]
-        work["Pipeline, steps, LLM calls, tools"]
-        source["<b>Telemetry.Source</b><br/><i>ActivitySource</i>"]
-        meter["<b>Metrics.Meter</b><br/><i>counters + histograms</i>"]
-        channel["<b>IEventChannel</b><br/><i>in-process events</i>"]
-    end
+![Traces and metrics leave through the OpenTelemetry SDK; events stay in the process](../assets/images/telemetry-fanout.png)
 
-    subgraph sdk ["OpenTelemetry SDK"]
-        tracing["AddSource(ActivitySourceName)"]
-        metrics["AddMeter(MeterName)"]
-    end
-
-    exporters["Exporters<br/><i>Console, OTLP, Azure Monitor</i>"]
-    app["Your subscriber<br/><i>UI, logs, or a bridge into traces</i>"]
-
-    work --> source --> tracing --> exporters
-    work --> meter --> metrics --> exporters
-    work --> channel --> app
-```
+<!-- Source: docs/assets/diagrams/telemetry-fanout.excalidraw -->
 
 Traces and metrics reach the SDK by name, so adding the source and the meter is all the wiring
 there is. Events are a separate, in-process path: nothing forwards them to OpenTelemetry unless you

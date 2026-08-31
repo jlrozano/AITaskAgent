@@ -152,33 +152,9 @@ When validation fails, the step:
 3. The LLM sees the error and tries to self-correct
 4. On success, restores the bookmark and appends only the clean response
 
-```mermaid
-sequenceDiagram
-    participant Retry as RetryMiddleware
-    participant Step as BaseLlmStep
-    participant Conv as Conversation
-    participant LLM
+![Bookmark, retry, then rewind: what the conversation holds after a step succeeds or fails](../assets/images/llm-step-conversation-lifecycle.png)
 
-    Retry->>Step: ExecuteAsync (attempt 1)
-    Step->>Conv: CreateBookmark, then add the user message
-    Step->>LLM: request
-    LLM-->>Step: response
-    Step->>Conv: add the assistant message, valid or not
-    Step-->>Retry: result
-    Retry->>Retry: structural then semantic validation
-
-    alt invalid and no OriginalException
-        Retry->>Step: ExecuteAsync (attempt 2, error attached)
-        Step->>Conv: add the error text as a user message
-        Step->>LLM: request with the correction
-        LLM-->>Step: corrected response
-    else exception or error with OriginalException
-        Retry-->>Retry: fatal, no retry
-    end
-
-    Retry->>Step: FinalizeAsync
-    Step->>Conv: RestoreBookmark, then rewrite one clean user/assistant pair
-```
+<!-- Source: docs/assets/diagrams/llm-step-conversation-lifecycle.excalidraw -->
 
 Every attempt appends to the conversation so role alternation stays valid mid-retry;
 `FinalizeAsync` rewinds to the bookmark and rewrites the turn, so the mid-retry noise never
