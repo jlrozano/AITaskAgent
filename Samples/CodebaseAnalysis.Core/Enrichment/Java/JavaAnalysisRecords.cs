@@ -171,6 +171,112 @@ public sealed record JavaCallRecord : JavaAnalysisRecord
 }
 
 /// <summary>
+/// <c>"k":"field"</c> (schema 2): un campo o una constante de enum declarados en un tipo con nombre. <c>int a, b;</c> da dos
+/// registros en la misma línea.
+/// </summary>
+public sealed record JavaFieldRecord : JavaAnalysisRecord
+{
+    /// <summary>Anidamiento del tipo propietario.</summary>
+    [JsonPropertyName("chain")]
+    public IReadOnlyList<string> Chain { get; init; } = [];
+
+    [JsonPropertyName("ownerFqn")]
+    public string OwnerFqn { get; init; } = "";
+
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = "";
+
+    [JsonPropertyName("line")]
+    public int Line { get; init; }
+
+    [JsonPropertyName("end")]
+    public int End { get; init; }
+
+    /// <summary>Tipo declarado, borrado.</summary>
+    [JsonPropertyName("typeFqn")]
+    public string? TypeFqn { get; init; }
+
+    [JsonPropertyName("access")]
+    public string? Access { get; init; }
+
+    [JsonPropertyName("static")]
+    public bool Static { get; init; }
+
+    [JsonPropertyName("final")]
+    public bool Final { get; init; }
+
+    [JsonPropertyName("enumConstant")]
+    public bool EnumConstant { get; init; }
+
+    [JsonPropertyName("doc")]
+    public string? Doc { get; init; }
+
+    /// <summary><c>ownerFqn#nombre</c>: casa por igualdad con el <c>to</c> y el <c>fromField</c> de los <c>ref</c>.</summary>
+    [JsonIgnore]
+    public string Key => $"{OwnerFqn}#{Name}";
+}
+
+/// <summary>
+/// <c>"k":"ref"</c> (schema 2): referencias de un origen a un tipo o a un campo del proyecto, agregadas por fichero y por
+/// (<c>from</c>, <c>fromField</c>, <c>fromType</c>, <c>to</c>, <c>kind</c>, <c>access</c>). Con <c>from</c> y
+/// <c>fromField</c> a null el origen es el tipo (<c>fromType</c>): un bloque <c>static</c> o de instancia, o las
+/// anotaciones o los argumentos de tipo del propio tipo.
+/// </summary>
+public sealed record JavaRefRecord : JavaAnalysisRecord
+{
+    /// <summary><c>key</c> del método que contiene la referencia; null fuera de un método.</summary>
+    [JsonPropertyName("from")]
+    public string? From { get; init; }
+
+    [JsonPropertyName("fromType")]
+    public string FromType { get; init; } = "";
+
+    /// <summary><c>ownerFqn#campo</c> si la referencia está en el tipo declarado o el inicializador de un campo.</summary>
+    [JsonPropertyName("fromField")]
+    public string? FromField { get; init; }
+
+    /// <summary>
+    /// FQN del tipo o <c>ownerFqn#campo</c>. Un destino declarado en una clase anónima o local lleva el nombre binario
+    /// (<c>a.B$1Local</c>, <c>a.B$1#campo</c>) y nunca tiene nodo.
+    /// </summary>
+    [JsonPropertyName("to")]
+    public string To { get; init; } = "";
+
+    /// <summary><c>type</c> o <c>field</c>.</summary>
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = JavaRefKinds.Type;
+
+    /// <summary><c>read</c>, <c>write</c> o <c>readwrite</c> en los campos; null en los tipos.</summary>
+    [JsonPropertyName("access")]
+    public string? Access { get; init; }
+
+    /// <summary>Contextos del uso (<c>param</c>, <c>local</c>, <c>new_implicit</c>…); solo en los de tipo.</summary>
+    [JsonPropertyName("contexts")]
+    public IReadOnlyList<string> Contexts { get; init; } = [];
+
+    [JsonPropertyName("origin")]
+    public string Origin { get; init; } = JavaOrigins.Project;
+
+    /// <summary>Referencias agregadas en el registro.</summary>
+    [JsonPropertyName("count")]
+    public int Count { get; init; } = 1;
+
+    /// <summary>Líneas únicas, ordenadas.</summary>
+    [JsonPropertyName("lines")]
+    public IReadOnlyList<int> Lines { get; init; } = [];
+}
+
+/// <summary>Valores de <c>kind</c> y <c>access</c> en los registros <c>ref</c>.</summary>
+public static class JavaRefKinds
+{
+    public const string Type = "type";
+    public const string Field = "field";
+    public const string Read = "read";
+    public const string Write = "write";
+    public const string ReadWrite = "readwrite";
+}
+
+/// <summary>
 /// <c>"k":"diag"</c>: un error de compilación. <c>path</c> y <c>line</c> pueden venir a null; un fichero ilegible da
 /// <c>diag</c> sin registro <c>file</c>.
 /// </summary>
@@ -231,6 +337,41 @@ public sealed record JavaSummaryRecord : JavaAnalysisRecord
     /// <summary>Diagnósticos por tipo: <c>error</c>, <c>warning</c>.</summary>
     [JsonPropertyName("diagnostics")]
     public IReadOnlyDictionary<string, long> Diagnostics { get; init; } = new Dictionary<string, long>();
+
+    /// <summary>Totales de las referencias a tipos y campos (schema 2); null en un resultado de schema 1.</summary>
+    [JsonPropertyName("refs")]
+    public JavaRefsSummary? Refs { get; init; }
+
+    /// <summary>Registros <c>field</c> emitidos (schema 2).</summary>
+    [JsonPropertyName("fields")]
+    public long Fields { get; init; }
+}
+
+/// <summary><c>summary.refs</c>: las referencias por origen, también las que no llegan a registro <c>ref</c>.</summary>
+public sealed record JavaRefsSummary
+{
+    /// <summary>Referencias a tipos por origen: <c>project</c>, <c>jdk</c>, <c>jar</c>, <c>unresolved</c>.</summary>
+    [JsonPropertyName("type")]
+    public IReadOnlyDictionary<string, long> Type { get; init; } = new Dictionary<string, long>();
+
+    /// <summary>Referencias a campos por origen.</summary>
+    [JsonPropertyName("field")]
+    public IReadOnlyDictionary<string, long> Field { get; init; } = new Dictionary<string, long>();
+
+    /// <summary>Contextos de las referencias de tipo del proyecto, por ocurrencia.</summary>
+    [JsonPropertyName("contexts")]
+    public IReadOnlyDictionary<string, long> Contexts { get; init; } = new Dictionary<string, long>();
+
+    /// <summary>Registros <c>ref</c> emitidos.</summary>
+    [JsonPropertyName("records")]
+    public long Records { get; init; }
+
+    /// <summary>Referencias de un tipo a sí mismo, que no se emiten.</summary>
+    [JsonPropertyName("selfExcluded")]
+    public long SelfExcluded { get; init; }
+
+    [JsonPropertyName("unresolvedByReason")]
+    public IReadOnlyDictionary<string, long> UnresolvedByReason { get; init; } = new Dictionary<string, long>();
 }
 
 /// <summary>Valores de <c>origin</c> en tipos y llamadas.</summary>
@@ -248,8 +389,17 @@ public static class JavaOrigins
 /// </summary>
 public static class JavaAnalysisReader
 {
-    /// <summary>Versión del contrato que entiende este lector (<c>"schema"</c> del registro <c>summary</c>).</summary>
-    public const int SupportedSchema = 1;
+    /// <summary>
+    /// Última versión del contrato que entiende este lector (<c>"schema"</c> del registro <c>summary</c>). También lee las
+    /// anteriores desde <see cref="MinSupportedSchema"/>: el schema 1 no trae registros <c>field</c> ni <c>ref</c>.
+    /// </summary>
+    public const int SupportedSchema = 2;
+
+    /// <inheritdoc cref="SupportedSchema"/>
+    public const int MinSupportedSchema = 1;
+
+    /// <summary>Si el lector y el escritor entienden un resultado de esa versión del contrato.</summary>
+    public static bool IsSupportedSchema(int schema) => schema is >= MinSupportedSchema and <= SupportedSchema;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -295,6 +445,8 @@ public static class JavaAnalysisReader
             "type" => root.Deserialize<JavaTypeRecord>(Options),
             "method" => root.Deserialize<JavaMethodRecord>(Options),
             "call" => root.Deserialize<JavaCallRecord>(Options),
+            "field" => root.Deserialize<JavaFieldRecord>(Options),
+            "ref" => root.Deserialize<JavaRefRecord>(Options),
             "diag" => root.Deserialize<JavaDiagnosticRecord>(Options),
             "summary" => root.Deserialize<JavaSummaryRecord>(Options),
             _ => null

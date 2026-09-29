@@ -8,8 +8,8 @@ namespace CodebaseAnalysis.Core.Tests.Enrichment;
 /// <summary>
 /// Grafo sintético que imita lo que deja cbm al indexar <see cref="JavaTestRepo"/> (QN por ruta, sobrecargas fundidas en un
 /// nodo con la línea de la última, <c>Function</c> de los métodos de interfaz, <c>CALLS</c> decididas por nombre, el código
-/// de test indexado y un nodo con <c>properties</c> que no es JSON válido), y el resultado del analizador Java para ese
-/// mismo repositorio escrito según el contrato JSONL.
+/// de test indexado, un nodo con <c>properties</c> que no es JSON válido y los campos como <c>Field</c> y <c>Variable</c>),
+/// y el resultado del analizador Java para ese mismo repositorio escrito según el contrato JSONL.
 /// </summary>
 internal static class JavaGraphFixture
 {
@@ -24,6 +24,9 @@ internal static class JavaGraphFixture
     public static readonly string DaoFunction = Qn(JavaTestRepo.DaoPath, "consultar");
     public static readonly string DaoImplConsultar = Qn(JavaTestRepo.DaoImplPath, "DaoImpl.consultar");
     public static readonly string Ejecutar = Qn(JavaTestRepo.ServicioPath, "Servicio.ejecutar");
+    public static readonly string BeanQn = Qn(JavaTestRepo.BeanPath, "Bean");
+    public static readonly string BeanId = Qn(JavaTestRepo.BeanPath, "Bean.id");
+    public static readonly string GetId = Qn(JavaTestRepo.BeanPath, "Bean.getId");
 
     private static int Line(string path, string fragment) => JavaTestRepo.LineOf(path, fragment);
 
@@ -46,6 +49,11 @@ internal static class JavaGraphFixture
         var getId = await g.NodeAsync("Method", "getId", Qn(JavaTestRepo.BeanPath, "Bean.getId"), JavaTestRepo.BeanPath, 9, 11,
             "{\"signature\":\"()\",\"return_type\":\"long\",\"parent_class\":\"" + Qn(JavaTestRepo.BeanPath, "Bean") + "\"}");
         await g.EdgeAsync(bean, getId, "DEFINES_METHOD");
+        // cbm guarda cada campo dos veces: un Field en <QN del tipo>.<name>, con parent_class (y con el inicializador en el
+        // name, si lo tiene: «nombreConexion = null»), y un Variable en <prefijo>.<nombre>.
+        await g.NodeAsync("Field", "id", BeanId, JavaTestRepo.BeanPath, 7, 7,
+            "{\"return_type\":\"long\",\"parent_class\":\"" + BeanQn + "\"}");
+        await g.NodeAsync("Variable", "id", Qn(JavaTestRepo.BeanPath, "id"), JavaTestRepo.BeanPath, 7, 7);
 
         // Dao: las dos sobrecargas fundidas en un Method con la línea de la última, y el Function de interfaz.
         await FileAsync(JavaTestRepo.DaoPath);
@@ -132,8 +140,34 @@ internal static class JavaGraphFixture
 
     internal static object Ref(string fqn, string origin) => new { fqn, origin };
 
-    /// <summary>Lo que el analizador Java emite para <see cref="JavaTestRepo"/>, en el orden del contrato.</summary>
-    public static List<string> ResultLines()
+    internal static object Field(string path, string[] chain, string owner, string name, int line, string? typeFqn, string access = "private",
+        bool @static = false, bool final = false, bool enumConstant = false, string? doc = null) => new
+    {
+        k = "field", path, chain, ownerFqn = owner, name, line, end = line, typeFqn, access, @static, final, enumConstant, doc
+    };
+
+    /// <summary>Un registro <c>ref</c> de tipo; <c>from</c> y <c>fromField</c> a null hacen del tipo el origen.</summary>
+    internal static object TypeRef(string path, string? from, string fromType, string to, string[] contexts, int[] lines, int? count = null,
+        string? fromField = null) => new
+    {
+        k = "ref", path, from, fromType, fromField, to, kind = "type", access = (string?)null, contexts, origin = "project",
+        count = count ?? lines.Length, lines
+    };
+
+    /// <summary>Un registro <c>ref</c> de campo, con su acceso (<c>read</c>, <c>write</c> o <c>readwrite</c>).</summary>
+    internal static object FieldRef(string path, string? from, string fromType, string to, string access, int[] lines, int? count = null,
+        string? fromField = null) => new
+    {
+        k = "ref", path, from, fromType, fromField, to, kind = "field", access, contexts = Array.Empty<string>(), origin = "project",
+        count = count ?? lines.Length, lines
+    };
+
+    /// <summary>
+    /// Lo que el analizador Java emite para <see cref="JavaTestRepo"/>, en el orden del contrato. Con
+    /// <paramref name="withReferences"/>, el resultado es de schema 2: el campo de <c>Bean</c> y las referencias a tipos y
+    /// campos del proyecto.
+    /// </summary>
+    public static List<string> ResultLines(bool withReferences = false)
     {
         const string ht = "java.util.Hashtable";
         var ejecutarKey = "com.acme.negocio.Servicio#ejecutar()";
@@ -190,6 +224,31 @@ internal static class JavaGraphFixture
         lines.Add(J(Call(action, 5, executeKey, "com.acme.web.ConsultarAction", "com.acme.negocio.Servicio#Servicio()", "project", "new")));
         lines.Add(J(Call(action, 5, executeKey, "com.acme.web.ConsultarAction", "java.lang.Object#toString()", "jdk")));
 
+        if (withReferences)
+        {
+            lines.AddRange(ReferenceLines());
+            lines.Add(J(new
+            {
+                k = "summary", schema = 2, analyzerVersion = "2", javaVersion = "17.0.20.1", files = 6, parseMs = 120, analyzeMs = 340,
+                scanMs = 15, heapPeakMb = 64, batches = 1, wallMs = 2100,
+                calls = new Dictionary<string, int> { ["project"] = 7, ["jdk"] = 7, ["jar"] = 0, ["unresolved"] = 1 },
+                unresolvedByReason = new Dictionary<string, int> { ["error-owner"] = 1 },
+                missingPackages = new[] { "javax.servlet.http" },
+                diagnostics = new Dictionary<string, int> { ["error"] = 1, ["warning"] = 0 },
+                refs = new
+                {
+                    type = new Dictionary<string, int> { ["project"] = 8, ["jdk"] = 4, ["jar"] = 0, ["unresolved"] = 1 },
+                    field = new Dictionary<string, int> { ["project"] = 1, ["jdk"] = 0, ["jar"] = 0, ["unresolved"] = 0 },
+                    contexts = new Dictionary<string, int> { ["local"] = 1, ["new_implicit"] = 3, ["return"] = 4 },
+                    records = 9,
+                    selfExcluded = 0,
+                    unresolvedByReason = new Dictionary<string, int> { ["error-type"] = 1 }
+                },
+                fields = 1
+            }));
+            return lines;
+        }
+
         lines.Add(J(new
         {
             k = "summary", schema = 1, analyzerVersion = "1", javaVersion = "17.0.20.1", files = 6, parseMs = 120, analyzeMs = 340,
@@ -200,6 +259,31 @@ internal static class JavaGraphFixture
             diagnostics = new Dictionary<string, int> { ["error"] = 1, ["warning"] = 0 }
         }));
         return lines;
+    }
+
+    /// <summary>Los registros <c>field</c> y <c>ref</c> de schema 2 para <see cref="JavaTestRepo"/>.</summary>
+    private static List<string> ReferenceLines()
+    {
+        const string ht = "java.util.Hashtable";
+        var bean = JavaTestRepo.BeanPath;
+        var servicio = JavaTestRepo.ServicioPath;
+        var ejecutarKey = "com.acme.negocio.Servicio#ejecutar()";
+        var daoTwo = Line(JavaTestRepo.DaoPath, "long id");
+        var daoOne = Line(JavaTestRepo.DaoPath, "Hashtable c);");
+        return
+        [
+            J(Field(bean, ["Bean"], "com.acme.Bean", "id", Line(bean, "private long id;"), "long")),
+            J(FieldRef(bean, "com.acme.Bean#getId()", "com.acme.Bean", "com.acme.Bean#id", "read", [Line(bean, "return id;")])),
+            J(TypeRef(JavaTestRepo.DaoPath, $"com.acme.dao.Dao#consultar({ht},long)", "com.acme.dao.Dao", "com.acme.Bean", ["return"], [daoTwo])),
+            J(TypeRef(JavaTestRepo.DaoPath, $"com.acme.dao.Dao#consultar({ht})", "com.acme.dao.Dao", "com.acme.Bean", ["return"], [daoOne])),
+            J(TypeRef(JavaTestRepo.DaoImplPath, $"com.acme.dao.DaoImpl#consultar({ht},long)", "com.acme.dao.DaoImpl", "com.acme.Bean", ["return"], [6])),
+            J(TypeRef(JavaTestRepo.DaoImplPath, $"com.acme.dao.DaoImpl#consultar({ht})", "com.acme.dao.DaoImpl", "com.acme.Bean", ["return"], [10])),
+            J(TypeRef(servicio, ejecutarKey, "com.acme.negocio.Servicio", "com.acme.dao.Dao", ["local"], [Line(servicio, "Dao d =")])),
+            J(TypeRef(servicio, ejecutarKey, "com.acme.negocio.Servicio", "com.acme.dao.DaoImpl", ["new_implicit"], [Line(servicio, "new DaoImpl()")])),
+            J(TypeRef(servicio, ejecutarKey, "com.acme.negocio.Servicio", "com.acme.dao.DaoImpl.Cache", ["new_implicit"], [Line(servicio, "Cache()")])),
+            J(TypeRef(JavaTestRepo.ConsultarActionPath, "com.acme.web.ConsultarAction#execute()", "com.acme.web.ConsultarAction",
+                "com.acme.negocio.Servicio", ["new_implicit"], [5]))
+        ];
     }
 
     public static string WriteResult(string directory, IEnumerable<string> lines)
@@ -222,11 +306,13 @@ internal static class JavaGraphFixture
 public class JavaGraphWriterTests
 {
     private static async Task<(JavaGraphWriteResult Result, CbmTestGraph Graph)> ApplyAsync(TempDirectory temp, bool withInterfaceMethodNodes = true,
-        IEnumerable<string>? extraLines = null)
+        IEnumerable<string>? extraLines = null, bool withReferences = false, Func<CbmTestGraph, Task>? arrange = null)
     {
         var db = Path.Combine(temp.Path, "codebase.db");
         var graph = await JavaGraphFixture.CreateGraphAsync(db, withInterfaceMethodNodes);
-        var lines = JavaGraphFixture.ResultLines();
+        if (arrange != null)
+            await arrange(graph);
+        var lines = JavaGraphFixture.ResultLines(withReferences);
         if (extraLines != null)
             lines.InsertRange(lines.Count - 1, extraLines);
         var result = await JavaGraphWriter.ApplyAsync(JavaGraphFixture.Request(db),
@@ -594,19 +680,23 @@ public class JavaGraphWriterTests
         Assert.Equal(drift, Steps.LanguageEnricherStep.CbmDriftWarning(stats) != null);
     }
 
-    [Fact]
-    public async Task A_second_pass_leaves_the_same_graph()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_second_pass_leaves_the_same_graph(bool withReferences)
     {
         using var temp = new TempDirectory();
-        var (first, graph) = await ApplyAsync(temp);
+        var (first, graph) = await ApplyAsync(temp, withReferences: withReferences);
         using var _g = graph;
 
+        // Las propiedades de las aristas enteras (líneas, count, contextos); las de los nodos creados llevan enriched_at.
         async Task<List<string>> SnapshotAsync() => [
             .. await graph.ListAsync("SELECT label || ' ' || qualified_name || ' ' || start_line || '-' || end_line FROM nodes ORDER BY 1", r => r.GetString(0)),
             .. await graph.ListAsync("""
-                SELECT e.type || ' ' || s.qualified_name || ' -> ' || t.qualified_name || ' ' || COALESCE(json_extract(e.properties, '$.lines'), '')
+                SELECT e.type || ' ' || s.qualified_name || ' -> ' || t.qualified_name || ' ' || COALESCE(e.properties, '')
                 FROM edges e JOIN nodes s ON s.id = e.source_id JOIN nodes t ON t.id = e.target_id ORDER BY 1
-                """, r => r.GetString(0))
+                """, r => r.GetString(0)),
+            .. await graph.ListAsync("SELECT qualified_name || ' ' || properties FROM nodes WHERE label = 'Field' ORDER BY 1", r => r.GetString(0))
         ];
 
         var before = await SnapshotAsync();
@@ -621,6 +711,10 @@ public class JavaGraphWriterTests
         Assert.Equal(0, second.Outcome.NodesRemoved);
         Assert.Equal(first.Outcome.NodesCreated, second.Stats.PreviousNodesRemoved);
         Assert.Equal(2, (await EnrichmentRuns.ListAsync(graph.Connection, CancellationToken.None)).Count);
+        Assert.Equal((first.Stats.FieldsMatched, first.Stats.UsesTypeEdges, first.Stats.ReadsEdges, first.Stats.WritesEdges),
+            (second.Stats.FieldsMatched, second.Stats.UsesTypeEdges, second.Stats.ReadsEdges, second.Stats.WritesEdges));
+        // La segunda pasada ya no encuentra USAGE de cbm que sustituir: la primera las retiró.
+        Assert.False(second.Stats.CbmEdgesReplacedByType.ContainsKey("USAGE"));
     }
 
     [Fact]
@@ -760,6 +854,350 @@ public class JavaGraphWriterTests
             JavaGraphFixture.Request(cacheDb), JavaGraphFixture.ResultLines().Select(l => JavaAnalysisReader.Parse(l)!), CancellationToken.None));
         Assert.False(File.Exists(cacheDb));
     }
+
+    // ---------------------------------------------------------------- campos y referencias (schema 2, Q5-Q8)
+
+    private static Task<List<(string Target, string Properties)>> EdgesFromAsync(CbmTestGraph graph, string type, string sourceQn) =>
+        graph.ListAsync("""
+            SELECT t.qualified_name, e.properties FROM edges e
+            JOIN nodes s ON s.id = e.source_id JOIN nodes t ON t.id = e.target_id
+            WHERE e.type = @type AND s.qualified_name = @qn ORDER BY t.qualified_name
+            """, r => (r.GetString(0), r.GetString(1)), ("@type", type), ("@qn", sourceQn));
+
+    private static async Task<JsonObject> EdgeAsync(CbmTestGraph graph, string type, string sourceQn, string targetQn) =>
+        JsonNode.Parse(Assert.Single(await EdgesFromAsync(graph, type, sourceQn), e => e.Target == targetQn).Properties)!.AsObject();
+
+    [Fact]
+    public async Task A_field_matches_the_cbm_field_whose_name_carries_the_initializer()
+    {
+        using var temp = new TempDirectory();
+        var servicio = JavaTestRepo.ServicioPath;
+        var contadorQn = JavaGraphFixture.Qn(servicio, "Servicio.contador = 0");
+        var codigosQn = JavaGraphFixture.Qn(servicio, "Servicio.CODIGOS[]={\"1\"}");
+        var avisoQn = JavaGraphFixture.Qn(servicio, "Servicio.aviso\t\t= true");
+        var (result, graph) = await ApplyAsync(temp, withReferences: true, arrange: async g =>
+        {
+            var parent = "{\"parent_class\":\"" + JavaGraphFixture.Qn(servicio, "Servicio") + "\"}";
+            await g.NodeAsync("Field", "contador = 0", contadorQn, servicio, 7, 7, parent);
+            await g.NodeAsync("Field", "CODIGOS[]={\"1\"}", codigosQn, servicio, 8, 8, parent);
+            await g.NodeAsync("Field", "aviso\t\t= true", avisoQn, servicio, 9, 9, parent);
+            // Otro campo que empieza igual no debe casar con «contador».
+            await g.NodeAsync("Field", "contadorTotal = 1", JavaGraphFixture.Qn(servicio, "Servicio.contadorTotal = 1"), servicio, 10, 10, parent);
+        }, extraLines:
+        [
+            JavaGraphFixture.J(JavaGraphFixture.Field(servicio, ["Servicio"], "com.acme.negocio.Servicio", "contador", 7, "int", access: "protected",
+                @static: true, doc: "Veces que se ha ejecutado.")),
+            JavaGraphFixture.J(JavaGraphFixture.Field(servicio, ["Servicio"], "com.acme.negocio.Servicio", "CODIGOS", 8, "java.lang.String[]",
+                access: "public", @static: true, final: true)),
+            JavaGraphFixture.J(JavaGraphFixture.Field(servicio, ["Servicio"], "com.acme.negocio.Servicio", "aviso", 9, "boolean"))
+        ]);
+        using var _g = graph;
+
+        // El nodo casado conserva su QN (con el inicializador) y se le completan las propiedades.
+        var contador = await PropertiesAsync(graph, contadorQn);
+        Assert.Equal("contador", contador["field_name"]!.GetValue<string>());
+        Assert.Equal("int", contador["type_fqn"]!.GetValue<string>());
+        Assert.Equal("protected", contador["accessibility"]!.GetValue<string>());
+        Assert.True(contador["is_static"]!.GetValue<bool>());
+        Assert.False(contador["is_final"]!.GetValue<bool>());
+        Assert.Equal("Veces que se ha ejecutado.", contador["docstring"]!.GetValue<string>());
+        Assert.Equal("[\"JavaAnalyzer\"]", contador["enriched_by"]!.ToJsonString());
+        Assert.Equal(JavaGraphFixture.Qn(servicio, "Servicio"), contador["parent_class"]!.GetValue<string>());
+        Assert.False(contador.ContainsKey("origin"));
+        Assert.True((await PropertiesAsync(graph, codigosQn))["is_final"]!.GetValue<bool>());
+        Assert.Equal("aviso", (await PropertiesAsync(graph, avisoQn))["field_name"]!.GetValue<string>());
+        Assert.False((await PropertiesAsync(graph, JavaGraphFixture.Qn(servicio, "Servicio.contadorTotal = 1"))).ContainsKey("field_name"));
+
+        // Bean.id casa con su Field; el Variable gemelo no se toca.
+        Assert.Equal("long", (await PropertiesAsync(graph, JavaGraphFixture.BeanId))["type_fqn"]!.GetValue<string>());
+        Assert.Equal("{}", await graph.TextAsync("SELECT properties FROM nodes WHERE label = 'Variable'"));
+
+        Assert.Equal((4, 0, 0), (result.Stats.FieldsMatched, result.Stats.FieldsCreated, result.Stats.FieldsUnmatched));
+        Assert.Equal(1, result.Stats.CbmFieldsUnmatched);
+        Assert.Equal(0, await graph.CountAsync("SELECT COUNT(1) FROM nodes WHERE label = 'Field' AND qualified_name NOT LIKE '%=%' AND qualified_name <> @id",
+            ("@id", JavaGraphFixture.BeanId)));
+        var details = JsonNode.Parse(result.Outcome.Details!)!;
+        Assert.Equal(4, details["fields"]!["matched"]!.GetValue<int>());
+        Assert.Equal(0, details["cbm_match"]!["fields_unmatched_ratio"]!.GetValue<double>());
+        Assert.False(result.Stats.SuspectsCbmDrift);
+    }
+
+    [Fact]
+    public async Task A_field_without_a_cbm_node_is_created_under_its_type_unless_its_qn_is_taken()
+    {
+        using var temp = new TempDirectory();
+        var bean = JavaTestRepo.BeanPath;
+        var (result, graph) = await ApplyAsync(temp, withReferences: true, extraLines:
+        [
+            JavaGraphFixture.J(JavaGraphFixture.Field(bean, ["Bean"], "com.acme.Bean", "nombre", 8, "java.lang.String", doc: "Nombre.")),
+            // El QN <Bean>.getId lo ocupa el Method: P9, ni casa ni se crea.
+            JavaGraphFixture.J(JavaGraphFixture.Field(bean, ["Bean"], "com.acme.Bean", "getId", 8, "int")),
+            JavaGraphFixture.J(JavaGraphFixture.Field("src/com/acme/Otro.java", ["Otro"], "com.acme.Otro", "x", 3, "int"))
+        ]);
+        using var _g = graph;
+
+        var createdQn = JavaGraphFixture.Qn(bean, "Bean.nombre");
+        var created = await PropertiesAsync(graph, createdQn);
+        Assert.Equal("enricher", created["origin"]!.GetValue<string>());
+        Assert.Equal("[\"JavaAnalyzer\"]", created["enriched_by"]!.ToJsonString());
+        Assert.Equal("java.lang.String", created["type_fqn"]!.GetValue<string>());
+        Assert.Equal(JavaGraphFixture.BeanQn, created["parent_class"]!.GetValue<string>());
+        Assert.Equal("Field", await graph.TextAsync("SELECT label FROM nodes WHERE qualified_name = @qn", ("@qn", createdQn)));
+        Assert.Equal("nombre", await graph.TextAsync("SELECT name FROM nodes WHERE qualified_name = @qn", ("@qn", createdQn)));
+        Assert.Equal(8, await LineAsync(graph, createdQn));
+        Assert.Equal(bean, await graph.TextAsync("SELECT file_path FROM nodes WHERE qualified_name = @qn", ("@qn", createdQn)));
+        var defines = await EdgeAsync(graph, "DEFINES", JavaGraphFixture.BeanQn, createdQn);
+        Assert.Equal("[\"JavaAnalyzer\"]", defines["enriched_by"]!.ToJsonString());
+        Assert.Equal("Method", await graph.TextAsync("SELECT label FROM nodes WHERE qualified_name = @qn", ("@qn", JavaGraphFixture.GetId)));
+
+        var stats = result.Stats;
+        Assert.Equal((1, 1, 2), (stats.FieldsMatched, stats.FieldsCreated, stats.FieldsUnmatched));
+        Assert.Equal(1, stats.FieldsUnmatchedByReason[JavaGraphWriter.ReasonQualifiedNameTaken]);
+        Assert.Equal(1, stats.FieldsUnmatchedByReason[JavaGraphWriter.ReasonOwnerWithoutNode]);
+        Assert.Equal(1, stats.DefinesFieldEdges);
+        Assert.Equal(0, stats.FieldsCreatedInUnindexedFiles);
+        Assert.Equal(1, stats.FieldsCreatedNameMismatch);
+        Assert.Equal(0.5, stats.FieldsUnmatchedRatio);
+        // Un campo de dos sin casar en ficheros que cbm indexó: supera el umbral y apunta a cbm.
+        Assert.True(stats.SuspectsCbmDrift);
+        var warning = Steps.LanguageEnricherStep.CbmDriftWarning(stats)!;
+        Assert.Contains("y 50,00 % de los campos (1 de 2)", warning);
+        var details = JsonNode.Parse(result.Outcome.Details!)!;
+        Assert.Equal(1, details["fields"]!["unmatched_by_reason"]![JavaGraphWriter.ReasonQualifiedNameTaken]!.GetValue<long>());
+        Assert.Equal(1, details["cbm_match"]!["fields_created_name_mismatch"]!.GetValue<int>());
+        Assert.Equal(1, details["edges"]!["DEFINES"]!.GetValue<int>());
+    }
+
+    /// <summary>
+    /// cbm solo guarda como <c>Field</c> los campos de clase (repo objetivo: 44.917 de 44.940 casan). Las constantes de enum
+    /// las deja como <c>Variable</c> en <c>&lt;QN del tipo&gt;.&lt;constante&gt;</c>, que hace de ancla; los campos de
+    /// interfaz o de enum no tienen nodo y se crean sin contar como deriva.
+    /// </summary>
+    [Fact]
+    public async Task Enum_constants_anchor_on_the_cbm_variable_and_interface_constants_are_created_without_drift()
+    {
+        using var temp = new TempDirectory();
+        const string color = "src/com/acme/Color.java";
+        var colorQn = JavaGraphFixture.Qn(color, "Color");
+        var rojoQn = JavaGraphFixture.Qn(color, "Color.ROJO");
+        var twinQn = JavaGraphFixture.Qn(color, "ROJO");
+        var (result, graph) = await ApplyAsync(temp, withReferences: true, arrange: async g =>
+        {
+            await g.NodeAsync("Enum", "Color", colorQn, color, 3, 6);
+            await g.NodeAsync("Variable", "ROJO", rojoQn, color, 4, 4);
+            await g.NodeAsync("Variable", "ROJO", twinQn, color, 4, 4);
+        }, extraLines:
+        [
+            JavaGraphFixture.J(new { k = "file", path = color, encoding = "UTF-8", errors = 0 }),
+            JavaGraphFixture.J(JavaGraphFixture.Type(color, ["Color"], "com.acme.Color", "enum", 3, 6)),
+            JavaGraphFixture.J(JavaGraphFixture.Field(color, ["Color"], "com.acme.Color", "ROJO", 4, "com.acme.Color", access: "public",
+                @static: true, final: true, enumConstant: true)),
+            JavaGraphFixture.J(JavaGraphFixture.Field(color, ["Color"], "com.acme.Color", "codigo", 5, "int")),
+            JavaGraphFixture.J(JavaGraphFixture.Field(JavaTestRepo.DaoPath, ["Dao"], "com.acme.dao.Dao", "MAX", 6, "int", access: "public",
+                @static: true, final: true)),
+            JavaGraphFixture.J(JavaGraphFixture.FieldRef(JavaTestRepo.ServicioPath, "com.acme.negocio.Servicio#ejecutar()", "com.acme.negocio.Servicio",
+                "com.acme.Color#ROJO", "read", [12]))
+        ]);
+        using var _g = graph;
+
+        Assert.Equal("Variable", await graph.TextAsync("SELECT label FROM nodes WHERE qualified_name = @qn", ("@qn", rojoQn)));
+        var rojo = await PropertiesAsync(graph, rojoQn);
+        Assert.Equal(("ROJO", "com.acme.Color"), (rojo["field_name"]!.GetValue<string>(), rojo["type_fqn"]!.GetValue<string>()));
+        Assert.Equal("{}", await graph.TextAsync("SELECT properties FROM nodes WHERE qualified_name = @qn", ("@qn", twinQn)));
+        Assert.Equal("[12]", (await EdgeAsync(graph, "READS", JavaGraphFixture.Ejecutar, rojoQn))["lines"]!.ToJsonString());
+        Assert.NotNull(await graph.NodeIdAsync(JavaGraphFixture.Qn(color, "Color.codigo")));
+        Assert.NotNull(await graph.NodeIdAsync(JavaGraphFixture.Qn(JavaTestRepo.DaoPath, "Dao.MAX")));
+
+        var stats = result.Stats;
+        Assert.Equal((2, 1, 2), (stats.FieldsMatched, stats.FieldsMatchedToVariable, stats.FieldsCreated));
+        Assert.Equal(2, stats.FieldsCreatedWithoutCbmCounterpart);
+        Assert.Equal(0, stats.FieldsCreatedNameMismatch);
+        Assert.Equal(0, stats.FieldsUnmatchedRatio);
+        Assert.False(stats.ExceedsUnmatchedThreshold);
+        Assert.Equal(0, stats.CbmFieldsUnmatched);
+        var fields = JsonNode.Parse(result.Outcome.Details!)!["fields"]!;
+        Assert.Equal((1, 2), (fields["matched_variable"]!.GetValue<int>(), fields["created_without_cbm_counterpart"]!.GetValue<int>()));
+    }
+
+    [Fact]
+    public async Task Reads_and_writes_carry_their_lines_and_readwrite_gives_both()
+    {
+        using var temp = new TempDirectory();
+        const string servicio = "com.acme.negocio.Servicio";
+        const string ejecutar = "com.acme.negocio.Servicio#ejecutar()";
+        var path = JavaTestRepo.ServicioPath;
+        var (result, graph) = await ApplyAsync(temp, withReferences: true, extraLines:
+        [
+            JavaGraphFixture.J(JavaGraphFixture.FieldRef(path, ejecutar, servicio, "com.acme.Bean#id", "write", [11])),
+            JavaGraphFixture.J(JavaGraphFixture.FieldRef(path, ejecutar, servicio, "com.acme.Bean#id", "readwrite", [12, 13], count: 3)),
+            JavaGraphFixture.J(JavaGraphFixture.FieldRef(path, ejecutar, servicio, "com.acme.Bean#id", "read", [14]))
+        ]);
+        using var _g = graph;
+
+        var getIdReads = await EdgeAsync(graph, "READS", JavaGraphFixture.GetId, JavaGraphFixture.BeanId);
+        Assert.Equal($"[{JavaTestRepo.LineOf(JavaTestRepo.BeanPath, "return id;")}]", getIdReads["lines"]!.ToJsonString());
+        Assert.Equal(1, getIdReads["count"]!.GetValue<int>());
+        Assert.Equal("[\"JavaAnalyzer\"]", getIdReads["enriched_by"]!.ToJsonString());
+        Assert.False(getIdReads.ContainsKey("contexts"));
+
+        var reads = await EdgeAsync(graph, "READS", JavaGraphFixture.Ejecutar, JavaGraphFixture.BeanId);
+        Assert.Equal("[12,13,14]", reads["lines"]!.ToJsonString());
+        Assert.Equal(4, reads["count"]!.GetValue<int>());
+        var writes = await EdgeAsync(graph, "WRITES", JavaGraphFixture.Ejecutar, JavaGraphFixture.BeanId);
+        Assert.Equal("[11,12,13]", writes["lines"]!.ToJsonString());
+        Assert.Equal(4, writes["count"]!.GetValue<int>());
+        Assert.Empty(await EdgesFromAsync(graph, "WRITES", JavaGraphFixture.GetId));
+
+        Assert.Equal((2, 1), (result.Stats.ReadsEdges, result.Stats.WritesEdges));
+        var edges = JsonNode.Parse(result.Outcome.Details!)!["edges"]!;
+        Assert.Equal((2, 1), (edges["READS"]!.GetValue<int>(), edges["WRITES"]!.GetValue<int>()));
+    }
+
+    [Fact]
+    public async Task Uses_type_unions_the_contexts_and_can_leave_from_a_method_a_field_or_the_type()
+    {
+        using var temp = new TempDirectory();
+        const string ejecutar = "com.acme.negocio.Servicio#ejecutar()";
+        var path = JavaTestRepo.ServicioPath;
+        var (result, graph) = await ApplyAsync(temp, withReferences: true, extraLines:
+        [
+            JavaGraphFixture.J(JavaGraphFixture.TypeRef(path, ejecutar, "com.acme.negocio.Servicio", "com.acme.Bean", ["cast"], [14])),
+            // Otro registro con la misma clave (de otro fichero, p. ej.) se funde con el anterior.
+            JavaGraphFixture.J(JavaGraphFixture.TypeRef(path, ejecutar, "com.acme.negocio.Servicio", "com.acme.Bean", ["local", "generic"], [15, 16], count: 3)),
+            JavaGraphFixture.J(JavaGraphFixture.TypeRef(JavaTestRepo.BeanPath, null, "com.acme.Bean", "com.acme.dao.Dao", ["field"], [7],
+                fromField: "com.acme.Bean#id")),
+            JavaGraphFixture.J(JavaGraphFixture.TypeRef(JavaTestRepo.BeanPath, null, "com.acme.Bean", "com.acme.dao.Dao", ["annotation"], [6]))
+        ]);
+        using var _g = graph;
+
+        var bean = await EdgeAsync(graph, "USES_TYPE", JavaGraphFixture.Ejecutar, JavaGraphFixture.BeanQn);
+        Assert.Equal("[\"cast\",\"generic\",\"local\"]", bean["contexts"]!.ToJsonString());
+        Assert.Equal("[14,15,16]", bean["lines"]!.ToJsonString());
+        Assert.Equal(4, bean["count"]!.GetValue<int>());
+        Assert.Equal("[\"JavaAnalyzer\"]", bean["enriched_by"]!.ToJsonString());
+
+        var dao = JavaGraphFixture.Qn(JavaTestRepo.DaoPath, "Dao");
+        Assert.Equal("[\"local\"]", (await EdgeAsync(graph, "USES_TYPE", JavaGraphFixture.Ejecutar, dao))["contexts"]!.ToJsonString());
+        Assert.Equal("[\"field\"]", (await EdgeAsync(graph, "USES_TYPE", JavaGraphFixture.BeanId, dao))["contexts"]!.ToJsonString());
+        Assert.Equal("[\"annotation\"]", (await EdgeAsync(graph, "USES_TYPE", JavaGraphFixture.BeanQn, dao))["contexts"]!.ToJsonString());
+
+        // Los cuatro consultar() devuelven Bean: la sobrecarga creada también es origen.
+        Assert.Equal("[\"return\"]", (await EdgeAsync(graph, "USES_TYPE", JavaGraphFixture.DaoConsultar + "(Hashtable,long)", JavaGraphFixture.BeanQn))
+            ["contexts"]!.ToJsonString());
+        Assert.Single(await EdgesFromAsync(graph, "USES_TYPE", JavaGraphFixture.DaoImplConsultar));
+        // 4 consultar, 4 desde ejecutar (Dao, DaoImpl, Cache, Bean), 1 desde execute, 1 desde el campo y 1 desde el tipo.
+        Assert.Equal(11, result.Stats.UsesTypeEdges);
+    }
+
+    [Fact]
+    public async Task New_of_an_implicit_constructor_leaves_a_uses_type_with_new_implicit()
+    {
+        using var temp = new TempDirectory();
+        var (result, graph) = await ApplyAsync(temp, withReferences: true);
+        using var _g = graph;
+
+        var daoImpl = await EdgeAsync(graph, "USES_TYPE", JavaGraphFixture.Ejecutar, JavaGraphFixture.Qn(JavaTestRepo.DaoImplPath, "DaoImpl"));
+        Assert.Equal("[\"new_implicit\"]", daoImpl["contexts"]!.ToJsonString());
+        Assert.Equal($"[{JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "new DaoImpl()")}]", daoImpl["lines"]!.ToJsonString());
+        Assert.Equal("[\"new_implicit\"]", (await EdgeAsync(graph, "USES_TYPE",
+            JavaGraphFixture.Qn(JavaTestRepo.ConsultarActionPath, "ConsultarAction.execute"), JavaGraphFixture.Qn(JavaTestRepo.ServicioPath, "Servicio")))
+            ["contexts"]!.ToJsonString());
+        // La llamada al constructor implícito sigue sin CALLS, contada aparte.
+        Assert.Equal(3, result.Stats.ProjectCallsUnmatchedByReason[JavaGraphWriter.ReasonImplicitConstructor]);
+    }
+
+    [Fact]
+    public async Task With_schema_2_the_cbm_usage_edges_of_the_analyzed_files_are_replaced()
+    {
+        using var temp = new TempDirectory();
+        const string otro = "src/com/acme/Otro.java";
+        var (result, graph) = await ApplyAsync(temp, withReferences: true, arrange: async g =>
+        {
+            // cbm también deja USAGE desde Module y WRITES heurísticas; y USAGE de un fichero que no se analiza, que se conserva.
+            var module = (await g.NodeIdAsync(JavaGraphFixture.Prefix(JavaTestRepo.ServicioPath)))!.Value;
+            var bean = (await g.NodeIdAsync(JavaGraphFixture.BeanQn))!.Value;
+            var getId = (await g.NodeIdAsync(JavaGraphFixture.GetId))!.Value;
+            await g.EdgeAsync(module, bean, "USAGE", "{\"callee\":\"Bean\"}");
+            await g.EdgeAsync(getId, bean, "WRITES");
+            var outside = await g.NodeAsync("Class", "Otro", JavaGraphFixture.Qn(otro, "Otro"), otro, 1, 3);
+            await g.EdgeAsync(outside, bean, "USAGE");
+        });
+        using var _g = graph;
+
+        Assert.Equal(1, await graph.CountAsync("SELECT COUNT(1) FROM edges WHERE type = 'USAGE'"));
+        Assert.Equal(0, await graph.CountAsync("""
+            SELECT COUNT(1) FROM edges e JOIN nodes s ON s.id = e.source_id
+            WHERE e.type IN ('USAGE', 'USES_TYPE', 'READS', 'WRITES') AND s.file_path <> @otro
+              AND NOT (CASE WHEN json_valid(e.properties) THEN EXISTS (SELECT 1 FROM json_each(e.properties, '$.enriched_by') WHERE value = 'JavaAnalyzer') ELSE 0 END)
+            """, ("@otro", otro)));
+        Assert.Equal(2, result.Stats.CbmEdgesReplacedByType["USAGE"]);
+        Assert.Equal(1, result.Stats.CbmEdgesReplacedByType["WRITES"]);
+        Assert.Equal(3, result.Stats.CbmEdgesReplacedByType["CALLS"]);
+        Assert.Equal(result.Stats.CbmEdgesReplacedByType.Values.Sum(), result.Outcome.CbmEdgesReplaced);
+        var replaced = JsonNode.Parse(result.Outcome.Details!)!["cbm_edges_replaced"]!;
+        Assert.Equal(2, replaced["USAGE"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task Targets_inside_anonymous_or_local_classes_get_no_node_and_are_counted()
+    {
+        using var temp = new TempDirectory();
+        const string ejecutar = "com.acme.negocio.Servicio#ejecutar()";
+        var path = JavaTestRepo.ServicioPath;
+        var (result, graph) = await ApplyAsync(temp, withReferences: true, extraLines:
+        [
+            JavaGraphFixture.J(JavaGraphFixture.TypeRef(path, ejecutar, "com.acme.negocio.Servicio", "com.acme.negocio.Servicio$1Loc", ["new_implicit"], [15])),
+            JavaGraphFixture.J(JavaGraphFixture.FieldRef(path, ejecutar, "com.acme.negocio.Servicio", "com.acme.negocio.Servicio$1#inner", "write", [16, 17])),
+            JavaGraphFixture.J(JavaGraphFixture.TypeRef(path, "com.acme.negocio.Servicio#noExiste()", "com.acme.negocio.Servicio", "com.acme.Bean", ["local"], [18]))
+        ]);
+        using var _g = graph;
+
+        Assert.Equal(0, await graph.CountAsync("SELECT COUNT(1) FROM nodes WHERE qualified_name LIKE '%$%'"));
+        Assert.Equal(3, result.Stats.ProjectRefsUnmatchedByReason[JavaGraphWriter.ReasonTargetWithoutNode]);
+        Assert.Equal(1, result.Stats.ProjectRefsUnmatchedByReason[JavaGraphWriter.ReasonSourceWithoutNode]);
+        Assert.Equal(4, result.Stats.ProjectRefsUnmatched);
+        var refs = JsonNode.Parse(result.Outcome.Details!)!["refs"]!;
+        Assert.Equal(3, refs["unmatched_by_reason"]![JavaGraphWriter.ReasonTargetWithoutNode]!.GetValue<long>());
+        Assert.Equal(4, refs["unmatched"]!.GetValue<long>());
+        Assert.Equal(1, refs["unresolved_by_reason"]!["error-type"]!.GetValue<long>());
+        Assert.Equal(8, refs["type"]!["project"]!.GetValue<long>());
+        // Las llamadas sin nodo siguen en unresolved; las referencias, solo en details.refs.
+        Assert.Equal("{\"error-owner\":1,\"implicit_constructor\":3}", result.Outcome.Unresolved);
+    }
+
+    [Fact]
+    public async Task A_schema_1_result_is_still_written_and_keeps_the_cbm_usage()
+    {
+        using var temp = new TempDirectory();
+        var (result, graph) = await ApplyAsync(temp);
+        using var _g = graph;
+
+        Assert.Equal(1, result.Summary.Schema);
+        Assert.Null(result.Summary.Refs);
+        Assert.Equal(1, await graph.CountAsync("SELECT COUNT(1) FROM edges WHERE type = 'USAGE'"));
+        Assert.Equal(0, await graph.CountAsync("SELECT COUNT(1) FROM edges WHERE type IN ('USES_TYPE', 'READS', 'WRITES')"));
+        Assert.False((await PropertiesAsync(graph, JavaGraphFixture.BeanId)).ContainsKey("enriched_by"));
+        var details = JsonNode.Parse(result.Outcome.Details!)!;
+        Assert.Null(details["refs"]);
+        Assert.Equal(0, details["fields"]!["matched"]!.GetValue<int>());
+        Assert.False(result.Stats.CbmEdgesReplacedByType.ContainsKey("USAGE"));
+        Assert.Equal(EnrichmentRuns.StatusOk, Assert.Single(await EnrichmentRuns.ListAsync(graph.Connection, CancellationToken.None)).Status);
+    }
+
+    [Fact]
+    public async Task A_schema_newer_than_the_supported_one_is_rejected()
+    {
+        using var temp = new TempDirectory();
+        var db = Path.Combine(temp.Path, "codebase.db");
+        using var graph = await JavaGraphFixture.CreateGraphAsync(db);
+        var lines = JavaGraphFixture.ResultLines(withReferences: true);
+        lines[^1] = lines[^1].Replace("\"schema\":2", "\"schema\":3", StringComparison.Ordinal);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(() => JavaGraphWriter.ApplyAsync(JavaGraphFixture.Request(db),
+            JavaAnalysisReader.Read(JavaGraphFixture.WriteResult(temp.Path, lines)), CancellationToken.None));
+        Assert.Contains("versión de contrato 3; se esperaba entre 1 y 2", ex.Message);
+        Assert.Empty(await EnrichmentRuns.ListAsync(graph.Connection, CancellationToken.None));
+    }
 }
 
 public class JavaAnalysisReaderTests
@@ -788,6 +1226,39 @@ public class JavaAnalysisReaderTests
         var unresolved = records.OfType<JavaCallRecord>().Single(c => c.Origin == JavaOrigins.Unresolved);
         Assert.Null(unresolved.To);
         Assert.Equal("error-owner", unresolved.Reason);
+    }
+
+    [Fact]
+    public void Reads_the_field_and_ref_records_of_schema_2()
+    {
+        using var temp = new TempDirectory();
+        var records = JavaAnalysisReader.Read(JavaGraphFixture.WriteResult(temp.Path, JavaGraphFixture.ResultLines(withReferences: true))).ToList();
+
+        var field = Assert.Single(records.OfType<JavaFieldRecord>());
+        Assert.Equal(("com.acme.Bean", "id", "long", "private"), (field.OwnerFqn, field.Name, field.TypeFqn, field.Access));
+        Assert.Equal("com.acme.Bean#id", field.Key);
+        Assert.Equal(["Bean"], field.Chain);
+
+        var refs = records.OfType<JavaRefRecord>().ToList();
+        Assert.Equal(9, refs.Count);
+        var read = Assert.Single(refs, r => r.Kind == JavaRefKinds.Field);
+        Assert.Equal(("com.acme.Bean#getId()", "com.acme.Bean#id", JavaRefKinds.Read), (read.From, read.To, read.Access));
+        Assert.Empty(read.Contexts);
+        var local = Assert.Single(refs, r => r.Contexts.Contains("local"));
+        Assert.Null(local.Access);
+        Assert.Null(local.FromField);
+        Assert.Equal(1, local.Count);
+        Assert.Equal([JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "Dao d =")], local.Lines);
+
+        var summary = Assert.IsType<JavaSummaryRecord>(records[^1]);
+        Assert.Equal(2, summary.Schema);
+        Assert.Equal(1, summary.Fields);
+        Assert.Equal(8, summary.Refs!.Type[JavaOrigins.Project]);
+        Assert.Equal(3, summary.Refs.Contexts["new_implicit"]);
+        Assert.Equal(9, summary.Refs.Records);
+        Assert.Equal(1, summary.Refs.UnresolvedByReason["error-type"]);
+        Assert.True(JavaAnalysisReader.IsSupportedSchema(1));
+        Assert.False(JavaAnalysisReader.IsSupportedSchema(3));
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 /*
- * JavaAnalyzer (analyzerVersion "1", schema 1): analizador Java del enriquecimiento nativo del grafo
- * (docs/plans/2026-09-28-enriquecimiento-nativo-java-plan.md, T2). Un solo fichero, Java 17, sin dependencias.
+ * JavaAnalyzer (analyzerVersion "2", schema 2): analizador Java del enriquecimiento nativo del grafo
+ * (docs/plans/2026-09-28-enriquecimiento-nativo-java-plan.md, T2; registros field y ref en
+ * docs/plans/2026-09-29-referencias-tipos-campos-plan.md, Q1-Q4). Un solo fichero, Java 17, sin dependencias.
  *
  * Uso (source launcher, sin paso de compilacion):
  *   java <JvmOptions> --add-exports jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED
@@ -17,8 +18,8 @@
  * Cada fuente (tambien las que javac carga por -sourcepath en lotes) se lee como UTF-8 si sus bytes son UTF-8 valido,
  * con o sin BOM, y si no con la codificacion por defecto (P6).
  *
- * Resultado: <out>/java-analysis.jsonl, JSON Lines UTF-8 con registros "k" = file | diag | type | method | call y un
- * summary final (contrato en el plan, "Contrato del fichero intermedio"). Se escribe en .tmp y se renombra al terminar:
+ * Resultado: <out>/java-analysis.jsonl, JSON Lines UTF-8 con registros "k" = file | diag | type | method | call | field |
+ * ref y un summary final (contrato en el plan, "Contrato del fichero intermedio"). Se escribe en .tmp y se renombra al terminar:
  * si el fichero existe, la pasada termino. Progreso por stdout: "@@progress phase=<parse|analyze|scan> done=<n>
  * total=<n>"; cualquier otra linea es log.
  * Precisiones del contrato: la key de un constructor usa el nombre simple de la clase (a.B#B(int)); en una interfaz
@@ -26,6 +27,27 @@
  * de una llamada es la del nombre del metodo y la de un new la de la palabra new; un destino dentro de una clase
  * anonima o local lleva el nombre binario (a.B$1Local#go()); un new de clase anonima apunta al constructor del
  * supertipo; el super() implicito que inserta javac no se emite.
+ *
+ * Schema 2. Registro field por campo o constante de enum de un tipo con nombre: {"k":"field","path","chain","ownerFqn",
+ * "name","line","end","typeFqn" (borrado),"access","static","final","enumConstant","doc"}. Registro ref, agregado por
+ * fichero y por (from, fromField, fromType, to, kind, access), nunca uno por referencia: {"k":"ref","path","from" (key del
+ * metodo o null),"fromType" (tipo con nombre que la contiene),"fromField" (ownerFqn#campo si esta en el tipo declarado o el
+ * inicializador de un campo, si no null),"to" (FQN del tipo u ownerFqn#campo),"kind" (type|field),"access" (read|write|
+ * readwrite en campos, null en tipos),"contexts" (solo tipos, [] en campos: param, return, field, local, cast, instanceof,
+ * generic, static_access, class_literal, annotation, throws, catch, new_implicit, new_array, other),"origin" (siempre
+ * project),"count" (referencias agregadas),"lines" (lineas unicas, ordenadas)}.
+ * Precisiones: si from y fromField son null la referencia esta en un inicializador static o de instancia, o en las
+ * anotaciones o argumentos de tipo del propio tipo. Lo que hay dentro de una clase anonima o local (tambien una lambda) se
+ * atribuye al metodo o campo que la contiene, como las llamadas, y un destino declarado en ella lleva el nombre binario
+ * (a.B$1Local, a.B$1#campo). La linea de un nombre calificado es la de su ultimo segmento. Escritura = destino de "=";
+ * readwrite = destino de op=, ++ y --; el inicializador de la declaracion no cuenta como escritura. No se emiten: los import;
+ * los tipos de extends/implements (si sus argumentos de tipo, como generic); el calificador de otro nombre de tipo (a en
+ * a.B.C); un tipo referido desde si mismo (se cuenta en selfExcluded); el nombre de un new con constructor escrito, que ya
+ * es un call; this, super, length de un array y los arboles que sintetiza javac. new_implicit = new de un tipo del proyecto
+ * sin constructor escrito, o de una clase anonima cuyo supertipo es una interfaz o no tiene constructor escrito.
+ * static_access = el tipo califica un miembro (X.CONST, X.m(), X::m). new_array = new X[n]. Solo se detallan los destinos
+ * project; los demas se cuentan en summary.refs (type y field por origen, contexts de los refs de tipo del proyecto por
+ * ocurrencia, records, selfExcluded, unresolvedByReason) junto a summary.fields.
  *
  * Codigo de salida: 0 termino (aunque haya diagnosticos), 1 peticion invalida, 2 javac no pudo arrancar,
  * 3 fallo inesperado durante el analisis (p. ej. OutOfMemoryError). Ojo: si el launcher no puede compilar este fichero
@@ -38,6 +60,7 @@
 import com.sun.source.tree.*;
 import com.sun.source.util.*;
 import com.sun.tools.javac.code.Flags;
+import com.sun.tools.javac.code.Kinds;
 import com.sun.tools.javac.code.Symbol;
 
 import javax.lang.model.element.*;
@@ -60,10 +83,30 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class JavaAnalyzer {
-    static final String ANALYZER_VERSION = "1";
-    static final int SCHEMA = 1;
+    static final String ANALYZER_VERSION = "2";
+    static final int SCHEMA = 2;
     static final String RESULT_NAME = "java-analysis.jsonl";
     static final int PROGRESS_EVERY = 500;
+
+    static final String[] ORIGINS = {"project", "jdk", "jar", "unresolved"};
+    static final int O_PROJECT = 0, O_JDK = 1, O_JAR = 2, O_UNRESOLVED = 3;
+    /** Contextos de un ref de tipo, en el orden en que se escriben; el indice es el bit de la mascara. */
+    static final String[] CONTEXTS = {"param", "return", "field", "local", "cast", "instanceof", "generic", "static_access",
+            "class_literal", "annotation", "throws", "catch", "new_implicit", "new_array", "other"};
+    static final int C_PARAM = 0, C_RETURN = 1, C_FIELD = 2, C_LOCAL = 3, C_CAST = 4, C_INSTANCEOF = 5, C_GENERIC = 6,
+            C_STATIC_ACCESS = 7, C_CLASS_LITERAL = 8, C_ANNOTATION = 9, C_THROWS = 10, C_CATCH = 11, C_NEW_IMPLICIT = 12,
+            C_NEW_ARRAY = 13, C_OTHER = 14;
+    static final String[] ACCESS = {"read", "write", "readwrite"};
+    static final int A_READ = 0, A_WRITE = 1, A_READWRITE = 2;
+
+    static int originIndex(String o) {
+        switch (o) {
+            case "project": return O_PROJECT;
+            case "jdk": return O_JDK;
+            case "jar": return O_JAR;
+            default: return O_UNRESOLVED;
+        }
+    }
 
     static PrintStream stdout;
     static volatile long heapPeak;
@@ -314,8 +357,12 @@ public class JavaAnalyzer {
         final TreeMap<String, Long> unresolvedByReason = new TreeMap<>();
         final TreeSet<String> missingPackages = new TreeSet<>();
         long originFallback;
+        /** Referencias por origen (indice ORIGINS), de tipo y de campo; contextos de los refs de tipo del proyecto. */
+        final long[] refType = new long[4], refField = new long[4], refContexts = new long[CONTEXTS.length];
+        final TreeMap<String, Long> refUnresolvedByReason = new TreeMap<>();
+        long refRecords, refSelf, fields;
 
-        Stats() { for (String o : new String[]{"project", "jdk", "jar", "unresolved"}) calls.put(o, 0L); }
+        Stats() { for (String o : ORIGINS) calls.put(o, 0L); }
 
         synchronized void merge(Stats b) {
             parseMs += b.parseMs; analyzeMs += b.analyzeMs; scanMs += b.scanMs;
@@ -323,6 +370,10 @@ public class JavaAnalyzer {
             b.calls.forEach((k, v) -> calls.merge(k, v, Long::sum));
             b.unresolvedByReason.forEach((k, v) -> unresolvedByReason.merge(k, v, Long::sum));
             missingPackages.addAll(b.missingPackages);
+            for (int i = 0; i < 4; i++) { refType[i] += b.refType[i]; refField[i] += b.refField[i]; }
+            for (int i = 0; i < CONTEXTS.length; i++) refContexts[i] += b.refContexts[i];
+            b.refUnresolvedByReason.forEach((k, v) -> refUnresolvedByReason.merge(k, v, Long::sum));
+            refRecords += b.refRecords; refSelf += b.refSelf; fields += b.fields;
         }
     }
 
@@ -423,6 +474,8 @@ public class JavaAnalyzer {
         log(String.format(Locale.ROOT, "terminado en %d ms: %d ficheros, llamadas %s (%.3f %% resueltas), errores %d, heap pico %d MB%s",
                 wall, total.files, total.calls, all == 0 ? 100.0 : 100.0 * resolved / all, total.errors, heapPeak / 1048576,
                 total.missingPackages.isEmpty() ? "" : ", paquetes que faltan " + total.missingPackages));
+        log(String.format(Locale.ROOT, "referencias: tipos %s, campos %s, %d registros ref, %d registros field, %d autorreferencias excluidas",
+                originsJson(total.refType), originsJson(total.refField), total.refRecords, total.fields, total.refSelf));
         if (total.originFallback > 0) log("aviso: " + total.originFallback + " destinos sin fichero de origen clasificados como jdk");
         return 0;
     }
@@ -447,7 +500,26 @@ public class JavaAnalyzer {
                 .n("heapPeakMb", heapPeak / 1048576).raw("calls", calls.toString()).raw("unresolvedByReason", unres.toString())
                 .raw("missingPackages", miss.toString())
                 .raw("diagnostics", "{\"error\":" + total.errors + ",\"warning\":" + total.warnings + "}")
+                .raw("refs", refsJson()).n("fields", total.fields)
                 .n("batches", batches).n("wallMs", wallNs / 1000000).end();
+    }
+
+    static String originsJson(long[] v) {
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < ORIGINS.length; i++) { if (i > 0) sb.append(','); J.str(sb, ORIGINS[i]); sb.append(':').append(v[i]); }
+        return sb.append('}').toString();
+    }
+
+    String refsJson() {
+        StringBuilder ctx = new StringBuilder("{");
+        for (int i = 0; i < CONTEXTS.length; i++) { if (i > 0) ctx.append(','); J.str(ctx, CONTEXTS[i]); ctx.append(':').append(total.refContexts[i]); }
+        ctx.append('}');
+        StringBuilder unres = new StringBuilder("{");
+        total.refUnresolvedByReason.forEach((k, v) -> { if (unres.length() > 1) unres.append(','); J.str(unres, k); unres.append(':').append(v); });
+        unres.append('}');
+        return new J().raw("type", originsJson(total.refType)).raw("field", originsJson(total.refField))
+                .raw("contexts", ctx.toString()).n("records", total.refRecords).n("selfExcluded", total.refSelf)
+                .raw("unresolvedByReason", unres.toString()).end();
     }
 
     /** Raices de fuentes para -sourcepath: la carpeta del fichero sin los segmentos de su package. */
@@ -588,7 +660,9 @@ public class JavaAnalyzer {
             w.write(new J().s("k", "file").s("path", sf.rel).s("encoding", sf.encoding).n("errors", errorsByFile.getOrDefault(sf.rel, 0)).end());
             w.write('\n');
             for (String rec : diagsByFile.getOrDefault(sf.rel, List.of())) { w.write(rec); w.write('\n'); }
-            new FileScan(ctx, cu, sf.rel).scan(cu, null);
+            FileScan fs = new FileScan(ctx, cu, sf.rel);
+            fs.scan(cu, null);
+            fs.flushRefs();
             int s = scanned.incrementAndGet();
             if (s % PROGRESS_EVERY == 0 || s == totalFiles) progress("scan", s, totalFiles);
         }
@@ -628,9 +702,70 @@ public class JavaAnalyzer {
         final Types types;
         final Stats st;
         final Writer w;
+        /** Por lote (un hilo): nombre y origen de cada tipo destino, y clave ownerFqn#nombre de cada campo destino. */
+        final IdentityHashMap<Element, TInfo> tinfo = new IdentityHashMap<>();
+        final IdentityHashMap<Element, String> fkeys = new IdentityHashMap<>();
         Ctx(Trees trees, Elements els, Types types, Stats st, Writer w) {
             this.trees = trees; this.sp = trees.getSourcePositions(); this.els = els; this.types = types; this.st = st; this.w = w;
         }
+
+        TInfo typeInfo(TypeElement te) {
+            TInfo i = tinfo.get(te);
+            if (i == null) {
+                // Tipo que javac no encuentra: su owner puede ser noSymbol y classifyType lo tomaria por jdk.
+                boolean err = te.asType() == null || te.asType().getKind() == TypeKind.ERROR;
+                tinfo.put(te, i = new TInfo(ownerName(els, te), err ? O_UNRESOLVED : originIndex(classifyType(te, st))));
+            }
+            return i;
+        }
+
+        String fieldKey(VariableElement ve, TInfo owner) {
+            String k = fkeys.get(ve);
+            if (k == null) fkeys.put(ve, k = owner.name + "#" + ve.getSimpleName());
+            return k;
+        }
+    }
+
+    static final class TInfo {
+        final String name;
+        final int origin;
+        TInfo(String n, int o) { name = n; origin = o; }
+    }
+
+    /** Referencias agregadas de un fichero por (origen, destino, kind, access) (Q2). */
+    static final class Agg {
+        final String from, fromField, fromType, to, kind, access;
+        int ctx, count, n;
+        int[] lines = new int[4];
+        Agg(String from, String fromField, String fromType, String to, String kind, String access) {
+            this.from = from; this.fromField = fromField; this.fromType = fromType; this.to = to; this.kind = kind; this.access = access;
+        }
+        void addLine(int l) {
+            if (n > 0 && lines[n - 1] == l) return;
+            if (n == lines.length) lines = Arrays.copyOf(lines, n * 2);
+            lines[n++] = l;
+        }
+        String linesJson() {
+            int[] a = Arrays.copyOf(lines, n);
+            Arrays.sort(a);
+            StringBuilder sb = new StringBuilder(n * 5 + 2).append('[');
+            for (int i = 0; i < a.length; i++) {
+                if (i > 0 && a[i] == a[i - 1]) continue;
+                if (sb.length() > 1) sb.append(',');
+                sb.append(a[i]);
+            }
+            return sb.append(']').toString();
+        }
+    }
+
+    static String contextsJson(int mask) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < CONTEXTS.length; i++) {
+            if ((mask & (1 << i)) == 0) continue;
+            if (sb.length() > 1) sb.append(',');
+            J.str(sb, CONTEXTS[i]);
+        }
+        return sb.append(']').toString();
     }
 
     static final class FileScan extends TreePathScanner<Void, Void> {
@@ -641,8 +776,10 @@ public class JavaAnalyzer {
         final ArrayList<String> chain = new ArrayList<>();
         /** true mientras el contexto lexico es un tipo con nombre (o la unidad): fuera de clases anonimas y locales. */
         boolean inNamed = true;
-        String from = null, fromType = null;
+        /** Origen de llamadas y referencias: metodo (from), campo (fromField, solo refs) y tipo con nombre (fromType). */
+        String from = null, fromType = null, fromField = null;
         long bodyStart = -1;
+        final LinkedHashMap<String, Agg> refs = new LinkedHashMap<>();
 
         FileScan(Ctx c, CompilationUnitTree cu, String rel) {
             this.c = c; this.cu = cu; this.rel = rel; this.lm = cu.getLineMap();
@@ -672,15 +809,16 @@ public class JavaAnalyzer {
             }
             TypeElement te = (TypeElement) el;
             chain.add(t.getSimpleName().toString());
-            String sFrom = from, sType = fromType;
+            String sFrom = from, sType = fromType, sField = fromField;
             long sBody = bodyStart;
             try {
                 emitType(t, te);
                 from = null;
+                fromField = null;
                 fromType = te.getQualifiedName().toString();
                 return super.visitClass(t, v);
             } finally {
-                from = sFrom; fromType = sType; bodyStart = sBody;
+                from = sFrom; fromType = sType; fromField = sField; bodyStart = sBody;
                 chain.remove(chain.size() - 1);
             }
         }
@@ -727,14 +865,14 @@ public class JavaAnalyzer {
             Element el = c.trees.getElement(getCurrentPath());
             ExecutableElement e = el instanceof ExecutableElement ? (ExecutableElement) el : null;
             if (e != null && isGenerated(e)) return null; // constructor por defecto o de clase anonima que anade javac
-            String sFrom = from;
+            String sFrom = from, sField = fromField;
             long sBody = bodyStart;
             bodyStart = t.getBody() == null ? -1 : c.sp.getStartPosition(cu, t.getBody());
             try {
-                if (inNamed && e != null) from = emitMethod(t, e);
+                if (inNamed && e != null) { from = emitMethod(t, e); fromField = null; }
                 return super.visitMethod(t, v);
             } finally {
-                from = sFrom; bodyStart = sBody;
+                from = sFrom; fromField = sField; bodyStart = sBody;
             }
         }
 
@@ -792,7 +930,7 @@ public class JavaAnalyzer {
             }
             Element e = c.trees.getElement(getCurrentPath());
             if (t.getClassBody() != null) {
-                Element sup = anonSuperConstructor(t);
+                Element sup = anonSuperConstructor(getCurrentPath(), t);
                 if (sup != null) e = sup;
             }
             emitCall(startLine(t), e, "new");
@@ -800,9 +938,9 @@ public class JavaAnalyzer {
         }
 
         /** En una clase anonima el destino util es el constructor del supertipo que invoca el constructor generado. */
-        Element anonSuperConstructor(NewClassTree t) {
+        Element anonSuperConstructor(TreePath newPath, NewClassTree t) {
             ClassTree body = t.getClassBody();
-            TreePath bodyPath = new TreePath(getCurrentPath(), body);
+            TreePath bodyPath = new TreePath(newPath, body);
             for (Tree m : body.getMembers()) {
                 if (!(m instanceof MethodTree)) continue;
                 MethodTree mt = (MethodTree) m;
@@ -842,6 +980,218 @@ public class JavaAnalyzer {
             emit(new J().s("k", "call").s("path", rel).lineNo("line", line).s("from", from).s("fromType", fromType)
                     .s("to", to).s("origin", origin).s("kind", kind).s("reason", reason).end());
         }
+
+        // --- campos y referencias (schema 2)
+
+        @Override public Void visitImport(ImportTree t, Void v) { return null; } // un import no es un uso (Q3)
+
+        @Override public Void visitVariable(VariableTree t, Void v) {
+            TreePath path = getCurrentPath();
+            if (inNamed && path.getParentPath().getLeaf() instanceof ClassTree) {
+                Element el = c.trees.getElement(path);
+                if (el != null && (el.getKind() == ElementKind.FIELD || el.getKind() == ElementKind.ENUM_CONSTANT)
+                        && el.getEnclosingElement() instanceof TypeElement) {
+                    String sFrom = from, sField = fromField;
+                    fromField = emitField(t, (VariableElement) el);
+                    from = null;
+                    try { return super.visitVariable(t, v); } finally { from = sFrom; fromField = sField; }
+                }
+            }
+            return super.visitVariable(t, v);
+        }
+
+        String emitField(VariableTree t, VariableElement ve) {
+            TypeElement owner = (TypeElement) ve.getEnclosingElement();
+            Set<Modifier> mods = ve.getModifiers();
+            emit(new J().s("k", "field").s("path", rel).arr("chain", chain).s("ownerFqn", owner.getQualifiedName())
+                    .s("name", ve.getSimpleName()).lineNo("line", startLine(t)).lineNo("end", endLine(t))
+                    .s("typeFqn", erased(c.types, ve.asType())).s("access", access(mods))
+                    .b("static", mods.contains(Modifier.STATIC)).b("final", mods.contains(Modifier.FINAL))
+                    .b("enumConstant", ve.getKind() == ElementKind.ENUM_CONSTANT).s("doc", doc(ve)).end());
+            c.st.fields++;
+            return c.fieldKey(ve, c.typeInfo(owner));
+        }
+
+        @Override public Void visitIdentifier(IdentifierTree t, Void v) {
+            Name n = t.getName();
+            if (!n.contentEquals("this") && !n.contentEquals("super")) {
+                long end = c.sp.getEndPosition(cu, t);
+                if (end > 0) reference(t, startLine(t));
+            }
+            return super.visitIdentifier(t, v);
+        }
+
+        @Override public Void visitMemberSelect(MemberSelectTree t, Void v) {
+            Name n = t.getIdentifier();
+            if (!n.contentEquals("class") && !n.contentEquals("this") && !n.contentEquals("super")) {
+                long end = c.sp.getEndPosition(cu, t);
+                if (end > 0) reference(t, line(end - 1)); // linea del nombre, como en las llamadas
+            }
+            return super.visitMemberSelect(t, v);
+        }
+
+        /** Un identificador o seleccion con posicion final (los arboles que sintetiza javac no la tienen). */
+        void reference(ExpressionTree t, long ln) {
+            if (fromType == null) return; // anotaciones de package-info
+            TreePath path = getCurrentPath();
+            Tree parent = path.getParentPath().getLeaf();
+            if (parent instanceof MethodInvocationTree && ((MethodInvocationTree) parent).getMethodSelect() == t) return; // es un call
+            Element el = c.trees.getElement(path);
+            if (el == null) {
+                c.st.refType[O_UNRESOLVED]++;
+                c.st.refUnresolvedByReason.merge("null-element", 1L, Long::sum);
+                return;
+            }
+            ElementKind k = el.getKind();
+            if ((k.isClass() || k.isInterface()) && el instanceof TypeElement) typeRef((TypeElement) el, path, ln);
+            else if (k == ElementKind.FIELD || k == ElementKind.ENUM_CONSTANT) fieldRef((VariableElement) el, path, ln);
+        }
+
+        void typeRef(TypeElement te, TreePath path, long ln) {
+            int ctx = typeContext(path, te);
+            if (ctx == 0) return;
+            TInfo ti = c.typeInfo(te);
+            if (ti.origin == O_PROJECT && ti.name.equals(fromType)) { c.st.refSelf++; return; } // Q3
+            c.st.refType[ti.origin]++;
+            if (ti.origin == O_UNRESOLVED) { c.st.refUnresolvedByReason.merge("error-type", 1L, Long::sum); return; }
+            if (ti.origin != O_PROJECT) return;
+            for (int i = 0; i < CONTEXTS.length; i++) if ((ctx & (1 << i)) != 0) c.st.refContexts[i]++;
+            addRef(ti.name, "type", null, ctx, ln);
+        }
+
+        void fieldRef(VariableElement ve, TreePath path, long ln) {
+            Element owner = ve.getEnclosingElement();
+            if (!(owner instanceof TypeElement) || isArrayPseudoClass(owner)) return; // length de un array
+            TInfo ti = c.typeInfo((TypeElement) owner);
+            c.st.refField[ti.origin]++;
+            if (ti.origin == O_UNRESOLVED) { c.st.refUnresolvedByReason.merge("error-owner", 1L, Long::sum); return; }
+            if (ti.origin != O_PROJECT) return;
+            addRef(c.fieldKey(ve, ti), "field", ACCESS[accessOf(path)], 0, ln);
+        }
+
+        void addRef(String to, String kind, String access, int ctx, long ln) {
+            String k = from + '\u0001' + fromField + '\u0001' + fromType + '\u0001' + to + '\u0001' + kind + '\u0001' + access;
+            Agg a = refs.get(k);
+            if (a == null) refs.put(k, a = new Agg(from, fromField, fromType, to, kind, access));
+            a.ctx |= ctx;
+            a.count++;
+            a.addLine((int) ln);
+        }
+
+        void flushRefs() {
+            for (Agg a : refs.values()) {
+                emit(new J().s("k", "ref").s("path", rel).s("from", a.from).s("fromType", a.fromType).s("fromField", a.fromField)
+                        .s("to", a.to).s("kind", a.kind).s("access", a.access).raw("contexts", contextsJson(a.ctx))
+                        .s("origin", "project").n("count", a.count).raw("lines", a.linesJson()).end());
+                c.st.refRecords++;
+            }
+            refs.clear();
+        }
+
+        /**
+         * Mascara de contextos de un nombre de tipo, subiendo por el arbol hasta la construccion que lo usa; 0 = no se emite
+         * (extends/implements, calificador de otro nombre de tipo, new con constructor explicito, que ya es un call).
+         */
+        int typeContext(TreePath path, TypeElement te) {
+            int g = 0;
+            Tree child = path.getLeaf();
+            for (TreePath p = path.getParentPath(); p != null; child = p.getLeaf(), p = p.getParentPath()) {
+                Tree par = p.getLeaf();
+                switch (par.getKind()) {
+                    case PARAMETERIZED_TYPE:
+                        if (((ParameterizedTypeTree) par).getType() != child) g = 1 << C_GENERIC;
+                        continue;
+                    case ARRAY_TYPE: case UNION_TYPE: case INTERSECTION_TYPE: case ANNOTATED_TYPE:
+                    case EXTENDS_WILDCARD: case SUPER_WILDCARD: case UNBOUNDED_WILDCARD:
+                        continue;
+                    case ANNOTATION: case TYPE_ANNOTATION:
+                        return (((AnnotationTree) par).getAnnotationType() == child ? 1 << C_ANNOTATION : 1 << C_OTHER) | g;
+                    case MEMBER_SELECT: {
+                        Name n = ((MemberSelectTree) par).getIdentifier();
+                        if (n.contentEquals("class")) return (1 << C_CLASS_LITERAL) | g;
+                        if (n.contentEquals("this") || n.contentEquals("super")) return 0;
+                        if (g != 0) continue; // Outer<X>.Inner: el contexto lo da quien usa Inner
+                        Element pe = c.trees.getElement(p);
+                        if (pe != null && (pe.getKind().isClass() || pe.getKind().isInterface() || pe.getKind() == ElementKind.PACKAGE)) return 0;
+                        return 1 << C_STATIC_ACCESS;
+                    }
+                    case METHOD_INVOCATION:
+                        return 1 << C_GENERIC; // argumento de tipo explicito: X.<T>m()
+                    case NEW_CLASS: {
+                        NewClassTree nc = (NewClassTree) par;
+                        if (nc.getIdentifier() != child || g != 0) return 1 << C_GENERIC;
+                        return implicitNew(p, nc, te) ? 1 << C_NEW_IMPLICIT : 0; // Q4
+                    }
+                    case MEMBER_REFERENCE:
+                        return (((MemberReferenceTree) par).getQualifierExpression() == child ? 1 << C_STATIC_ACCESS : 1 << C_GENERIC) | g;
+                    case VARIABLE: {
+                        if (((VariableTree) par).getType() != child) return (1 << C_OTHER) | g;
+                        Element ve = c.trees.getElement(p);
+                        ElementKind vk = ve == null ? ElementKind.LOCAL_VARIABLE : ve.getKind();
+                        int x;
+                        switch (vk) {
+                            case FIELD: case ENUM_CONSTANT: x = C_FIELD; break;
+                            case PARAMETER: x = C_PARAM; break;
+                            case EXCEPTION_PARAMETER: x = C_CATCH; break;
+                            default: x = C_LOCAL;
+                        }
+                        return (1 << x) | g;
+                    }
+                    case METHOD: {
+                        MethodTree mt = (MethodTree) par;
+                        if (mt.getReturnType() == child) return (1 << C_RETURN) | g;
+                        for (Tree th : mt.getThrows()) if (th == child) return (1 << C_THROWS) | g;
+                        return (1 << C_OTHER) | g;
+                    }
+                    case TYPE_PARAMETER:
+                        return 1 << C_GENERIC;
+                    case CLASS: case INTERFACE: case ENUM: case ANNOTATION_TYPE:
+                        return g; // extends/implements (Q3): solo cuentan sus argumentos de tipo
+                    case TYPE_CAST:
+                        return (((TypeCastTree) par).getType() == child ? 1 << C_CAST : 1 << C_OTHER) | g;
+                    case INSTANCE_OF:
+                        return (((InstanceOfTree) par).getType() == child ? 1 << C_INSTANCEOF : 1 << C_OTHER) | g;
+                    case NEW_ARRAY:
+                        return (1 << C_NEW_ARRAY) | g;
+                    default:
+                        return (1 << C_OTHER) | g;
+                }
+            }
+            return (1 << C_OTHER) | g;
+        }
+
+        /** new cuyo constructor no esta escrito: por defecto, o clase anonima de una interfaz o de un supertipo sin constructor. */
+        boolean implicitNew(TreePath newPath, NewClassTree nc, TypeElement te) {
+            if (nc.getClassBody() != null) {
+                Element sup = anonSuperConstructor(newPath, nc);
+                return sup == null || sup.getEnclosingElement() != te || isGenerated((ExecutableElement) sup);
+            }
+            Element e = c.trees.getElement(newPath);
+            return e instanceof ExecutableElement && isGenerated((ExecutableElement) e);
+        }
+
+        /** read, write (destino de =) o readwrite (destino de op=, ++ y --), atravesando parentesis. */
+        int accessOf(TreePath path) {
+            Tree child = path.getLeaf();
+            for (TreePath p = path.getParentPath(); p != null; child = p.getLeaf(), p = p.getParentPath()) {
+                Tree par = p.getLeaf();
+                if (par instanceof ParenthesizedTree) continue;
+                if (par instanceof AssignmentTree) return ((AssignmentTree) par).getVariable() == child ? A_WRITE : A_READ;
+                if (par instanceof CompoundAssignmentTree) return ((CompoundAssignmentTree) par).getVariable() == child ? A_READWRITE : A_READ;
+                switch (par.getKind()) {
+                    case PREFIX_INCREMENT: case PREFIX_DECREMENT: case POSTFIX_INCREMENT: case POSTFIX_DECREMENT: return A_READWRITE;
+                    default: return A_READ;
+                }
+            }
+            return A_READ;
+        }
+    }
+
+    /** true para la pseudo-clase Array de javac (propietaria de length y clone), cuyo owner es noSymbol (Kind.NIL). */
+    static boolean isArrayPseudoClass(Element e) {
+        if (!(e instanceof Symbol)) return false;
+        Symbol o = ((Symbol) e).owner;
+        return o == null || o.kind == Kinds.Kind.NIL;
     }
 
     // ------------------------------------------------------------------ utilidades de simbolos

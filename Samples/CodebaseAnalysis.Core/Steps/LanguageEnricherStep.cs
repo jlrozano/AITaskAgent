@@ -249,9 +249,30 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
         var calls = summary.Calls.Values.Sum();
         var unresolved = summary.Calls.GetValueOrDefault(JavaOrigins.Unresolved);
         var resolved = calls == 0 ? "sin llamadas" : $"{Percent(calls - unresolved, calls)} de las llamadas resueltas ({N(unresolved)} sin resolver de {N(calls)})";
+        if (summary.Refs is { } refs)
+        {
+            // Q1: las referencias a tipos y campos cuentan todos los orígenes; sin resolver es lo que javac no supo atribuir.
+            var references = refs.Type.Values.Sum() + refs.Field.Values.Sum();
+            var referencesUnresolved = refs.Type.GetValueOrDefault(JavaOrigins.Unresolved) + refs.Field.GetValueOrDefault(JavaOrigins.Unresolved);
+            resolved += references == 0
+                ? "; sin referencias a tipos ni campos"
+                : $"; {Percent(references - referencesUnresolved, references)} de las referencias a tipos y campos resueltas "
+                  + $"({N(referencesUnresolved)} sin resolver de {N(references)})";
+        }
+        var created = summary.Refs == null
+            ? $"{N(stats.CallEdges)} CALLS creadas"
+            : $"{N(stats.CallEdges)} CALLS, {N(stats.UsesTypeEdges)} USES_TYPE, {N(stats.ReadsEdges)} READS y {N(stats.WritesEdges)} WRITES creadas";
+        var replaced = stats.CbmEdgesReplacedByType.TryGetValue("USAGE", out var usage)
+            ? $"{P(outcome.CbmEdgesReplaced, "arista", "aristas")} de cbm sustituidas ({N(usage)} USAGE)"
+            : $"{P(outcome.CbmEdgesReplaced, "arista", "aristas")} CALLS/INHERITS/IMPLEMENTS de cbm sustituidas";
+        var fields = stats.FieldsMatched + stats.FieldsCreated + stats.FieldsUnmatched;
+        var fieldsText = fields == 0
+            ? ""
+            : $"{N(stats.FieldsMatched)} de {P(fields, "campo casado", "campos casados")} con cbm ({Percent(stats.FieldsMatched, fields)}), "
+              + $"{N(stats.FieldsCreated)} {(stats.FieldsCreated == 1 ? "creado" : "creados")} y {N(stats.FieldsUnmatched)} sin nodo; ";
         context.Report(StepName, AnalysisLogLevel.Success,
             $"✅ Analizador Java: {P(outcome.FilesAnalyzed, "fichero", "ficheros")} en {Duration(duration)}; {resolved}; "
-            + $"{P(outcome.CbmEdgesReplaced, "arista", "aristas")} CALLS/INHERITS/IMPLEMENTS de cbm sustituidas y {N(stats.CallEdges)} CALLS creadas; "
+            + $"{replaced} y {created}; {fieldsText}"
             + $"{P(stats.OverloadsCreated, "sobrecarga creada", "sobrecargas creadas")}; {P(outcome.NodesRemoved, "nodo de test retirado", "nodos de test retirados")}.");
 
         if (CbmDriftWarning(stats) is { } drift)
@@ -279,8 +300,8 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
     }
 
     /// <summary>
-    /// Aviso de declaraciones sin casar con cbm (H-9): con más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos o de
-    /// métodos creados como nodos nuevos, la pasada no falla, pero el grafo tiene nodos que cbm no conoce. Separa las dos
+    /// Aviso de declaraciones sin casar con cbm (H-9): con más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos, de
+    /// métodos o de campos creados como nodos nuevos, la pasada no falla, pero el grafo tiene nodos que cbm no conoce. Separa las dos
     /// causas: ficheros que cbm no indexó (sin ningún nodo suyo), con la pista del MAX_PATH de Windows si alguno llega a
     /// <see cref="JavaGraphWriter.WindowsMaxPath"/> caracteres, y nombres que no casan en los ficheros que sí indexó, que es lo
     /// único que apunta a un cambio de versión de cbm. Null si casan.
@@ -292,12 +313,15 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
 
         var threshold = $"{(JavaGraphWriter.CbmDriftThreshold * 100).ToString("0", Spanish)} %";
         var parts = new List<string>();
-        var unindexedDeclarations = stats.TypesCreatedInUnindexedFiles + stats.MethodsCreatedInUnindexedFiles;
+        var unindexedDeclarations = stats.TypesCreatedInUnindexedFiles + stats.MethodsCreatedInUnindexedFiles + stats.FieldsCreatedInUnindexedFiles;
         if (unindexedDeclarations > 0)
         {
             var files = stats.UnindexedFiles == 1 ? "1 fichero .java que el analizador sí leyó" : $"{N(stats.UnindexedFiles)} ficheros .java que el analizador sí leyó";
-            var unindexed = $"cbm no indexó {files} (no tiene ningún nodo suyo); sus declaraciones se han creado como nodos nuevos: "
-                + $"{P(stats.TypesCreatedInUnindexedFiles, "tipo", "tipos")} y {P(stats.MethodsCreatedInUnindexedFiles, "método", "métodos")} sin contar sobrecargas.";
+            var declarations = stats.FieldsCreatedInUnindexedFiles > 0
+                ? $"{P(stats.TypesCreatedInUnindexedFiles, "tipo", "tipos")}, {P(stats.MethodsCreatedInUnindexedFiles, "método", "métodos")} sin contar sobrecargas "
+                  + $"y {P(stats.FieldsCreatedInUnindexedFiles, "campo", "campos")}"
+                : $"{P(stats.TypesCreatedInUnindexedFiles, "tipo", "tipos")} y {P(stats.MethodsCreatedInUnindexedFiles, "método", "métodos")} sin contar sobrecargas";
+            var unindexed = $"cbm no indexó {files} (no tiene ningún nodo suyo); sus declaraciones se han creado como nodos nuevos: {declarations}.";
             if (stats.UnindexedLongPathFiles is int longPaths && longPaths > 0)
                 unindexed += $" {(longPaths == stats.UnindexedFiles ? (longPaths == 1 ? "Ese fichero tiene" : "Todos tienen") : (longPaths == 1 ? "1 de ellos tiene" : $"{N(longPaths)} de ellos tienen"))} "
                     + $"una ruta absoluta de {JavaGraphWriter.WindowsMaxPath} caracteres o más, el límite MAX_PATH de Windows, que cbm no indexa: "
@@ -307,8 +331,13 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
 
         var types = stats.TypesMatched + stats.TypesCreatedNameMismatch;
         var methods = stats.MethodsMatched + stats.MethodsCreatedNameMismatch;
-        var mismatch = $"{Share(stats.TypesCreatedNameMismatch, types)} de los tipos ({N(stats.TypesCreatedNameMismatch)} de {N(types)}) "
-            + $"y {Share(stats.MethodsCreatedNameMismatch, methods)} de los métodos sin contar sobrecargas ({N(stats.MethodsCreatedNameMismatch)} de {N(methods)})";
+        var fields = stats.FieldsMatched + stats.FieldsCreatedNameMismatch;
+        var typesShare = $"{Share(stats.TypesCreatedNameMismatch, types)} de los tipos ({N(stats.TypesCreatedNameMismatch)} de {N(types)})";
+        var methodsShare = $"{Share(stats.MethodsCreatedNameMismatch, methods)} de los métodos sin contar sobrecargas ({N(stats.MethodsCreatedNameMismatch)} de {N(methods)})";
+        // Un resultado de schema 1 no trae campos: el texto queda como antes.
+        var mismatch = fields > 0
+            ? $"{typesShare}, {methodsShare} y {Share(stats.FieldsCreatedNameMismatch, fields)} de los campos ({N(stats.FieldsCreatedNameMismatch)} de {N(fields)})"
+            : $"{typesShare} y {methodsShare}";
         var scope = unindexedDeclarations > 0 ? " en los ficheros que cbm sí indexó" : "";
         if (stats.SuspectsCbmDrift)
             parts.Add($"No casan con un nodo de cbm{scope} {mismatch}, por encima del {threshold}, y se han creado como nodos nuevos. "

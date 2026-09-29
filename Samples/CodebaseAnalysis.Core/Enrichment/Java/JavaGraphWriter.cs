@@ -68,10 +68,66 @@ public sealed record JavaGraphStats
     /// <summary>Métodos creados sin contar sobrecargas (incluidos en <see cref="MethodsCreated"/>) en ficheros que cbm no indexó.</summary>
     public int MethodsCreatedInUnindexedFiles { get; init; }
 
+    /// <summary>
+    /// Campos casados con el nodo de cbm de su tipo (Q5): el <c>Field</c> y, en las constantes de enum, el <c>Variable</c>
+    /// (<see cref="FieldsMatchedToVariable"/>).
+    /// </summary>
+    public int FieldsMatched { get; init; }
+
+    /// <summary>
+    /// De <see cref="FieldsMatched"/>, los anclados en un <c>Variable</c> de cbm en <c>&lt;QN del tipo&gt;.&lt;campo&gt;</c>:
+    /// cbm no crea <c>Field</c> para las constantes de enum, sino un <c>Variable</c> con ese QN.
+    /// </summary>
+    public int FieldsMatchedToVariable { get; init; }
+
+    /// <summary>Campos sin <c>Field</c> de cbm creados como nodo propio en <c>&lt;QN del tipo&gt;.&lt;campo&gt;</c>.</summary>
+    public int FieldsCreated { get; init; }
+
+    /// <summary>Campos que ni casan ni se crean; el motivo va en <see cref="FieldsUnmatchedByReason"/>.</summary>
+    public int FieldsUnmatched { get; init; }
+
+    /// <summary>
+    /// <see cref="FieldsUnmatched"/> por motivo: <see cref="JavaGraphWriter.ReasonOwnerWithoutNode"/> (el tipo propietario
+    /// no tiene nodo) y <see cref="JavaGraphWriter.ReasonQualifiedNameTaken"/> (el QN lo ocupa otro nodo, P9).
+    /// </summary>
+    public IReadOnlyDictionary<string, long> FieldsUnmatchedByReason { get; init; } = new Dictionary<string, long>();
+
+    /// <summary>Campos creados (incluidos en <see cref="FieldsCreated"/>) en ficheros que cbm no indexó.</summary>
+    public int FieldsCreatedInUnindexedFiles { get; init; }
+
+    /// <summary>
+    /// Campos creados (incluidos en <see cref="FieldsCreated"/>) de interfaces, enums y anotaciones en ficheros que cbm sí
+    /// indexó: cbm solo guarda como <c>Field</c> los campos de las clases, así que estos se crean siempre y, como las
+    /// sobrecargas en los métodos, no cuentan para la deriva.
+    /// </summary>
+    public int FieldsCreatedWithoutCbmCounterpart { get; init; }
+
+    /// <summary><c>Field</c> de cbm de los ficheros analizados con los que no casó ningún campo del analizador.</summary>
+    public int CbmFieldsUnmatched { get; init; }
+
     public int CallEdges { get; init; }
     public int InheritsEdges { get; init; }
     public int ImplementsEdges { get; init; }
     public int DefinesMethodEdges { get; init; }
+
+    /// <summary><c>DEFINES</c> de un tipo a los campos creados.</summary>
+    public int DefinesFieldEdges { get; init; }
+
+    public int UsesTypeEdges { get; init; }
+    public int ReadsEdges { get; init; }
+    public int WritesEdges { get; init; }
+
+    /// <summary>Aristas de cbm sustituidas por tipo (<c>CALLS</c>, <c>USAGE</c>…), las que salen de los ficheros analizados.</summary>
+    public IReadOnlyDictionary<string, long> CbmEdgesReplacedByType { get; init; } = new Dictionary<string, long>();
+
+    /// <summary>Referencias del proyecto (sumando el <c>count</c> de los registros <c>ref</c>) que no llegan a arista.</summary>
+    public long ProjectRefsUnmatched { get; init; }
+
+    /// <summary>
+    /// <see cref="ProjectRefsUnmatched"/> por motivo: <see cref="JavaGraphWriter.ReasonTargetWithoutNode"/> (p. ej. destinos
+    /// en clases anónimas o locales, con nombre binario) y <see cref="JavaGraphWriter.ReasonSourceWithoutNode"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, long> ProjectRefsUnmatchedByReason { get; init; } = new Dictionary<string, long>();
 
     /// <summary>Llamadas por origen tal como las cuenta el analizador.</summary>
     public IReadOnlyDictionary<string, long> CallsByOrigin { get; init; } = new Dictionary<string, long>();
@@ -95,8 +151,8 @@ public sealed record JavaGraphStats
 
     /// <summary>
     /// Milisegundos por fase de la escritura, en orden de ejecución (<c>read</c>, <c>schema</c>, <c>remove_previous</c>,
-    /// <c>remove_tests</c>, <c>load_nodes</c>, <c>replace_cbm_edges</c>, <c>types</c>, <c>methods</c>, <c>patches</c>,
-    /// <c>hierarchy</c>, <c>calls</c>, <c>run_row</c> y <c>commit</c>). Las de <c>details.write_timings_ms</c> son las mismas
+    /// <c>remove_tests</c>, <c>load_nodes</c>, <c>replace_cbm_edges</c>, <c>types</c>, <c>methods</c>, <c>fields</c>,
+    /// <c>patches</c>, <c>hierarchy</c>, <c>calls</c>, <c>refs</c>, <c>run_row</c> y <c>commit</c>). Las de <c>details.write_timings_ms</c> son las mismas
     /// salvo las dos últimas, que ocurren después de escribir la fila.
     /// </summary>
     public IReadOnlyList<KeyValuePair<string, long>> WriteTimingsMs { get; init; } = [];
@@ -128,20 +184,37 @@ public sealed record JavaGraphStats
     public double MethodsNameMismatchRatio => Ratio(MethodsCreatedNameMismatch, MethodsMatched + MethodsCreatedNameMismatch);
 
     /// <summary>
-    /// Más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos o de métodos sin casar en total, sea cual sea la causa:
-    /// es lo que decide si la pasada avisa.
+    /// Lo mismo para los campos, sin los que cbm no guarda como <c>Field</c> (<see cref="FieldsCreatedWithoutCbmCounterpart"/>).
+    /// </summary>
+    public double FieldsUnmatchedRatio => Ratio(FieldsCreated - FieldsCreatedWithoutCbmCounterpart,
+        FieldsMatched + FieldsCreated - FieldsCreatedWithoutCbmCounterpart);
+
+    /// <summary>
+    /// Campos de clase creados en ficheros que cbm sí indexó: su nombre no casa con el <c>name</c> de ningún <c>Field</c>.
+    /// </summary>
+    public int FieldsCreatedNameMismatch => FieldsCreated - FieldsCreatedInUnindexedFiles - FieldsCreatedWithoutCbmCounterpart;
+
+    /// <summary><see cref="FieldsUnmatchedRatio"/> solo en los ficheros que cbm indexó.</summary>
+    public double FieldsNameMismatchRatio => Ratio(FieldsCreatedNameMismatch, FieldsMatched + FieldsCreatedNameMismatch);
+
+    /// <summary>
+    /// Más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos, de métodos o de campos sin casar en total, sea cual
+    /// sea la causa: es lo que decide si la pasada avisa.
     /// </summary>
     public bool ExceedsUnmatchedThreshold =>
-        TypesUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold || MethodsUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold;
+        TypesUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold || MethodsUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold
+        || FieldsUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold;
 
     /// <summary>
     /// Más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos o de métodos sin casar en los ficheros que cbm indexó:
     /// lo normal es que casen casi todos (D3 replica las rarezas de cbm), así que suele ser que una versión nueva de cbm deriva
     /// los QN de otra forma y la pasada está duplicando sus nodos en lugar de enriquecerlos. Los ficheros que cbm no indexó no
-    /// cuentan: sus declaraciones se crean siempre (<see cref="UnindexedFiles"/>).
+    /// cuentan: sus declaraciones se crean siempre (<see cref="UnindexedFiles"/>). Los campos cuentan igual, con el formato de
+    /// <c>name</c> de los <c>Field</c> de cbm en lugar del QN.
     /// </summary>
     public bool SuspectsCbmDrift =>
-        TypesNameMismatchRatio > JavaGraphWriter.CbmDriftThreshold || MethodsNameMismatchRatio > JavaGraphWriter.CbmDriftThreshold;
+        TypesNameMismatchRatio > JavaGraphWriter.CbmDriftThreshold || MethodsNameMismatchRatio > JavaGraphWriter.CbmDriftThreshold
+        || FieldsNameMismatchRatio > JavaGraphWriter.CbmDriftThreshold;
 
     private static double Ratio(int part, int total) => total > 0 ? (double)part / total : 0;
 }
@@ -151,16 +224,29 @@ public sealed record JavaGraphWriteResult(EnrichmentOutcome Outcome, JavaSummary
 
 /// <summary>
 /// Aplica el resultado del analizador Java sobre la copia del grafo en una transacción (P7-P13): borra la salida anterior,
-/// retira el código de test, casa tipos y métodos con los nodos de cbm por QN, crea las sobrecargas y las declaraciones que
+/// retira el código de test, casa tipos, métodos y campos con los nodos de cbm, crea las sobrecargas y las declaraciones que
 /// cbm no tiene, completa propiedades, sustituye <c>CALLS</c>/<c>INHERITS</c>/<c>IMPLEMENTS</c> de los ficheros analizados
-/// y deja la fila <c>ok</c> de <c>enrichment_runs</c>. No sabe nada del proceso Java: recibe los registros ya leídos.
+/// (y, con schema 2, <c>USAGE</c> por <c>USES_TYPE</c>/<c>READS</c>/<c>WRITES</c>, Q5-Q7) y deja la fila <c>ok</c> de
+/// <c>enrichment_runs</c>. No sabe nada del proceso Java: recibe los registros ya leídos.
 /// </summary>
 public static class JavaGraphWriter
 {
     public const string EnricherName = "JavaAnalyzer";
 
-    /// <summary>Versión de las reglas de escritura; cambiarla invalida las pasadas <c>ok</c> anteriores (P3).</summary>
-    public const string EnricherVersion = "1";
+    /// <summary>
+    /// Versión de las reglas de escritura; cambiarla invalida las pasadas <c>ok</c> anteriores (P3). La 2 añade campos y
+    /// referencias (Q8).
+    /// </summary>
+    public const string EnricherVersion = "2";
+
+    /// <summary>Uso de un tipo del proyecto desde un método, un campo o un tipo (Q6).</summary>
+    public const string UsesTypeEdge = "USES_TYPE";
+
+    /// <summary>Lectura de un campo del proyecto.</summary>
+    public const string ReadsEdge = "READS";
+
+    /// <summary>Escritura de un campo del proyecto.</summary>
+    public const string WritesEdge = "WRITES";
 
     /// <summary>
     /// Proporción de tipos o de métodos sin casar con cbm (creados por P9) por encima de la cual la pasada avisa de una
@@ -186,7 +272,20 @@ public static class JavaGraphWriter
     /// <inheritdoc cref="ReasonImplicitConstructor"/>
     public const string ReasonSourceWithoutNode = "source_without_node";
 
+    /// <summary>Motivos de un campo que ni casa con un <c>Field</c> de cbm ni se crea.</summary>
+    public const string ReasonOwnerWithoutNode = "owner_without_node";
+
+    /// <inheritdoc cref="ReasonOwnerWithoutNode"/>
+    public const string ReasonQualifiedNameTaken = "qn_taken";
+
+    /// <summary>Aristas de cbm que se sustituyen desde los nodos de los ficheros analizados (P10).</summary>
     private static readonly string[] ReplacedEdgeTypes = ["CALLS", "INHERITS", "IMPLEMENTS"];
+
+    /// <summary>
+    /// Las que se sustituyen además con un resultado de schema 2, que trae los registros <c>ref</c> (Q7). Con uno de schema 1
+    /// no hay con qué sustituir las <c>USAGE</c> de cbm y se conservan.
+    /// </summary>
+    private static readonly string[] ReplacedReferenceEdgeTypes = ["USAGE", UsesTypeEdge, ReadsEdge, WritesEdge];
 
     /// <exception cref="InvalidOperationException">Si la BD es la de cbm.</exception>
     /// <exception cref="InvalidDataException">Si el resultado no termina en un <c>summary</c> de la versión soportada.</exception>
@@ -269,11 +368,38 @@ public static class JavaGraphWriter
         }
     }
 
+    /// <summary>De dónde sale una referencia: un método (<c>from</c>), un campo (<c>fromField</c>) o el tipo (<c>fromType</c>).</summary>
+    private enum RefSource
+    {
+        Method,
+        Field,
+        Type
+    }
+
+    /// <summary>Clave de agregación de los <c>ref</c>: la del analizador sin el fichero.</summary>
+    private readonly record struct RefKey(RefSource SourceKind, string Source, string Target, string Kind, string? Access);
+
+    private sealed class RefAggregate
+    {
+        public SortedSet<int> Lines { get; } = [];
+        public SortedSet<string> Contexts { get; } = new(StringComparer.Ordinal);
+        public int Count { get; set; }
+
+        public void Add(IEnumerable<int> lines, IEnumerable<string> contexts, int count)
+        {
+            Lines.UnionWith(lines);
+            Contexts.UnionWith(contexts);
+            Count += count;
+        }
+    }
+
     private sealed record CollectedInput(
         List<JavaFileRecord> Files,
         List<JavaTypeRecord> Types,
         List<JavaMethodRecord> Methods,
+        List<JavaFieldRecord> Fields,
         Dictionary<(string Source, string Target), CallAggregate> ProjectCalls,
+        Dictionary<RefKey, RefAggregate> ProjectRefs,
         Dictionary<string, long> CallsByOrigin,
         Dictionary<string, long> UnresolvedByReason,
         int DiagnosticCount,
@@ -285,7 +411,9 @@ public static class JavaGraphWriter
         var files = new List<JavaFileRecord>();
         var types = new List<JavaTypeRecord>();
         var methods = new List<JavaMethodRecord>();
+        var fields = new List<JavaFieldRecord>();
         var calls = new Dictionary<(string, string), CallAggregate>();
+        var refs = new Dictionary<RefKey, RefAggregate>();
         var byOrigin = new Dictionary<string, long>(StringComparer.Ordinal);
         var byReason = new Dictionary<string, long>(StringComparer.Ordinal);
         var diagnostics = 0;
@@ -326,6 +454,22 @@ public static class JavaGraphWriter
                         aggregate.Add(call.Line, call.Kind ?? "call");
                     }
                     break;
+                case JavaFieldRecord field:
+                    fields.Add(field);
+                    break;
+                case JavaRefRecord reference:
+                    // El analizador solo detalla los destinos del proyecto; el resto va contado en summary.refs.
+                    if (reference.Origin != JavaOrigins.Project || string.IsNullOrEmpty(reference.To))
+                        break;
+                    var key = reference.From != null
+                        ? new RefKey(RefSource.Method, reference.From, reference.To, reference.Kind, reference.Access)
+                        : reference.FromField != null
+                            ? new RefKey(RefSource.Field, reference.FromField, reference.To, reference.Kind, reference.Access)
+                            : new RefKey(RefSource.Type, reference.FromType, reference.To, reference.Kind, reference.Access);
+                    if (!refs.TryGetValue(key, out var references))
+                        refs[key] = references = new RefAggregate();
+                    references.Add(reference.Lines ?? [], reference.Contexts ?? [], reference.Count);
+                    break;
                 case JavaDiagnosticRecord diagnostic:
                     diagnostics++;
                     // path y line pueden venir a null (diagnóstico sin fuente); un fichero ilegible da diag sin file.
@@ -340,11 +484,12 @@ public static class JavaGraphWriter
 
         if (summary == null)
             throw new InvalidDataException("El resultado del analizador Java no termina con el registro 'summary': está incompleto.");
-        if (summary.Schema != JavaAnalysisReader.SupportedSchema)
+        if (!JavaAnalysisReader.IsSupportedSchema(summary.Schema))
             throw new InvalidDataException(
-                $"El resultado del analizador Java es de la versión de contrato {summary.Schema}; se esperaba {JavaAnalysisReader.SupportedSchema}.");
+                $"El resultado del analizador Java es de la versión de contrato {summary.Schema}; se esperaba entre "
+                + $"{JavaAnalysisReader.MinSupportedSchema} y {JavaAnalysisReader.SupportedSchema}.");
 
-        return new CollectedInput(files, types, methods, calls, byOrigin, byReason, diagnostics, diagnosticPaths, summary);
+        return new CollectedInput(files, types, methods, fields, calls, refs, byOrigin, byReason, diagnostics, diagnosticPaths, summary);
     }
 
     private static void Increment(Dictionary<string, long> counts, string key, long by = 1) =>
@@ -352,7 +497,8 @@ public static class JavaGraphWriter
 
     // ---------------------------------------------------------------- escritura
 
-    private sealed record GraphNode(long Id, string Label, string QualifiedName, string FilePath, int StartLine, int EndLine, string? Properties);
+    private sealed record GraphNode(long Id, string Label, string Name, string QualifiedName, string FilePath, int StartLine, int EndLine,
+        string? Properties);
 
     private sealed record MappedType(long Id, string QualifiedName, string Kind, string PathPrefix);
 
@@ -366,6 +512,9 @@ public static class JavaGraphWriter
         private readonly Dictionary<long, (int Start, int End)> _pendingLines = [];
         private readonly HashSet<long> _typeNodeIds = [];
         private readonly Dictionary<string, long> _unmatchedCalls = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> _fieldsByKey = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> _unmatchedFields = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> _unmatchedRefs = new(StringComparer.Ordinal);
         private SqliteCommand? _insertEdge;
         private SqliteParameter? _edgeSource, _edgeTarget, _edgeType, _edgeProperties;
         private string? _plainEdgeProperties;
@@ -375,7 +524,11 @@ public static class JavaGraphWriter
         private int _nodesCreated, _nodesUpdated, _edgesCreated;
         private int _typesMatched, _typesCreated, _typesUnmatched;
         private int _methodsMatched, _methodsCreated, _overloadsCreated, _methodsUnmatched;
+        private int _fieldsMatched, _fieldsMatchedVariable, _fieldsCreated, _fieldsUnmatched, _fieldsCreatedUnindexed, _fieldsWithoutCounterpart;
+        private int _cbmFieldsUnmatched;
         private int _callEdges, _inheritsEdges, _implementsEdges, _definesEdges, _projectCallsUnmatched;
+        private int _definesFieldEdges, _usesTypeEdges, _readsEdges, _writesEdges;
+        private long _projectRefsUnmatched;
         private int _typesCreatedUnindexed, _methodsCreatedUnindexed;
 
         // Ficheros con algún nodo de cbm antes de escribir nada: una declaración creada fuera de ellos no es deriva de los QN.
@@ -401,20 +554,26 @@ public static class JavaGraphWriter
             _filesWithCbmNodes = filesWithNodes;
             timings.Lap("load_nodes");
 
-            // P10: las aristas heurísticas de cbm que salen de los ficheros analizados se sustituyen por las resueltas.
-            var cbmEdgesReplaced = await DeleteCbmEdgesAsync(ct);
+            // P10 y Q7: las aristas heurísticas de cbm que salen de los ficheros analizados se sustituyen por las resueltas.
+            string[] replacedTypes = input.Summary.Schema >= 2 ? [.. ReplacedEdgeTypes, .. ReplacedReferenceEdgeTypes] : ReplacedEdgeTypes;
+            var cbmEdgesReplacedByType = await DeleteCbmEdgesAsync(replacedTypes, ct);
+            var cbmEdgesReplaced = (int)cbmEdgesReplacedByType.Values.Sum();
             timings.Lap("replace_cbm_edges");
 
             await ApplyTypesAsync(input.Types, ct);
             timings.Lap("types");
             await ApplyMethodsAsync(input.Methods, ct);
             timings.Lap("methods");
+            await ApplyFieldsAsync(input.Fields, ct);
+            timings.Lap("fields");
             await FlushPatchesAsync(ct);
             timings.Lap("patches");
             await WriteHierarchyAsync(input.Types, ct);
             timings.Lap("hierarchy");
             await WriteCallsAsync(input.ProjectCalls, ct);
             timings.Lap("calls");
+            await WriteRefsAsync(input.ProjectRefs, ct);
+            timings.Lap("refs");
 
             var analyzed = input.Files.Select(f => f.Path).Distinct(StringComparer.Ordinal).ToList();
             var filesWithErrors = input.Files.Count(f => f.Errors > 0);
@@ -442,10 +601,25 @@ public static class JavaGraphWriter
                 UnindexedLongPathFiles = unindexedLongPath,
                 TypesCreatedInUnindexedFiles = _typesCreatedUnindexed,
                 MethodsCreatedInUnindexedFiles = _methodsCreatedUnindexed,
+                FieldsMatched = _fieldsMatched,
+                FieldsCreated = _fieldsCreated,
+                FieldsUnmatched = _fieldsUnmatched,
+                FieldsUnmatchedByReason = new SortedDictionary<string, long>(_unmatchedFields, StringComparer.Ordinal),
+                FieldsCreatedInUnindexedFiles = _fieldsCreatedUnindexed,
+                FieldsMatchedToVariable = _fieldsMatchedVariable,
+                FieldsCreatedWithoutCbmCounterpart = _fieldsWithoutCounterpart,
+                CbmFieldsUnmatched = _cbmFieldsUnmatched,
                 CallEdges = _callEdges,
                 InheritsEdges = _inheritsEdges,
                 ImplementsEdges = _implementsEdges,
                 DefinesMethodEdges = _definesEdges,
+                DefinesFieldEdges = _definesFieldEdges,
+                UsesTypeEdges = _usesTypeEdges,
+                ReadsEdges = _readsEdges,
+                WritesEdges = _writesEdges,
+                CbmEdgesReplacedByType = cbmEdgesReplacedByType,
+                ProjectRefsUnmatched = _projectRefsUnmatched,
+                ProjectRefsUnmatchedByReason = new SortedDictionary<string, long>(_unmatchedRefs, StringComparer.Ordinal),
                 CallsByOrigin = new SortedDictionary<string, long>(input.CallsByOrigin, StringComparer.Ordinal),
                 ProjectCallsUnmatched = _projectCallsUnmatched,
                 ProjectCallsUnmatchedByReason = new SortedDictionary<string, long>(_unmatchedCalls, StringComparer.Ordinal),
@@ -475,10 +649,19 @@ public static class JavaGraphWriter
                 {
                     ["matched"] = _methodsMatched, ["created"] = _methodsCreated, ["overloads"] = _overloadsCreated, ["unmatched"] = _methodsUnmatched
                 },
+                ["fields"] = new JsonObject
+                {
+                    ["matched"] = _fieldsMatched, ["matched_variable"] = _fieldsMatchedVariable, ["created"] = _fieldsCreated,
+                    ["created_without_cbm_counterpart"] = _fieldsWithoutCounterpart, ["unmatched"] = _fieldsUnmatched,
+                    ["unmatched_by_reason"] = ToObject(stats.FieldsUnmatchedByReason), ["cbm_fields_unmatched"] = _cbmFieldsUnmatched
+                },
+                ["refs"] = RefsDetails(summary.Refs, stats),
                 ["edges"] = new JsonObject
                 {
-                    ["CALLS"] = _callEdges, ["INHERITS"] = _inheritsEdges, ["IMPLEMENTS"] = _implementsEdges, ["DEFINES_METHOD"] = _definesEdges
+                    ["CALLS"] = _callEdges, ["INHERITS"] = _inheritsEdges, ["IMPLEMENTS"] = _implementsEdges, ["DEFINES_METHOD"] = _definesEdges,
+                    ["DEFINES"] = _definesFieldEdges, [UsesTypeEdge] = _usesTypeEdges, [ReadsEdge] = _readsEdges, [WritesEdge] = _writesEdges
                 },
+                ["cbm_edges_replaced"] = ToObject(cbmEdgesReplacedByType),
                 // H-9: la deriva de los QN de cbm se ve aquí y en el aviso del paso, no solo en los recuentos. Lo que no casa
                 // se separa por causa: ficheros que cbm no indexó (sin ningún nodo suyo) y nombres que no casan en los que sí.
                 ["cbm_match"] = new JsonObject
@@ -493,6 +676,10 @@ public static class JavaGraphWriter
                     ["methods_created_name_mismatch"] = stats.MethodsCreatedNameMismatch,
                     ["types_name_mismatch_ratio"] = Math.Round(stats.TypesNameMismatchRatio, 4),
                     ["methods_name_mismatch_ratio"] = Math.Round(stats.MethodsNameMismatchRatio, 4),
+                    ["fields_unmatched_ratio"] = Math.Round(stats.FieldsUnmatchedRatio, 4),
+                    ["fields_created_unindexed_file"] = stats.FieldsCreatedInUnindexedFiles,
+                    ["fields_created_name_mismatch"] = stats.FieldsCreatedNameMismatch,
+                    ["fields_name_mismatch_ratio"] = Math.Round(stats.FieldsNameMismatchRatio, 4),
                     ["threshold"] = CbmDriftThreshold,
                     ["drift_suspected"] = stats.SuspectsCbmDrift
                 },
@@ -537,7 +724,7 @@ public static class JavaGraphWriter
             }
 
             using var select = Command("""
-                SELECT n.id, n.label, n.qualified_name, n.file_path, COALESCE(n.start_line, 0), COALESCE(n.end_line, 0), n.properties
+                SELECT n.id, n.label, n.name, n.qualified_name, n.file_path, COALESCE(n.start_line, 0), COALESCE(n.end_line, 0), n.properties
                 FROM nodes n JOIN temp.enrichment_files f ON n.file_path = f.path
                 WHERE n.project = @project
                 """);
@@ -545,21 +732,30 @@ public static class JavaGraphWriter
             using var reader = await select.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                var node = new GraphNode(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                    reader.GetInt32(4), reader.GetInt32(5), reader.IsDBNull(6) ? null : reader.GetString(6));
+                var node = new GraphNode(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
+                    reader.GetInt32(5), reader.GetInt32(6), reader.IsDBNull(7) ? null : reader.GetString(7));
                 _byQn[node.QualifiedName] = node;
             }
         }
 
-        private async Task<int> DeleteCbmEdgesAsync(CancellationToken ct)
+        /// <summary>Borra las aristas de esos tipos que salen de los ficheros analizados y devuelve cuántas por tipo.</summary>
+        private async Task<SortedDictionary<string, long>> DeleteCbmEdgesAsync(IReadOnlyList<string> types, CancellationToken ct)
         {
             using var delete = Command($"""
                 DELETE FROM edges
-                WHERE type IN ({string.Join(", ", ReplacedEdgeTypes.Select(t => $"'{t}'"))})
+                WHERE type IN ({string.Join(", ", types.Select(t => $"'{t}'"))})
                   AND source_id IN (SELECT n.id FROM nodes n JOIN temp.enrichment_files f ON n.file_path = f.path WHERE n.project = @project)
+                RETURNING type
                 """);
             delete.Parameters.AddWithValue("@project", project);
-            return await delete.ExecuteNonQueryAsync(ct);
+            var byType = new SortedDictionary<string, long>(StringComparer.Ordinal);
+            using var reader = await delete.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var type = reader.GetString(0);
+                byType[type] = byType.GetValueOrDefault(type) + 1;
+            }
+            return byType;
         }
 
         // ------------------------------------------------------------ tipos (P7, P9, P11)
@@ -771,6 +967,110 @@ public static class JavaGraphWriter
             return properties;
         }
 
+        // ------------------------------------------------------------ campos (Q5)
+
+        private async Task ApplyFieldsAsync(List<JavaFieldRecord> fields, CancellationToken ct)
+        {
+            if (fields.Count == 0)
+                return;
+
+            // cbm guarda cada campo de clase como Field en <QN del tipo>.<name>, con el inicializador dentro del name
+            // ("nombreConexion = null", "PROPUESTA[]={…}", "envioAmiga\t\t= true"): se indexan por tipo y nombre del campo. Los
+            // de interfaces y enums no tienen Field.
+            var cbmFields = new Dictionary<(string Owner, string Name), GraphNode>();
+            foreach (var node in _byQn.Values)
+            {
+                if (node.Label != "Field" || node.Name.Length == 0 || !node.QualifiedName.EndsWith("." + node.Name, StringComparison.Ordinal))
+                    continue;
+                var owner = node.QualifiedName[..^(node.Name.Length + 1)];
+                cbmFields.TryAdd((owner, CbmFieldName(node.Name)), node);
+            }
+
+            var matched = new HashSet<long>();
+            foreach (var field in fields.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Line).ThenBy(f => f.Name, StringComparer.Ordinal))
+            {
+                if (string.IsNullOrEmpty(field.Name) || !_typesByFqn.TryGetValue(field.OwnerFqn, out var owner))
+                {
+                    UnmatchedField(ReasonOwnerWithoutNode);
+                    continue;
+                }
+
+                if (cbmFields.TryGetValue((owner.QualifiedName, field.Name), out var node) && matched.Add(node.Id))
+                {
+                    Patch(node, FieldProperties(field, owner, created: false));
+                    _fieldsMatched++;
+                    _fieldsByKey[field.Key] = node.Id;
+                    continue;
+                }
+
+                // cbm no crea Field para las constantes de enum: deja un Variable en <QN del tipo>.<constante>, que hace de
+                // Field (como el Function de P7 hace de Method). No es el Variable gemelo, que va en <prefijo>.<nombre>.
+                var qn = $"{owner.QualifiedName}.{field.Name}";
+                if (_byQn.TryGetValue(qn, out var variable) && variable.Label == "Variable" && matched.Add(variable.Id))
+                {
+                    Patch(variable, FieldProperties(field, owner, created: false));
+                    _fieldsMatched++;
+                    _fieldsMatchedVariable++;
+                    _fieldsByKey[field.Key] = variable.Id;
+                    continue;
+                }
+
+                // P9: sin nodo de cbm, se crea en <QN del tipo>.<campo> si ese QN está libre.
+                if (_byQn.ContainsKey(qn))
+                {
+                    UnmatchedField(ReasonQualifiedNameTaken);
+                    continue;
+                }
+                var id = await CreateNodeAsync("Field", field.Name, qn, field.Path, field.Line, field.End,
+                    FieldProperties(field, owner, created: true), ct);
+                if (await InsertEdgeAsync(owner.Id, id, "DEFINES", null, ct))
+                    _definesFieldEdges++;
+                _fieldsCreated++;
+                if (!IndexedByCbm(field.Path))
+                    _fieldsCreatedUnindexed++;
+                else if (owner.Kind != "class")
+                    _fieldsWithoutCounterpart++;
+                _fieldsByKey[field.Key] = id;
+            }
+            _cbmFieldsUnmatched = cbmFields.Count - (matched.Count - _fieldsMatchedVariable);
+        }
+
+        /// <summary>
+        /// Nombre del campo en el <c>name</c> de un <c>Field</c> de cbm: hasta el primer blanco, <c>=</c> o <c>[</c>
+        /// (<c>PROPUESTA[]={"1003"}</c> → <c>PROPUESTA</c>).
+        /// </summary>
+        private static string CbmFieldName(string name)
+        {
+            for (var i = 0; i < name.Length; i++)
+            {
+                if (char.IsWhiteSpace(name[i]) || name[i] is '=' or '[')
+                    return name[..i];
+            }
+            return name;
+        }
+
+        private void UnmatchedField(string reason)
+        {
+            _fieldsUnmatched++;
+            _unmatchedFields[reason] = _unmatchedFields.GetValueOrDefault(reason) + 1;
+        }
+
+        private static JsonObject FieldProperties(JavaFieldRecord field, MappedType owner, bool created)
+        {
+            var properties = new JsonObject
+            {
+                ["field_name"] = field.Name,
+                ["type_fqn"] = field.TypeFqn,
+                ["accessibility"] = field.Access,
+                ["is_static"] = field.Static,
+                ["is_final"] = field.Final,
+                ["docstring"] = field.Doc
+            };
+            if (created)
+                properties["parent_class"] = owner.QualifiedName;
+            return properties;
+        }
+
         // ------------------------------------------------------------ aristas (P10)
 
         private async Task WriteHierarchyAsync(List<JavaTypeRecord> types, CancellationToken ct)
@@ -853,6 +1153,105 @@ public static class JavaGraphWriter
         {
             _projectCallsUnmatched += count;
             _unmatchedCalls[reason] = _unmatchedCalls.GetValueOrDefault(reason) + count;
+        }
+
+        /// <summary>
+        /// Q6: <c>USES_TYPE</c> a los tipos y <c>READS</c>/<c>WRITES</c> a los campos, una arista por (origen, destino, tipo)
+        /// con las líneas, el número de referencias y, en <c>USES_TYPE</c>, los contextos unidos. Un acceso <c>readwrite</c>
+        /// (<c>op=</c>, <c>++</c>, <c>--</c>) da las dos.
+        /// </summary>
+        private async Task WriteRefsAsync(Dictionary<RefKey, RefAggregate> refs, CancellationToken ct)
+        {
+            var edges = new Dictionary<(long Source, long Target, string Type), RefAggregate>();
+            foreach (var (key, aggregate) in refs)
+            {
+                long? source = key.SourceKind switch
+                {
+                    RefSource.Method => _methodsByKey.TryGetValue(key.Source, out var method) ? method : null,
+                    RefSource.Field => _fieldsByKey.TryGetValue(key.Source, out var field) ? field : null,
+                    _ => _typesByFqn.TryGetValue(key.Source, out var type) ? type.Id : null
+                };
+                if (source is not { } s)
+                {
+                    UnmatchedRef(ReasonSourceWithoutNode, aggregate.Count);
+                    continue;
+                }
+
+                var isField = key.Kind == JavaRefKinds.Field;
+                long? target = isField
+                    ? (_fieldsByKey.TryGetValue(key.Target, out var targetField) ? targetField : null)
+                    : (_typesByFqn.TryGetValue(key.Target, out var targetType) ? targetType.Id : null);
+                if (target is not { } t)
+                {
+                    // Destinos declarados en clases anónimas o locales (nombre binario, a.B$1Loc, a.B$1#campo) no tienen nodo.
+                    UnmatchedRef(ReasonTargetWithoutNode, aggregate.Count);
+                    continue;
+                }
+
+                foreach (var edgeType in EdgeTypesOf(isField, key.Access))
+                {
+                    if (!edges.TryGetValue((s, t, edgeType), out var merged))
+                        edges[(s, t, edgeType)] = merged = new RefAggregate();
+                    merged.Add(aggregate.Lines, aggregate.Contexts, aggregate.Count);
+                }
+            }
+
+            var contextsJson = new Dictionary<string, string>(StringComparer.Ordinal);
+            var json = new System.Text.StringBuilder();
+            foreach (var ((source, target, type), aggregate) in edges
+                         .OrderBy(e => e.Key.Source).ThenBy(e => e.Key.Target).ThenBy(e => e.Key.Type, StringComparer.Ordinal))
+            {
+                // Cientos de miles de aristas: el JSON se escribe a mano, con el mismo orden de claves que EdgeProperties.
+                json.Clear().Append(_refEdgePrefix ??= EnrichmentMarks.EdgeProperties(EnricherName).ToJsonString()[..^1]).Append(",\"lines\":[");
+                var first = true;
+                foreach (var line in aggregate.Lines)
+                {
+                    if (!first)
+                        json.Append(',');
+                    json.Append(line.ToString(CultureInfo.InvariantCulture));
+                    first = false;
+                }
+                json.Append("],\"count\":").Append(aggregate.Count.ToString(CultureInfo.InvariantCulture));
+                if (type == UsesTypeEdge)
+                {
+                    var contexts = string.Join(',', aggregate.Contexts);
+                    if (!contextsJson.TryGetValue(contexts, out var encoded))
+                        contextsJson[contexts] = encoded = ToArray(aggregate.Contexts).ToJsonString();
+                    json.Append(",\"contexts\":").Append(encoded);
+                }
+                json.Append('}');
+
+                if (!await InsertEdgeJsonAsync(source, target, type, json.ToString(), ct))
+                    continue;
+                switch (type)
+                {
+                    case UsesTypeEdge:
+                        _usesTypeEdges++;
+                        break;
+                    case ReadsEdge:
+                        _readsEdges++;
+                        break;
+                    default:
+                        _writesEdges++;
+                        break;
+                }
+            }
+        }
+
+        private string? _refEdgePrefix;
+
+        private static readonly string[] UsesType = [UsesTypeEdge], Reads = [ReadsEdge], Writes = [WritesEdge], ReadsAndWrites = [ReadsEdge, WritesEdge];
+
+        private static string[] EdgeTypesOf(bool isField, string? access) =>
+            !isField ? UsesType
+            : access == JavaRefKinds.Write ? Writes
+            : access == JavaRefKinds.ReadWrite ? ReadsAndWrites
+            : Reads;
+
+        private void UnmatchedRef(string reason, int count)
+        {
+            _projectRefsUnmatched += count;
+            _unmatchedRefs[reason] = _unmatchedRefs.GetValueOrDefault(reason) + count;
         }
 
         /// <summary>
@@ -943,12 +1342,16 @@ public static class JavaGraphWriter
                 EnrichmentMarks.CreatedNodeProperties(EnricherName, enrichedAt, properties).ToJsonString());
             var id = Convert.ToInt64(await _insertNode.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
 
-            _byQn[qualifiedName] = new GraphNode(id, label, qualifiedName, filePath, start, end, null);
+            _byQn[qualifiedName] = new GraphNode(id, label, name, qualifiedName, filePath, start, end, null);
             _nodesCreated++;
             return id;
         }
 
-        private async Task<bool> InsertEdgeAsync(long source, long target, string type, JsonObject? properties, CancellationToken ct)
+        private Task<bool> InsertEdgeAsync(long source, long target, string type, JsonObject? properties, CancellationToken ct) =>
+            InsertEdgeJsonAsync(source, target, type, properties == null ? null : EnrichmentMarks.EdgeProperties(EnricherName, properties).ToJsonString(), ct);
+
+        /// <summary>Inserta una arista con sus <c>properties</c> ya serializadas (con la marca); null deja solo la marca.</summary>
+        private async Task<bool> InsertEdgeJsonAsync(long source, long target, string type, string? propertiesJson, CancellationToken ct)
         {
             // Medio millón de aristas en un repo grande: el comando y sus parámetros se preparan una vez y se reutilizan.
             if (_insertEdge == null)
@@ -968,9 +1371,7 @@ public static class JavaGraphWriter
             _edgeSource!.Value = source;
             _edgeTarget!.Value = target;
             _edgeType!.Value = type;
-            _edgeProperties!.Value = properties == null
-                ? _plainEdgeProperties
-                : EnrichmentMarks.EdgeProperties(EnricherName, properties).ToJsonString();
+            _edgeProperties!.Value = propertiesJson ?? _plainEdgeProperties;
             var inserted = await _insertEdge.ExecuteNonQueryAsync(ct) > 0;
             if (inserted)
                 _edgesCreated++;
@@ -1008,6 +1409,22 @@ public static class JavaGraphWriter
             return $"{project}.{normalized.Replace('/', '.')}";
         }
     }
+
+    /// <summary>
+    /// <c>details.refs</c>: los totales del analizador (<c>summary.refs</c>) y las referencias del proyecto que no llegaron a
+    /// arista, por motivo. Null con un resultado de schema 1.
+    /// </summary>
+    private static JsonObject? RefsDetails(JavaRefsSummary? refs, JavaGraphStats stats) => refs == null ? null : new JsonObject
+    {
+        ["type"] = ToObject(refs.Type ?? new Dictionary<string, long>()),
+        ["field"] = ToObject(refs.Field ?? new Dictionary<string, long>()),
+        ["contexts"] = ToObject(refs.Contexts ?? new Dictionary<string, long>()),
+        ["records"] = refs.Records,
+        ["self_excluded"] = refs.SelfExcluded,
+        ["unresolved_by_reason"] = ToObject(refs.UnresolvedByReason ?? new Dictionary<string, long>()),
+        ["unmatched"] = stats.ProjectRefsUnmatched,
+        ["unmatched_by_reason"] = ToObject(stats.ProjectRefsUnmatchedByReason)
+    };
 
     private static JsonArray ToArray(IEnumerable<string> values) =>
         new(values.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());

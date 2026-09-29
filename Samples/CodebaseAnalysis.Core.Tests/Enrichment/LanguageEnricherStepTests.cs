@@ -335,6 +335,25 @@ public class LanguageEnricherStepTests(ITestOutputHelper output)
         }.OrderBy(q => q, StringComparer.Ordinal), await CallTargetsAsync(graph, JavaGraphFixture.Ejecutar));
         Assert.Equal(0, await graph.CountAsync($"SELECT COUNT(1) FROM edges WHERE type = 'CALLS' AND NOT {EnrichmentMarks.EnrichedByPredicate("'JavaAnalyzer'")}"));
 
+        // Schema 2: el campo casa con el Field de cbm, su lectura da READS y los usos de tipo USES_TYPE (Q5-Q7); no queda
+        // ninguna USAGE de cbm en los ficheros analizados.
+        var id = await PropertiesAsync(graph, JavaGraphFixture.BeanId);
+        Assert.Equal(("id", "long", "private"), (id["field_name"]!.GetValue<string>(), id["type_fqn"]!.GetValue<string>(), id["accessibility"]!.GetValue<string>()));
+        Assert.Equal($"[{JavaTestRepo.LineOf(JavaTestRepo.BeanPath, "return id;")}]", JsonNode.Parse((await graph.TextAsync("""
+            SELECT e.properties FROM edges e JOIN nodes s ON s.id = e.source_id JOIN nodes t ON t.id = e.target_id
+            WHERE e.type = 'READS' AND s.qualified_name = @s AND t.qualified_name = @t
+            """, ("@s", JavaGraphFixture.GetId), ("@t", JavaGraphFixture.BeanId)))!)!["lines"]!.ToJsonString());
+        async Task<string> UsesTypeContextsAsync(string target) => JsonNode.Parse((await graph.TextAsync("""
+            SELECT e.properties FROM edges e JOIN nodes s ON s.id = e.source_id JOIN nodes t ON t.id = e.target_id
+            WHERE e.type = 'USES_TYPE' AND s.qualified_name = @s AND t.qualified_name = @t
+            """, ("@s", JavaGraphFixture.Ejecutar), ("@t", target)))!)!["contexts"]!.ToJsonString();
+        Assert.Contains("\"local\"", await UsesTypeContextsAsync(JavaGraphFixture.Qn(JavaTestRepo.DaoPath, "Dao")));
+        Assert.Contains("\"new_implicit\"", await UsesTypeContextsAsync(JavaGraphFixture.Qn(JavaTestRepo.DaoImplPath, "DaoImpl")));
+        Assert.Equal(0, await graph.CountAsync("SELECT COUNT(1) FROM edges WHERE type = 'USAGE'"));
+        Assert.Contains(messages, e => e.Level == AnalysisLogLevel.Success && e.Message.Contains(" USES_TYPE, ", StringComparison.Ordinal)
+            && e.Message.Contains("de las referencias a tipos y campos resueltas", StringComparison.Ordinal)
+            && e.Message.Contains("1 de 1 campo casado con cbm (100,00 %)", StringComparison.Ordinal));
+
         // Sobrecarga creada con su overload_of.
         var overload = await PropertiesAsync(graph, JavaGraphFixture.DaoImplConsultar + "(Hashtable,long)");
         Assert.Equal(JavaGraphFixture.DaoImplConsultar, overload["overload_of"]!.GetValue<string>());
