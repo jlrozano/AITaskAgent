@@ -83,7 +83,8 @@ creciera más allá de un fichero, se pasaría a compilarlo con el mismo JDK en 
 huella del fuente. Recibe por argumentos o por un
 fichero de petición las raíces de fuentes, el classpath y la configuración, y ejecuta `JavacTask.parse()` y
 `analyze()` sin generar clases (`-proc:none`, sin salida de bytecode). Recorre los árboles con `TreePathScanner` y
-emite, por cada fichero, las declaraciones con su posición y su QN estilo cbm, la jerarquía, las llamadas y creaciones
+emite, por cada fichero, las declaraciones con su posición y su cadena de nombres anidados (`chain`), de la que .NET
+compone el QN estilo cbm con la ruta del fichero (`JavaGraphWriter`), la jerarquía, las llamadas y creaciones
 resueltas con su destino clasificado como proyecto, JDK o jar, y los diagnósticos. Las llamadas cuyo destino es el JDK
 o un jar no generan aristas, solo cuentan en el resumen de la pasada.
 
@@ -211,3 +212,5 @@ Sobre el repo objetivo, con el JDK portable y los jars *provided*:
   D15 se cuentan solo las sobrecargas de `src/`, 5488 frente a las 5521 que incluían `test/` (una más queda sin nodo
   porque su QN lo ocupa un `Field` de cbm); (3) criterio 7: una pasada que se salta porque la indexación ya está
   enriquecida no escribe fila, solo las que se ejecutan o fallan.
+- 2026-09-29: errata. El analizador no emite el QN: emite `chain` y la ruta, y el QN estilo cbm lo compone .NET
+  (`JavaGraphWriter.PathPrefix` más `chain`). Corregido el párrafo del analizador; D3 no cambia.

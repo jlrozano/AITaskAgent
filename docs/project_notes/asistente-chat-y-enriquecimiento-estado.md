@@ -150,6 +150,40 @@ criterios cumplidos). El grafo Java sabe dónde se declara lo que usa cada méto
 - `ZeroFaninClasses` da 817 tipos, y 400 son DAO `*Oracle*Impl` que la factoría instancia por `Class.forName`: falsos
   positivos. `UnreadFields` da 154 campos y los 5 revisados son verdaderos.
 
+**Decidido el 2026-09-29: lo de Java queda aparcado hasta que vuelva Azure** (el recurso responde 404
+`DeploymentNotFound` desde antes de las 13:08; a las 01:07 funcionaba). Aparcado:
+- la prueba completa con informes y el chat real;
+- la medición limpia del criterio 5;
+- (b) detectores tipo PMD y (d) capa 1 en el analizador;
+- las incidencias menores del analizador.
+
+Mientras tanto se sigue con el código que no depende del LLM, por tandas:
+- **A. Robustez — hecha el 2026-09-29** (detalle y tests en la sección «Seguimiento» de la auditoría; Core 509 con JDK,
+  Web 112, FileTools 68, OpenAILLmService 80). Claves nuevas: `CodebaseAnalysis:LogsPath`, `CodebaseAnalysis:Backups:Keep`
+  y `JavaAnalyzer:KeepIntermediate`. La versión de cbm entra en la huella, pero no cambia cuándo se repite un
+  enriquecimiento, porque `indexed_at` ya cambia en cada indexación: solo deja constancia de con qué cbm se hizo:
+  - la versión de cbm en la huella;
+  - `ForceReindex` seguro, con rotación de copias y borrado del JSONL;
+  - `ResolveRole` sin caída silenciosa;
+  - sin estado en campos de `CustomStatelessTemplateLlmStep`;
+  - sin prefijo de clave en los logs y `logs/` configurable;
+  - aviso de Latin-1 en FileTools;
+  - `[JdkFact]` que encuentre el JDK instalado.
+- **B. Coste y trazabilidad:**
+  - facetas en JSON compacto;
+  - precios y coste por ejecución;
+  - procedencia en `analysis-meta`;
+  - volcado de los límites de tiempo efectivos.
+- **C. Auditores:** `grep_search` y las capas 2-3 de (d), y `view_code_item` para Java.
+- **D. Streaming:** buffers perdidos sin `finish_reason` y `hasYieldedText` por choice.
+- **E. Evaluación:** validador determinista de informes.
+
+Siguen fuera, pendientes de decisión del usuario:
+- (a) fusionar informes;
+- R3/R6/R7/R8 (validadas; la auditoría pide revisarlas);
+- los valores por defecto de tiempos del framework;
+- las columnas duplicadas del esquema.
+
 ## Pendiente (en orden)
 
 1. **Validadas por el usuario el 2026-09-29** las decisiones R1-R8 y C1-C7 de la regeneración y el Change Log de la spec

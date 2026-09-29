@@ -609,3 +609,58 @@ lenguaje, los frameworks y el lote de ficheros (`:99-101`), igual que P3. `Force
 enriquecido, así que Roslyn se vuelve a intentar en cada ejecución. Test: `CodebaseAnalysis.Core.Tests/EnrichedGraphMarkTests.cs:235`,
 con `CannedLlmService`: la segunda ejecución no llama al modelo y la salida anterior sigue en el grafo, y una reindexación, otros
 ficheros o `ForceReindex` vuelven a llamarlo.
+
+**H-9, H-11 y los tests con JDK (tanda A, robustez, mismo día).** Suites al terminar: Core 509 con JDK y sin
+`CODEBASE_ANALYSIS_TEST_JDK` (486 antes; ningún `[JdkFact]` omitido), Web 112 (111), FileTools 68 (65) y OpenAILLmService 80
+(79). El framework no se ha tocado. Ninguna llamada real a un LLM. Quedan fuera las dos incidencias de H-11 que no eran de
+esta tanda: el esquema duplicado de cbm y las fases por nombre de paso en tres sitios.
+
+**H-9, hecha la versión de cbm en la huella.** La BD de cbm no guarda la versión que la produjo (ni tabla ni `user_version`,
+comprobado en la de este repositorio), y `codebase-memory-mcp --version` sí la da (`codebase-memory-mcp 0.6.1`).
+`CodebaseMemoryLocator.GetVersionAsync` la lee con un plazo de 30 s y null si no responde (`CORE/Support/CodebaseMemoryLocator.cs:77`),
+`DetectAndIndexGraphStep` la pide antes de indexar y la apunta tras copiar la BD en la tabla propia `cbm_index_versions`, por
+`(project, indexed_at)` (`CORE/Enrichment/EnrichmentRuns.cs:151`), y la huella pasa a `projects.name|indexed_at|cbm=<versión>`
+(`:123`). Una indexación que no hizo el pipeline, con otro `indexed_at`, queda sin versión en lugar de heredar la anterior, y
+sin versión legible se avisa y la huella queda como antes. Alcance real: como `ForceReindex` sustituye la BD entera y cbm
+cambia `indexed_at` al indexar, la versión no cambia cuándo se repite un enriquecimiento en ningún caso que se haya
+identificado `[I]`; lo que añade es que cada fila de `enrichment_runs` diga con qué cbm se indexó el grafo que enriqueció. La
+deriva de QN la sigue detectando el aviso de `JavaGraphStats`. Tests: `Enrichment/EnrichmentFoundationTests.cs:353` (la huella
+lleva la versión, otra versión deja de casar con la pasada `ok` y otro `indexed_at` la pierde) y `:387` (lectura de la línea
+de versión).
+
+**H-11, corregido lo de esta tanda.**
+- *ForceReindex*: la BD y los informes se copian a `backups/<fecha>/` y siguen en su sitio mientras se indexa; si el indexador
+  falla o se cancela, la BD se restaura desde la copia y el paso falla con su error; solo si termina bien salen los informes
+  anteriores (`CORE/Steps/DetectAndIndexGraphStep.cs:63-79`, `:187`, `:303`, `:326`). Antes de copiar la BD nueva se borran
+  el `-wal`, el `-shm` y el `-journal` de la anterior, que ahora siguen allí (`:449`). Las carpetas `access_export` se siguen
+  moviendo, porque cbm las indexaría como código y la ingesta de Office las regenera, y vuelven si la indexación falla. Las copias
+  rotan con `CodebaseAnalysis:Backups:Keep` (5; 0 sin límite; `:262`, `CORE/Hosting/AnalysisRunOptions.cs:157`). Tests:
+  `ForceReindexBackupTests.cs:81` (un indexador falso que estropea la BD y sale con error deja la BD y el informe anteriores),
+  `:120` (copia sin mover), `:141` (rotación) y `:172` (la clave), y `ReportWriteTests.cs:217` adaptado.
+- *JSONL*: `java-analysis.jsonl` se borra tras aplicarlo bien, salvo con `JavaAnalyzer:KeepIntermediate` (`false`;
+  `CORE/Steps/LanguageEnricherStep.cs:193,214`). Tests: `Enrichment/LanguageEnricherStepTests.cs:385` y `:394`, los dos `[JdkFact]`.
+- *Rol silencioso*: `ResolveRole` falla nombrando el rol que falta y los recibidos (`CORE/AnalysisPipelineFactory.cs:171`). No
+  rompe configuraciones válidas porque la CLI y la web construyen los roles con `LlmRoleFactory.BuildRoles`, que crea los
+  `RequiredRoles` que falten. Tests: `LlmRoleFactoryTests.cs:254` y `:269`.
+- *Estado en campos*: la conversación y el modo de respuesta final de `CustomStatelessTemplateLlmStep` viven por
+  `PipelineContext` en una `ConditionalWeakTable` (`CORE/Steps/CustomStatelessTemplateLlmStep.cs:37,46`); `PipelineContext.StepState`,
+  el que usa `BaseLlmStep`, es interno del framework. Test: `CustomStatelessTemplateLlmStepTests.cs:111`, el mismo paso en dos
+  ejecuciones intercaladas con la segunda arrancando mientras la primera está en su intento final; con el código anterior falla.
+  `StatelessTemplateLlmStep` del framework sigue guardando `_currentConversation` en un campo para la suspensión, fuera de esta tanda.
+- *Secretos en logs*: ni la CLI ni el proveedor registran ya el prefijo de la clave, solo su longitud (`CORE/Hosting/LlmRoleFactory.cs:63`,
+  `OpenAILLmService/OpenAILlmService.cs:114`). Tests: `LlmRoleFactoryTests.cs:98` y `OpenAILLmService.Tests/ApiKeyLoggingTests.cs:60`.
+  El endpoint de Azure sigue en el JSON del sample.
+- *Salida en el repositorio*: `CodebaseAnalysis:LogsPath` (`logs`, relativa al repositorio o absoluta; `CORE/Hosting/AnalysisRunOptions.cs:101`)
+  lo usan la CLI (`CLI/Program.cs:38`) y la web (`WEB/Workspace/WorkspaceState.cs:166`), y con `Debug` o `Trace` las dos avisan
+  al arrancar de que el log guardará el cuerpo de las peticiones (`AnalysisRunOptions.cs:112`, `CLI/Program.cs:63`,
+  `WEB/Program.cs:93`). `reports/` y `.codebase/` ya eran configurables. Tests: `AnalysisRunOptionsTests.cs:62` y `:83`, y
+  `CodebaseAnalysisWeb.Tests/WorkspaceAndHostTests.cs:64` (el log de la ejecución cae en la carpeta configurada y no en el repositorio).
+
+**Límite de H-8, corregido.** Al reescribir un fichero, `replace_file_content` y `multi_replace_file_content` comprueban antes
+que su codificación admite todo el contenido; si no, devuelven un error que nombra los caracteres (`'€' (U+20AC)`) y no escriben
+nada (`FileTools/Tools/FileToolsHelper.cs:33`, `ReplaceFileContentTool.cs:157`, `MultiReplaceFileContentTool.cs:213`).
+`write_to_file` y la etiqueta `write_file` escriben siempre UTF-8 y no tienen el problema. Tests: `FileTools.Tests/SourceEncodingToolTests.cs:125,152,173`.
+
+**Tests con JDK (§4), corregido.** `[JdkFact]` busca además `JavaAnalyzer:JdkPath` en los user secrets de la app y el primer
+JDK 17 o superior de `%LOCALAPPDATA%\Programs\jdk-*` (`CodebaseAnalysis.Core.Tests/Enrichment/JdkFactAttribute.cs:70,83`); en
+esta máquina ya no se omite ninguno sin la variable de entorno.
