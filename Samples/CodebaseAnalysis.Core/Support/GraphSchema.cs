@@ -122,5 +122,18 @@ public static class GraphSchema
         {
             // Silently ignore if source columns are absent
         }
+
+        // cbm deja en algunos nodos un `properties` que no es JSON: lo corta en 2047 bytes o no escapa los saltos de
+        // línea de `base_classes` (35 nodos de 288 527 en un repositorio Java de 8 420 ficheros). Basta uno para que
+        // json_extract aborte la consulta entera, y la mayoría de lecturas del grafo no pasan por json_valid: la
+        // extracción de facetas fallaba y las consultas protegidas por QueryToJsonAsync llegaban como «Faceta no
+        // disponible». Se conserva el texto original bajo cbm_raw_properties, igual que EnrichmentMarks.ParseProperties.
+        using var repairCmd = conn.CreateCommand();
+        repairCmd.CommandText = $@"
+            UPDATE nodes SET properties = '{{}}' WHERE properties IS NOT NULL AND trim(properties) = '';
+            UPDATE nodes SET properties = json_object('{Enrichment.EnrichmentMarks.RawPropertiesKey}', properties)
+                WHERE properties IS NOT NULL AND json_valid(properties) = 0;
+        ";
+        await repairCmd.ExecuteNonQueryAsync(ct);
     }
 }

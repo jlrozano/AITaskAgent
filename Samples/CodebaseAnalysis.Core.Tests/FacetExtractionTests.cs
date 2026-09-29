@@ -270,6 +270,37 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(("1", "0"), (Text(implements, "resolved"), Text(implements, "heuristic_cbm")));
     }
 
+    /// <summary>
+    /// cbm corta algunas propiedades en 2047 bytes y no escapa los saltos de línea de <c>base_classes</c>. Con un solo nodo
+    /// así, json_extract abortaba la extracción de facetas (análisis completo de delta/Online, 2026-09-29). El esquema lo
+    /// repara al asegurarse, conservando el texto original.
+    /// </summary>
+    [Fact]
+    public async Task Cbm_properties_that_are_not_json_are_kept_raw_and_do_not_break_the_facets()
+    {
+        using var g = await CbmTestGraph.CreateAsync(Path.Combine(_temp.Path, "codebase.db"), "demo");
+        const string truncated = "{\"complexity\":0,\"param_types\":[\"Hashtable\",\"OrdenacionPaginaci\"";
+        const string rawNewline = "{\"base_classes\":[\"implements\r\n\t\tDAOPeriodo\"]}";
+        await g.NodeAsync("Function", "buscar", "demo.Dao.buscar", "src/Dao.java", 1, 5, truncated);
+        await g.NodeAsync("Class", "DaoImpl", "demo.DaoImpl", "src/DaoImpl.java", 1, 50, rawNewline);
+        await g.NodeAsync("Method", "m0", "demo.C.m0", "src/C.java", 1, 5, "{\"cyclomatic\":9}");
+        await g.NodeAsync("Method", "vacio", "demo.C.vacio", "src/C.java", 6, 8, "");
+
+        await GraphSchema.EnsureAsync(g.DatabasePath, CancellationToken.None);
+
+        Assert.Equal(0, await g.CountAsync("SELECT COUNT(1) FROM nodes WHERE json_valid(properties) = 0"));
+        Assert.Equal(truncated, await g.TextAsync(
+            "SELECT json_extract(properties, '$.cbm_raw_properties') FROM nodes WHERE qualified_name = 'demo.Dao.buscar'"));
+        Assert.Equal(rawNewline, await g.TextAsync(
+            "SELECT json_extract(properties, '$.cbm_raw_properties') FROM nodes WHERE qualified_name = 'demo.DaoImpl'"));
+        Assert.Equal("{\"cyclomatic\":9}", await g.TextAsync("SELECT properties FROM nodes WHERE qualified_name = 'demo.C.m0'"));
+
+        var facets = await FacetsAsync(g.DatabasePath);
+
+        Rows(facets.MetricsSummary, "metrics_summary");
+        Assert.Equal(["demo.C.m0"], Rows(facets.HighCyclomaticMethods, "high_cyclomatic_methods").Select(r => Text(r, "qualified_name")));
+    }
+
     [Fact]
     public async Task Without_a_struts_pass_the_struts_facets_are_empty()
     {
