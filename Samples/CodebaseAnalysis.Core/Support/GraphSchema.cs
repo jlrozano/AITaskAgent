@@ -44,10 +44,15 @@ public static class GraphSchema
                 UNIQUE(source_id, target_id, type)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_nodes_label ON nodes(label);
+            CREATE INDEX IF NOT EXISTS idx_graph_nodes_label ON nodes(label);
             CREATE INDEX IF NOT EXISTS idx_nodes_qname ON nodes(qualified_name);
             CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
         ";
+        // El índice por label tiene nombre propio: cbm ya trae un idx_nodes_label sobre (project, label), así que el
+        // CREATE INDEX IF NOT EXISTS idx_nodes_label de antes no hacía nada en la copia de cbm, y las consultas por label sin
+        // project (casi todas las facetas, graph_search) recorrían la tabla entera. idx_edges_type choca igual con el
+        // (project, type) de cbm y se deja así a propósito: un índice más en edges encarece la escritura del analizador Java,
+        // que sustituye cientos de miles de aristas, y no está medido que lo compense en las facetas.
         await cmd.ExecuteNonQueryAsync(ct);
 
         // Defensive column migrations if database was initialized by codebase-memory-mcp or older schemas

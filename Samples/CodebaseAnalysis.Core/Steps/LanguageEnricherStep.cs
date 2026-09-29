@@ -185,7 +185,8 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
                 TestRoots = scan.TestRoots,
                 ConfigFingerprint = configFingerprint,
                 ToolVersion = jdk.Version,
-                StartedAt = startedAt
+                StartedAt = startedAt,
+                RepositoryPath = scan.Root
             }, JavaAnalysisReader.Read(run.ResultPath), ct);
 
             ReportJavaResult(context, result, stopwatch.Elapsed);
@@ -278,20 +279,45 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
     }
 
     /// <summary>
-    /// Aviso de deriva de los QN de cbm (H-9): con más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos o de métodos
-    /// creados como nodos nuevos por no casar con cbm, la pasada no falla, pero está duplicando nodos. Null si casan.
+    /// Aviso de declaraciones sin casar con cbm (H-9): con más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos o de
+    /// métodos creados como nodos nuevos, la pasada no falla, pero el grafo tiene nodos que cbm no conoce. Separa las dos
+    /// causas: ficheros que cbm no indexó (sin ningún nodo suyo), con la pista del MAX_PATH de Windows si alguno llega a
+    /// <see cref="JavaGraphWriter.WindowsMaxPath"/> caracteres, y nombres que no casan en los ficheros que sí indexó, que es lo
+    /// único que apunta a un cambio de versión de cbm. Null si casan.
     /// </summary>
     internal static string? CbmDriftWarning(JavaGraphStats stats)
     {
-        if (!stats.SuspectsCbmDrift)
+        if (!stats.ExceedsUnmatchedThreshold)
             return null;
-        var types = stats.TypesMatched + stats.TypesCreated;
-        var methodsCreated = stats.MethodsCreated - stats.OverloadsCreated;
-        var methods = stats.MethodsMatched + methodsCreated;
-        return $"⚠️ Analizador Java: no casan con un nodo de cbm {Share(stats.TypesCreated, types)} de los tipos ({N(stats.TypesCreated)} de {N(types)}) "
-            + $"y {Share(methodsCreated, methods)} de los métodos sin contar sobrecargas ({N(methodsCreated)} de {N(methods)}), por encima del "
-            + $"{(JavaGraphWriter.CbmDriftThreshold * 100).ToString("0", Spanish)} %, y se han creado como nodos nuevos. "
-            + "Los nombres de cbm no casan con los del analizador: ¿ha cambiado la versión de cbm?";
+
+        var threshold = $"{(JavaGraphWriter.CbmDriftThreshold * 100).ToString("0", Spanish)} %";
+        var parts = new List<string>();
+        var unindexedDeclarations = stats.TypesCreatedInUnindexedFiles + stats.MethodsCreatedInUnindexedFiles;
+        if (unindexedDeclarations > 0)
+        {
+            var files = stats.UnindexedFiles == 1 ? "1 fichero .java que el analizador sí leyó" : $"{N(stats.UnindexedFiles)} ficheros .java que el analizador sí leyó";
+            var unindexed = $"cbm no indexó {files} (no tiene ningún nodo suyo); sus declaraciones se han creado como nodos nuevos: "
+                + $"{P(stats.TypesCreatedInUnindexedFiles, "tipo", "tipos")} y {P(stats.MethodsCreatedInUnindexedFiles, "método", "métodos")} sin contar sobrecargas.";
+            if (stats.UnindexedLongPathFiles is int longPaths && longPaths > 0)
+                unindexed += $" {(longPaths == stats.UnindexedFiles ? (longPaths == 1 ? "Ese fichero tiene" : "Todos tienen") : (longPaths == 1 ? "1 de ellos tiene" : $"{N(longPaths)} de ellos tienen"))} "
+                    + $"una ruta absoluta de {JavaGraphWriter.WindowsMaxPath} caracteres o más, el límite MAX_PATH de Windows, que cbm no indexa: "
+                    + "copia el repositorio a una ruta más corta.";
+            parts.Add(unindexed);
+        }
+
+        var types = stats.TypesMatched + stats.TypesCreatedNameMismatch;
+        var methods = stats.MethodsMatched + stats.MethodsCreatedNameMismatch;
+        var mismatch = $"{Share(stats.TypesCreatedNameMismatch, types)} de los tipos ({N(stats.TypesCreatedNameMismatch)} de {N(types)}) "
+            + $"y {Share(stats.MethodsCreatedNameMismatch, methods)} de los métodos sin contar sobrecargas ({N(stats.MethodsCreatedNameMismatch)} de {N(methods)})";
+        var scope = unindexedDeclarations > 0 ? " en los ficheros que cbm sí indexó" : "";
+        if (stats.SuspectsCbmDrift)
+            parts.Add($"No casan con un nodo de cbm{scope} {mismatch}, por encima del {threshold}, y se han creado como nodos nuevos. "
+                + "Los nombres de cbm no casan con los del analizador: ¿ha cambiado la versión de cbm?");
+        else
+            parts.Add($"En los ficheros que cbm sí indexó los nombres casan: no casan {mismatch}, por debajo del {threshold}.");
+
+        var text = string.Join(" ", parts);
+        return $"⚠️ Analizador Java: {char.ToLower(text[0], Spanish)}{text[1..]}";
 
         static string Share(long part, long total) => total > 0 ? Percent(part, total) : Percent(0, 1);
     }

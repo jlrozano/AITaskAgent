@@ -12,9 +12,9 @@ namespace CodebaseAnalysis.Core.Tools;
 /// Vecinos de un nodo del grafo por sus aristas: llamantes y llamados (<c>CALLS</c>), jerarquía (<c>INHERITS</c>,
 /// <c>IMPLEMENTS</c>), métodos de un tipo (<c>DEFINES_METHOD</c>), rutas (<c>HANDLES</c>) y las aristas Struts/JSP. Es
 /// de solo lectura y no lee el código: lo que devuelve es del grafo del último análisis. Cada arista dice su procedencia:
-/// resuelta por un enriquecedor (<c>enriched_by</c>), estimada por el fallback del LLM, heurística de cbm (sin marca; las
-/// <c>CALLS</c> de cbm traen <c>strategy</c> y <c>confidence</c>) o de estructura de cbm (pertenencia), y la cabecera avisa
-/// si hay aristas sin resolver.
+/// resuelta por un enriquecedor (<c>enriched_by</c>), estimada por el fallback del LLM, de la ingesta de Office (sin marca,
+/// con su nodo de origen escrito por OfficeTools), heurística de cbm (sin marca; las <c>CALLS</c> de cbm traen
+/// <c>strategy</c> y <c>confidence</c>) o de estructura de cbm (pertenencia), y la cabecera avisa si hay aristas sin resolver.
 /// </summary>
 public sealed class GraphNeighborsTool : LlmTool
 {
@@ -50,6 +50,17 @@ public sealed class GraphNeighborsTool : LlmTool
         $"EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(properties) THEN properties ELSE '{{}}' END, '$.enriched_by') m{condition})";
 
     private static readonly string ResolvedPredicate = MarkPredicate($" WHERE m.value <> '{Steps.SemanticEnrichmentStep.EnricherName}'");
+
+    // Las aristas de la ingesta de Office no llevan marca: se reconocen por el origin de su nodo de origen, que OfficeTools
+    // escribe en sus nodos de código (DetectAndIndexGraphStep.OfficeOrigins).
+    private static readonly string OfficeOriginList =
+        string.Join(", ", Steps.DetectAndIndexGraphStep.OfficeOrigins.Select(o => $"'{o}'"));
+
+    private static string OriginExpr(string alias) =>
+        $"json_extract(CASE WHEN json_valid({alias}.properties) THEN {alias}.properties END, '$.origin')";
+
+    private static readonly string OfficeSourcePredicate =
+        $"EXISTS (SELECT 1 FROM nodes s WHERE s.id = edges.source_id AND {OriginExpr("s")} IN ({OfficeOriginList}))";
 
     // Nodos de estructura (carpetas y ficheros): solo se eligen si ningún otro candidato casa igual de bien.
     private const string StructuralLabels = "'File', 'Folder', 'Project'";
@@ -166,7 +177,8 @@ public sealed class GraphNeighborsTool : LlmTool
         var (countSql, countBind) = CountQuery(nodeId, direction, edgeTypes);
         var counts = (await _graphDb.SelectAsync(countSql, countBind, dbPath, cancellationToken))
             .ToDictionary(r => ($"{r["dir"]}", $"{r["type"]}"),
-                r => new EdgeCount(Convert.ToInt32(r["n"]), Convert.ToInt32(r["resolved"] ?? 0), Convert.ToInt32(r["llm"] ?? 0)));
+                r => new EdgeCount(Convert.ToInt32(r["n"]), Convert.ToInt32(r["resolved"] ?? 0), Convert.ToInt32(r["llm"] ?? 0),
+                    Convert.ToInt32(r["office"] ?? 0)));
 
         return Render(node, direction, edgeTypes, limit, rows, counts);
     }
@@ -219,7 +231,8 @@ public sealed class GraphNeighborsTool : LlmTool
             $"SELECT '{dir}' AS dir, e.type AS type, n.id AS id, n.label AS label, n.name AS name, n.qualified_name AS qn, " +
             $"{FileExpr} AS file_path, {LineExpr} AS line_start, " +
             "CASE WHEN json_valid(e.properties) THEN e.properties END AS props, " +
-            $"CASE WHEN e.type = 'CALLS' THEN {InterfaceExpr} END AS iface " +
+            $"CASE WHEN e.type = 'CALLS' THEN {InterfaceExpr} END AS iface, " +
+            $"(SELECT {OriginExpr("s")} FROM nodes s WHERE s.id = e.source_id) AS source_origin " +
             $"FROM edges e JOIN nodes n ON n.id = e.{other} WHERE e.{self} = @id AND e.type IN ({types})";
 
         var parts = new List<string>();
@@ -243,9 +256,11 @@ public sealed class GraphNeighborsTool : LlmTool
         long nodeId, string direction, List<string> edgeTypes)
     {
         var types = string.Join(", ", edgeTypes.Select((_, i) => $"@t{i}"));
-        // Por procedencia: resueltas por un enriquecedor, estimadas por el LLM (solo su marca) y, el resto, de cbm.
+        // Por procedencia: resueltas por un enriquecedor, estimadas por el LLM (solo su marca), de la ingesta de Office (sin
+        // marca, con el nodo de origen de OfficeTools) y, el resto, de cbm.
         var provenance = $"SUM(CASE WHEN {ResolvedPredicate} THEN 1 ELSE 0 END) AS resolved, " +
-                         $"SUM(CASE WHEN {MarkPredicate()} AND NOT {ResolvedPredicate} THEN 1 ELSE 0 END) AS llm";
+                         $"SUM(CASE WHEN {MarkPredicate()} AND NOT {ResolvedPredicate} THEN 1 ELSE 0 END) AS llm, " +
+                         $"SUM(CASE WHEN NOT {MarkPredicate()} AND {OfficeSourcePredicate} THEN 1 ELSE 0 END) AS office";
         var parts = new List<string>();
         if (direction is "out" or "both")
             parts.Add($"SELECT 'out' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE source_id = @id AND type IN ({types}) GROUP BY type");
@@ -323,7 +338,7 @@ public sealed class GraphNeighborsTool : LlmTool
                     interfaces.Add($"{iface}");
                     detail = string.IsNullOrEmpty(detail) ? "método de interfaz" : detail + " · método de interfaz";
                 }
-                var origin = Provenance.Of(type, r["props"]?.ToString());
+                var origin = Provenance.Of(type, r["props"]?.ToString(), r["source_origin"]?.ToString());
                 sb.AppendLine($"| `{r["label"]}` | **{Cell(r["name"])}** | `{Cell(r["qn"])}` | {Location(r)} | {Cell(origin.Text)} | {Cell(detail)} |");
             }
             foreach (var iface in interfaces)
@@ -338,15 +353,18 @@ public sealed class GraphNeighborsTool : LlmTool
         return sb.ToString();
     }
 
-    /// <summary>Aristas de un tipo y dirección: todas, las resueltas por un enriquecedor y las estimadas por el LLM.</summary>
-    private sealed record EdgeCount(int Total, int Resolved, int Llm);
+    /// <summary>
+    /// Aristas de un tipo y dirección: todas, las resueltas por un enriquecedor, las estimadas por el LLM y las de la ingesta
+    /// de Office.
+    /// </summary>
+    private sealed record EdgeCount(int Total, int Resolved, int Llm, int Office);
 
-    private enum ProvenanceKind { Resolved, Llm, CbmHeuristic, CbmStructural }
+    private enum ProvenanceKind { Resolved, Llm, Office, CbmHeuristic, CbmStructural }
 
     /// <summary>Procedencia de una arista, leída de sus propiedades, y el texto de su columna.</summary>
     private sealed record Provenance(ProvenanceKind Kind, string Text, IReadOnlyList<string> Enrichers)
     {
-        public static Provenance Of(string type, string? props)
+        public static Provenance Of(string type, string? props, string? sourceOrigin = null)
         {
             List<string> marks = [];
             string? strategy = null, confidence = null;
@@ -381,6 +399,9 @@ public sealed class GraphNeighborsTool : LlmTool
                 return new(ProvenanceKind.Resolved, $"resuelta · {string.Join(", ", resolvedBy)}{withConfidence}", resolvedBy);
             if (marks.Count > 0)
                 return new(ProvenanceKind.Llm, $"estimada por LLM · {marks[0]}", marks);
+            // OfficeTools decide el destino de una llamada VBA por el nombre del procedimiento: no es de cbm, y tampoco está resuelta.
+            if (sourceOrigin != null && Steps.DetectAndIndexGraphStep.OfficeOrigins.Contains(sourceOrigin))
+                return new(ProvenanceKind.Office, $"ingesta Office · `{sourceOrigin}`", []);
             if (StructuralEdgeTypes.Contains(type))
                 return new(ProvenanceKind.CbmStructural, "estructura cbm", []);
             return new(ProvenanceKind.CbmHeuristic, $"heurística cbm{(strategy != null ? $" · `{strategy}`" : "")}{withConfidence}", []);
@@ -401,10 +422,12 @@ public sealed class GraphNeighborsTool : LlmTool
 
         var resolved = counts.Values.Sum(c => c.Resolved);
         var llm = counts.Values.Sum(c => c.Llm);
-        var cbmStructural = counts.Where(c => StructuralEdgeTypes.Contains(c.Key.Type)).Sum(c => c.Value.Total - c.Value.Resolved - c.Value.Llm);
-        var cbmHeuristic = counts.Values.Sum(c => c.Total - c.Resolved - c.Llm) - cbmStructural;
+        var office = counts.Values.Sum(c => c.Office);
+        var cbmStructural = counts.Where(c => StructuralEdgeTypes.Contains(c.Key.Type))
+            .Sum(c => c.Value.Total - c.Value.Resolved - c.Value.Llm - c.Value.Office);
+        var cbmHeuristic = counts.Values.Sum(c => c.Total - c.Resolved - c.Llm - c.Office) - cbmStructural;
         var enrichers = rows
-            .SelectMany(r => Provenance.Of($"{r["type"]}", r["props"]?.ToString()) is { Kind: ProvenanceKind.Resolved } p ? p.Enrichers : Array.Empty<string>())
+            .SelectMany(r => Provenance.Of($"{r["type"]}", r["props"]?.ToString(), r["source_origin"]?.ToString()) is { Kind: ProvenanceKind.Resolved } p ? p.Enrichers : Array.Empty<string>())
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
 
         var parts = new List<string>();
@@ -414,15 +437,18 @@ public sealed class GraphNeighborsTool : LlmTool
             parts.Add($"{cbmHeuristic} {(cbmHeuristic == 1 ? "heurística" : "heurísticas")} de cbm");
         if (llm > 0)
             parts.Add($"{llm} {(llm == 1 ? "estimada" : "estimadas")} por el LLM");
+        if (office > 0)
+            parts.Add($"{office} de la ingesta de Office");
         if (cbmStructural > 0)
             parts.Add($"{cbmStructural} de estructura de cbm");
         sb.AppendLine($"- Procedencia: {string.Join(" · ", parts)}.");
 
-        var unresolved = cbmHeuristic + llm;
+        var unresolved = cbmHeuristic + llm + office;
         if (unresolved > 0)
             sb.AppendLine($"\n> Aviso: {(unresolved == 1 ? "1 arista no está resuelta" : $"{unresolved} aristas no están resueltas")} " +
-                          "(heurística de cbm, que decide el destino por nombre, o estimación del LLM). Son pistas: confírmalas en el código " +
-                          "antes de afirmarlas. Las resueltas por un enriquecedor son fiables.");
+                          "(heurística de cbm, que decide el destino por nombre, " +
+                          (office > 0 ? "ingesta de Office, que también lo decide por el nombre del procedimiento, " : "") +
+                          "o estimación del LLM). Son pistas: confírmalas en el código antes de afirmarlas. Las resueltas por un enriquecedor son fiables.");
     }
 
     /// <summary>Lo que aporta la arista: líneas y número de llamadas, el forward, el rol en la definición o la ruta.</summary>

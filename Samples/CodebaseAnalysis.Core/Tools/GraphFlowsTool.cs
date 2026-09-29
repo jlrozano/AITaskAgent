@@ -91,9 +91,9 @@ public sealed class GraphFlowsTool : LlmTool
     {
         var rows = await _graphDb.SelectAsync(
             "SELECT name, qualified_name AS qn, " +
-            "json_extract(properties,'$.flow_kind') AS kind, " +
-            "json_extract(properties,'$.step_count') AS steps, " +
-            "json_extract(properties,'$.path_count') AS paths " +
+            $"json_extract({CbmGraphDb.SafeProperties},'$.flow_kind') AS kind, " +
+            $"json_extract({CbmGraphDb.SafeProperties},'$.step_count') AS steps, " +
+            $"json_extract({CbmGraphDb.SafeProperties},'$.path_count') AS paths " +
             "FROM nodes WHERE label='Flow' ORDER BY kind, name", null, dbPath, ct);
 
         var sb = new StringBuilder($"# Flujos End-to-End Registrados ({rows.Count})\n\n");
@@ -130,11 +130,11 @@ public sealed class GraphFlowsTool : LlmTool
         var flowName = flowRows[0].GetValueOrDefault("name")?.ToString() ?? name;
 
         var steps = await _graphDb.SelectAsync(
-            "SELECT CAST(json_extract(e.properties,'$.order') AS INTEGER) AS ord, a.name AS from_name, " +
-            "b.name AS to_name, b.label AS to_label, json_extract(e.properties,'$.path_type') AS path_type, " +
-            "json_extract(e.properties,'$.condition') AS condition, json_extract(e.properties,'$.exception_types') AS exception_types " +
+            $"SELECT CAST(json_extract({CbmGraphDb.SafeEdgeProperties},'$.order') AS INTEGER) AS ord, a.name AS from_name, " +
+            $"b.name AS to_name, b.label AS to_label, json_extract({CbmGraphDb.SafeEdgeProperties},'$.path_type') AS path_type, " +
+            $"json_extract({CbmGraphDb.SafeEdgeProperties},'$.condition') AS condition, json_extract({CbmGraphDb.SafeEdgeProperties},'$.exception_types') AS exception_types " +
             "FROM edges e JOIN nodes a ON e.source_id=a.id JOIN nodes b ON e.target_id=b.id " +
-            "WHERE e.type='FLOW_NEXT' AND json_extract(e.properties,'$.flow_qn')=@flowqn ORDER BY ord",
+            $"WHERE e.type='FLOW_NEXT' AND json_extract({CbmGraphDb.SafeEdgeProperties},'$.flow_qn')=@flowqn ORDER BY ord",
             p => p.AddWithValue("@flowqn", flowQn), dbPath, ct);
 
         var sb = new StringBuilder($"# Flujo: {flowName}\n*(Entry: `{flowQn}`)*\n\n");
@@ -175,7 +175,7 @@ public sealed class GraphFlowsTool : LlmTool
     private async Task<string> FlowsTouchingAsync(string? dbPath, string touching, CancellationToken ct)
     {
         var rows = await _graphDb.SelectAsync(
-            "SELECT DISTINCT json_extract(e.properties,'$.flow_qn') AS flow_qn FROM edges e " +
+            $"SELECT DISTINCT json_extract({CbmGraphDb.SafeEdgeProperties},'$.flow_qn') AS flow_qn FROM edges e " +
             "JOIN nodes a ON e.source_id=a.id JOIN nodes b ON e.target_id=b.id " +
             "WHERE e.type='FLOW_NEXT' AND (a.qualified_name LIKE @like OR b.qualified_name LIKE @like) " +
             "ORDER BY flow_qn",

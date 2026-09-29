@@ -70,28 +70,28 @@ public sealed class GraphHealthTool : LlmTool
         {
             "dead_code" =>
                 "SELECT name, qualified_name AS qn, label, " +
-                "json_extract(properties,'$.dead_code_confidence') AS confidence, " +
-                "json_extract(properties,'$.dead_code_reason') AS reason " +
-                "FROM nodes WHERE json_extract(properties,'$.dead_code_candidate') IN (1,'true') " +
-                "ORDER BY CASE json_extract(properties,'$.dead_code_confidence') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, name LIMIT @lim",
+                $"json_extract({CbmGraphDb.SafeProperties},'$.dead_code_confidence') AS confidence, " +
+                $"json_extract({CbmGraphDb.SafeProperties},'$.dead_code_reason') AS reason " +
+                $"FROM nodes WHERE json_extract({CbmGraphDb.SafeProperties},'$.dead_code_candidate') IN (1,'true') " +
+                $"ORDER BY CASE json_extract({CbmGraphDb.SafeProperties},'$.dead_code_confidence') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, name LIMIT @lim",
 
             "complexity" =>
-                "SELECT name, qualified_name AS qn, CAST(json_extract(properties,'$.cyclomatic') AS INTEGER) AS cyclomatic " +
-                "FROM nodes WHERE json_extract(properties,'$.cyclomatic') IS NOT NULL " +
+                $"SELECT name, qualified_name AS qn, CAST(json_extract({CbmGraphDb.SafeProperties},'$.cyclomatic') AS INTEGER) AS cyclomatic " +
+                $"FROM nodes WHERE json_extract({CbmGraphDb.SafeProperties},'$.cyclomatic') IS NOT NULL " +
                 "ORDER BY cyclomatic DESC LIMIT @lim",
 
             "hotspots" =>
-                "SELECT name, qualified_name AS qn, CAST(json_extract(properties,'$.hotspot') AS REAL) AS hotspot, " +
-                "CAST(json_extract(properties,'$.cyclomatic') AS INTEGER) AS cyclomatic, " +
-                "CAST(json_extract(properties,'$.fan_in') AS INTEGER) AS fan_in " +
-                "FROM nodes WHERE json_extract(properties,'$.hotspot') IS NOT NULL " +
+                $"SELECT name, qualified_name AS qn, CAST(json_extract({CbmGraphDb.SafeProperties},'$.hotspot') AS REAL) AS hotspot, " +
+                $"CAST(json_extract({CbmGraphDb.SafeProperties},'$.cyclomatic') AS INTEGER) AS cyclomatic, " +
+                $"CAST(json_extract({CbmGraphDb.SafeProperties},'$.fan_in') AS INTEGER) AS fan_in " +
+                $"FROM nodes WHERE json_extract({CbmGraphDb.SafeProperties},'$.hotspot') IS NOT NULL " +
                 "ORDER BY hotspot DESC LIMIT @lim",
 
             "cycles" =>
                 "SELECT name, qualified_name AS qn, label, " +
-                "json_extract(properties,'$.cycle_group') AS cycle_group, " +
-                "CAST(json_extract(properties,'$.cycle_size') AS INTEGER) AS cycle_size " +
-                "FROM nodes WHERE json_extract(properties,'$.in_cycle') IN (1,'true') " +
+                $"json_extract({CbmGraphDb.SafeProperties},'$.cycle_group') AS cycle_group, " +
+                $"CAST(json_extract({CbmGraphDb.SafeProperties},'$.cycle_size') AS INTEGER) AS cycle_size " +
+                $"FROM nodes WHERE json_extract({CbmGraphDb.SafeProperties},'$.in_cycle') IN (1,'true') " +
                 "ORDER BY cycle_size DESC, label, name LIMIT @lim",
 
             "orphans" =>
@@ -100,9 +100,9 @@ public sealed class GraphHealthTool : LlmTool
                 "ORDER BY n.name LIMIT @lim",
 
             "doc_coverage" =>
-                "SELECT name, CAST(json_extract(properties,'$.doc_coverage') AS REAL) AS doc_coverage, " +
-                "json_extract(properties,'$.documented_defs') AS documented, json_extract(properties,'$.total_defs') AS total " +
-                "FROM nodes WHERE label='CsProject' AND json_extract(properties,'$.doc_coverage') IS NOT NULL " +
+                $"SELECT name, CAST(json_extract({CbmGraphDb.SafeProperties},'$.doc_coverage') AS REAL) AS doc_coverage, " +
+                $"json_extract({CbmGraphDb.SafeProperties},'$.documented_defs') AS documented, json_extract({CbmGraphDb.SafeProperties},'$.total_defs') AS total " +
+                $"FROM nodes WHERE label='CsProject' AND json_extract({CbmGraphDb.SafeProperties},'$.doc_coverage') IS NOT NULL " +
                 "ORDER BY doc_coverage ASC LIMIT @lim",
 
             _ => ""

@@ -7,6 +7,16 @@ public sealed class CbmGraphDb
 {
     private readonly string? _defaultDbPath;
 
+    /// <summary>
+    /// <c>nodes.properties</c> si es JSON válido y null si no: en los grafos de cbm hay nodos con JSON inválido, y un solo
+    /// <c>json_extract</c> o <c>json_each</c> sobre uno de ellos tumba la consulta entera y la tool devuelve vacío.
+    /// <see cref="Support.GraphSchema"/> repara la copia del análisis, pero una BD que no pase por ahí no debe vaciar resultados.
+    /// </summary>
+    public const string SafeProperties = "(CASE WHEN json_valid(properties) THEN properties END)";
+
+    /// <summary><see cref="SafeProperties"/> para las propiedades de la arista con alias <c>e</c>.</summary>
+    public const string SafeEdgeProperties = "(CASE WHEN json_valid(e.properties) THEN e.properties END)";
+
     public CbmGraphDb(string? defaultDbPath = null)
     {
         _defaultDbPath = defaultDbPath;

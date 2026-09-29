@@ -14,7 +14,7 @@ Genera el **Informe de Errores, Bugs y Vulnerabilidades con Criticidad y Solucio
 {{ unvalidated_routes }}
 ```
 
-- **Pantallas (JSP) con Código de Negocio, SQL o Sesión (`suspicious`, con sus motivos)**:
+- **Pantallas (JSP) con Acceso a Datos (SQL, `java.sql`, DAO) o Código de Negocio en Scriptlets (`suspicious`, con sus motivos; `session_access` es un dato aparte y no marca la pantalla)**:
 ```json
 {{ suspicious_jsps }}
 ```

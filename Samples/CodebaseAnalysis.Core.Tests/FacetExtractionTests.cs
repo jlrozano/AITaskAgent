@@ -81,6 +81,26 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
         Assert.Equal("ANY", Text(Row(Rows(facets.RoutesSummary, "routes_summary"), "__route__ANY__/sin-dato"), "verb"));
     }
 
+    /// <summary>
+    /// <c>obsolete_elements</c> ve el <c>@Deprecated</c> de Java, que el analizador escribe en <c>annotations</c> con el nombre
+    /// simple, además del <c>[Obsolete]</c> de C# en <c>attributes</c>. Una anotación que solo contiene el nombre no cuenta.
+    /// </summary>
+    [Fact]
+    public async Task Obsolete_elements_include_java_deprecated_annotations()
+    {
+        using var g = await CbmTestGraph.CreateAsync(Path.Combine(_temp.Path, "codebase.db"), "demo");
+        await g.NodeAsync("Method", "viejo", "demo.Svc.viejo", "src/Svc.java", 3, 5, "{\"annotations\":[\"Override\",\"Deprecated\"]}");
+        await g.NodeAsync("Class", "Antigua", "demo.Antigua", "src/Antigua.java", 1, 9, "{\"annotations\":[\"Deprecated\"]}");
+        await g.NodeAsync("Method", "actual", "demo.Svc.actual", "src/Svc.java", 7, 9, "{\"annotations\":[\"Override\",\"NotDeprecatedYet\"]}");
+        await g.NodeAsync("Method", "Legado", "demo.Api.Legado", "src/Api.cs", 1, 4, "{\"attributes\":[{\"name\":\"Obsolete\"}]}");
+        await g.NodeAsync("Method", "sinNada", "demo.Svc.sinNada", "src/Svc.java", 11, 12, "{\"annotations\":[]}");
+
+        var facets = await FacetsAsync(g.DatabasePath);
+
+        Assert.Equal(["demo.Antigua", "demo.Api.Legado", "demo.Svc.viejo"],
+            Rows(facets.ObsoleteElements, "obsolete_elements").Select(r => Text(r, "qualified_name")));
+    }
+
     [Fact]
     public async Task Limited_facets_are_ordered_by_their_metric_and_then_by_name_whatever_the_insertion_order()
     {
@@ -299,6 +319,67 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
 
         Rows(facets.MetricsSummary, "metrics_summary");
         Assert.Equal(["demo.C.m0"], Rows(facets.HighCyclomaticMethods, "high_cyclomatic_methods").Select(r => Text(r, "qualified_name")));
+    }
+
+    /// <summary>
+    /// cbm trae su propio <c>idx_nodes_label</c> sobre <c>(project, label)</c>, y con ese nombre el índice por label de
+    /// <see cref="GraphSchema"/> no se creaba en la copia: las consultas por label sin <c>project</c> recorrían la tabla entera.
+    /// Con nombre propio existe también ahí y las consultas por label lo usan.
+    /// </summary>
+    [Fact]
+    public async Task The_label_index_is_created_even_on_a_cbm_copy_and_label_queries_use_it()
+    {
+        var db = Path.Combine(_temp.Path, "cbm.db");
+        using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db}"))
+        {
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, label TEXT NOT NULL, name TEXT NOT NULL,
+                    qualified_name TEXT NOT NULL, file_path TEXT DEFAULT '', start_line INTEGER DEFAULT 0, end_line INTEGER DEFAULT 0,
+                    properties TEXT DEFAULT '{}', UNIQUE(project, qualified_name));
+                CREATE INDEX idx_nodes_label ON nodes(project, label);
+                """;
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        await GraphSchema.EnsureAsync(db, CancellationToken.None);
+
+        using var check = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db}");
+        await check.OpenAsync();
+        using var plan = check.CreateCommand();
+        plan.CommandText = "EXPLAIN QUERY PLAN SELECT name FROM nodes WHERE label = 'Route' ORDER BY qualified_name LIMIT 50";
+        var steps = new List<string>();
+        using (var reader = await plan.ExecuteReaderAsync())
+            while (await reader.ReadAsync())
+                steps.Add(reader.GetString(3));
+        Assert.Contains(steps, s => s.Contains("USING INDEX idx_graph_nodes_label", StringComparison.Ordinal));
+    }
+
+    /// <summary>El índice por label solo cambia el plan: las facetas salen idénticas con él y sin él.</summary>
+    [Fact]
+    public async Task The_facets_are_the_same_with_and_without_the_label_index()
+    {
+        var (graph, repo) = await StrutsGraphAsync();
+        using var g = graph;
+        await g.NodeAsync("DiRegistration", "IRepo", "demo.di.IRepo", "src/Startup.cs", 5, 5, "{\"di_lifetime\":\"Scoped\",\"fan_in\":0}");
+        await g.NodeAsync("Flow", "Alta", "demo.Flow.Alta", "src/Svc.java", 1, 1, "{\"step_count\":3,\"entry_method\":\"demo.Svc.alta\"}");
+        await g.NodeAsync("Route", "/api", "__route__GET__/api", "src/Api.cs", 3, 3, "{\"route_path\":\"/api\",\"http_verb\":\"GET\",\"auth_required\":false}");
+        await g.NodeAsync("Class", "Vieja", "demo.Vieja", "src/Vieja.java", 1, 9, "{\"annotations\":[\"Deprecated\"],\"fan_in\":0}");
+        Assert.Equal(1, await g.CountAsync("SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_graph_nodes_label'"));
+
+        static string Snapshot(ReportFacetInput facets) => JsonSerializer.Serialize(facets);
+        var withIndex = Snapshot(await FacetsAsync(g.DatabasePath, repo));
+        using (var drop = g.Connection.CreateCommand())
+        {
+            drop.CommandText = "DROP INDEX idx_graph_nodes_label";
+            await drop.ExecuteNonQueryAsync();
+        }
+        var withoutIndex = Snapshot(await FacetsAsync(g.DatabasePath, repo));
+
+        Assert.DoesNotContain("Faceta no disponible", withIndex);
+        Assert.Contains("demo.Vieja", withIndex);
+        Assert.Equal(withoutIndex, withIndex);
     }
 
     [Fact]

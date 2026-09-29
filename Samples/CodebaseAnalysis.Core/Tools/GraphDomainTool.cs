@@ -86,13 +86,13 @@ public sealed class GraphDomainTool : LlmTool
     private async Task<string> DomainRoutesAsync(string? dbPath, int limit, CancellationToken ct)
     {
         var rows = await _graphDb.SelectAsync(
-            "SELECT json_extract(e.properties,'$.http_method') AS verb, " +
-            "json_extract(e.properties,'$.route_path') AS path, m.qualified_name AS handler, " +
-            "json_extract(e.properties,'$.auth_required') AS auth_required, " +
-            "json_extract(e.properties,'$.auth_schemes') AS auth_schemes, " +
-            "json_extract(e.properties,'$.response_codes') AS response_codes, " +
-            "json_extract(e.properties,'$.request_type_fqn') AS request_type, " +
-            "json_extract(e.properties,'$.response_type_fqn') AS response_type " +
+            $"SELECT json_extract({CbmGraphDb.SafeEdgeProperties},'$.http_method') AS verb, " +
+            $"json_extract({CbmGraphDb.SafeEdgeProperties},'$.route_path') AS path, m.qualified_name AS handler, " +
+            $"json_extract({CbmGraphDb.SafeEdgeProperties},'$.auth_required') AS auth_required, " +
+            $"json_extract({CbmGraphDb.SafeEdgeProperties},'$.auth_schemes') AS auth_schemes, " +
+            $"json_extract({CbmGraphDb.SafeEdgeProperties},'$.response_codes') AS response_codes, " +
+            $"json_extract({CbmGraphDb.SafeEdgeProperties},'$.request_type_fqn') AS request_type, " +
+            $"json_extract({CbmGraphDb.SafeEdgeProperties},'$.response_type_fqn') AS response_type " +
             "FROM edges e JOIN nodes m ON e.source_id = m.id " +
             "WHERE e.type = 'HANDLES' ORDER BY path, verb LIMIT @lim",
             p => p.AddWithValue("@lim", limit), dbPath, ct);
@@ -112,7 +112,13 @@ public sealed class GraphDomainTool : LlmTool
             var verb = r.GetValueOrDefault("verb") ?? "GET";
             var path = r.GetValueOrDefault("path") ?? "/";
             var handler = r.GetValueOrDefault("handler") ?? "";
-            var auth = r.GetValueOrDefault("auth_required")?.ToString() is "true" or "1" ? "🔒 Sí" : "🔓 No";
+            // Sin auth_required (p. ej. las acciones Struts, cuyo plugin no lo escribe) la autenticación es desconocida, no «No».
+            var auth = r.GetValueOrDefault("auth_required")?.ToString()?.ToLowerInvariant() switch
+            {
+                "true" or "1" => "🔒 Sí",
+                "false" or "0" => "🔓 No",
+                _ => "❔ Desconocida"
+            };
             var schemes = r.GetValueOrDefault("auth_schemes") ?? "-";
             var req = r.GetValueOrDefault("request_type") ?? "-";
             var resp = r.GetValueOrDefault("response_type") ?? "-";
@@ -127,8 +133,8 @@ public sealed class GraphDomainTool : LlmTool
     {
         var rows = await _graphDb.SelectAsync(
             "SELECT name, qualified_name AS qn, " +
-            "json_extract(properties,'$.di_lifetime') AS lifetime, " +
-            "json_extract(properties,'$.is_external') AS is_external " +
+            $"json_extract({CbmGraphDb.SafeProperties},'$.di_lifetime') AS lifetime, " +
+            $"json_extract({CbmGraphDb.SafeProperties},'$.is_external') AS is_external " +
             "FROM nodes WHERE label = 'DiRegistration' ORDER BY name LIMIT @lim",
             p => p.AddWithValue("@lim", limit), dbPath, ct);
 

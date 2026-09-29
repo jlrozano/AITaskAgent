@@ -24,7 +24,7 @@ Genera el **Informe de Matriz de Deuda Técnica y Priorización de Refactorizaci
 {{ complex_classes }}
 ```
 
-- **Pantallas (JSP) con Código de Negocio, SQL o Sesión (`suspicious`, con sus motivos)**:
+- **Pantallas (JSP) con Acceso a Datos (SQL, `java.sql`, DAO) o Código de Negocio en Scriptlets (`suspicious`, con sus motivos; `session_access` es un dato aparte y no marca la pantalla)**:
 ```json
 {{ suspicious_jsps }}
 ```
@@ -49,7 +49,9 @@ Genera el **Informe de Matriz de Deuda Técnica y Priorización de Refactorizaci
 
 3. **Matriz de Priorización y Plan de Saneamiento por Sprints**:
    - Formula la hoja de ruta estimando el esfuerzo en **Días-Hombre (d/h)** realistas para cada hito.
-   - Incluye los 2 diagramas Mermaid requeridos (Matriz Cuadrante de Hotspots y Hoja de Ruta por Sprints).
+   - Incluye los 2 diagramas Mermaid requeridos, con los tipos que admiten las directrices de Mermaid:
+     - **Matriz Esfuerzo / Impacto de Hotspots** como `flowchart LR` con cuatro `subgraph`, uno por cuadrante (impacto alto y esfuerzo bajo, impacto alto y esfuerzo alto, impacto bajo y esfuerzo bajo, impacto bajo y esfuerzo alto), que contienen los identificadores de los hallazgos. No uses `quadrantChart`.
+     - **Hoja de Ruta por Sprints** como `flowchart LR`, un `subgraph` por sprint con sus hitos en orden.
 
 ---
 

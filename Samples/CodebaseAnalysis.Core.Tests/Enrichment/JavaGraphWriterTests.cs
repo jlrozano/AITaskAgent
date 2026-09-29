@@ -483,6 +483,96 @@ public class JavaGraphWriterTests
         Assert.EndsWith("Los nombres de cbm no casan con los del analizador: ¿ha cambiado la versión de cbm?", warning);
     }
 
+    /// <summary>Quita del grafo sintético todos los nodos de cbm de un fichero, como si cbm no lo hubiera indexado.</summary>
+    private static async Task UnindexAsync(CbmTestGraph graph, string path)
+    {
+        using var delete = graph.Connection.CreateCommand();
+        delete.CommandText = """
+            DELETE FROM edges WHERE source_id IN (SELECT id FROM nodes WHERE file_path = @p) OR target_id IN (SELECT id FROM nodes WHERE file_path = @p);
+            DELETE FROM nodes WHERE file_path = @p;
+            """;
+        delete.Parameters.AddWithValue("@p", path);
+        await delete.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// H-9 tras la prueba M: los tipos de un fichero que cbm no indexó (ningún nodo suyo en ese <c>file_path</c>) no pueden
+    /// casar, y el aviso lo atribuye a eso y no a un cambio de versión de cbm; con una ruta absoluta de 260 caracteres o más
+    /// añade la pista del MAX_PATH. Los recuentos de las dos causas quedan en <c>details.cbm_match</c>.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Types_of_a_file_cbm_did_not_index_are_not_blamed_on_a_cbm_version_change(bool longPath)
+    {
+        using var temp = new TempDirectory();
+        var db = Path.Combine(temp.Path, "codebase.db");
+        using var graph = await JavaGraphFixture.CreateGraphAsync(db);
+        await UnindexAsync(graph, JavaTestRepo.BeanPath);
+        // La raíz no tiene que existir: solo se mide la longitud de la ruta absoluta de cada fichero.
+        var root = longPath ? Path.Combine(temp.Path, new string('r', 260)) : temp.Path;
+
+        var result = await JavaGraphWriter.ApplyAsync(JavaGraphFixture.Request(db) with { RepositoryPath = root },
+            JavaAnalysisReader.Read(JavaGraphFixture.WriteResult(temp.Path, JavaGraphFixture.ResultLines())), CancellationToken.None);
+
+        var stats = result.Stats;
+        Assert.Equal(1, stats.UnindexedFiles);
+        Assert.Equal(1, result.Outcome.FilesUnmatched);
+        Assert.Equal(longPath ? 1 : 0, stats.UnindexedLongPathFiles);
+        Assert.Equal((1, 1), (stats.TypesCreated, stats.TypesCreatedInUnindexedFiles));
+        Assert.Equal(1, stats.MethodsCreatedInUnindexedFiles);
+        Assert.Equal((0, 0), (stats.TypesCreatedNameMismatch, stats.MethodsCreatedNameMismatch));
+        // Un tipo de siete sin casar supera el umbral, pero no es deriva de los QN de cbm.
+        Assert.True(stats.ExceedsUnmatchedThreshold);
+        Assert.False(stats.SuspectsCbmDrift);
+
+        var match = JsonNode.Parse(result.Outcome.Details!)!["cbm_match"]!;
+        Assert.Equal(1, match["unindexed_files"]!.GetValue<int>());
+        Assert.Equal(longPath ? 1 : 0, match["unindexed_files_long_path"]!.GetValue<int>());
+        Assert.Equal(1, match["types_created_unindexed_file"]!.GetValue<int>());
+        Assert.Equal(0, match["types_created_name_mismatch"]!.GetValue<int>());
+        Assert.Equal(1, match["methods_created_unindexed_file"]!.GetValue<int>());
+        Assert.Equal(0, match["methods_created_name_mismatch"]!.GetValue<int>());
+        Assert.False(match["drift_suspected"]!.GetValue<bool>());
+
+        var warning = Steps.LanguageEnricherStep.CbmDriftWarning(stats);
+        Assert.NotNull(warning);
+        Assert.StartsWith("⚠️ Analizador Java: cbm no indexó 1 fichero .java que el analizador sí leyó (no tiene ningún nodo suyo); "
+            + "sus declaraciones se han creado como nodos nuevos: 1 tipo y 1 método sin contar sobrecargas.", warning);
+        Assert.DoesNotContain("versión de cbm", warning);
+        Assert.Contains("En los ficheros que cbm sí indexó los nombres casan: no casan 0,00 % de los tipos (0 de 6)", warning);
+        Assert.Equal(longPath, warning.Contains("MAX_PATH", StringComparison.Ordinal));
+        if (longPath)
+            Assert.Contains("Ese fichero tiene una ruta absoluta de 260 caracteres o más, el límite MAX_PATH de Windows, que cbm no indexa: "
+                + "copia el repositorio a una ruta más corta.", warning);
+    }
+
+    [Fact]
+    public async Task With_unindexed_files_and_renamed_qns_the_warning_gives_both_causes()
+    {
+        using var temp = new TempDirectory();
+        var db = Path.Combine(temp.Path, "codebase.db");
+        using var graph = await JavaGraphFixture.CreateGraphAsync(db);
+        await UnindexAsync(graph, JavaTestRepo.BeanPath);
+        using (var rename = graph.Connection.CreateCommand())
+        {
+            rename.CommandText = "UPDATE nodes SET qualified_name = 'v2.' || qualified_name WHERE label IN ('Class', 'Interface', 'Enum', 'Method', 'Function')";
+            await rename.ExecuteNonQueryAsync();
+        }
+
+        var result = await JavaGraphWriter.ApplyAsync(JavaGraphFixture.Request(db),
+            JavaAnalysisReader.Read(JavaGraphFixture.WriteResult(temp.Path, JavaGraphFixture.ResultLines())), CancellationToken.None);
+
+        Assert.True(result.Stats.SuspectsCbmDrift);
+        Assert.Null(result.Stats.UnindexedLongPathFiles);
+        Assert.Null(JsonNode.Parse(result.Outcome.Details!)!["cbm_match"]!["unindexed_files_long_path"]);
+        var warning = Steps.LanguageEnricherStep.CbmDriftWarning(result.Stats)!;
+        Assert.StartsWith("⚠️ Analizador Java: cbm no indexó 1 fichero .java", warning);
+        Assert.Contains(" No casan con un nodo de cbm en los ficheros que cbm sí indexó 100,00 % de los tipos (6 de 6)", warning);
+        Assert.EndsWith("¿ha cambiado la versión de cbm?", warning);
+        Assert.DoesNotContain("MAX_PATH", warning);
+    }
+
     [Theory]
     [InlineData(95, 5, 100, 0, false)]  // justo en el umbral: no avisa
     [InlineData(94, 6, 100, 0, true)]   // tipos por encima

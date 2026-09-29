@@ -252,6 +252,82 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
         Assert.Contains("> Aviso: 1 arista no está resuelta", llm);
     }
 
+    /// <summary>
+    /// Las CALLS que escribe la ingesta de Office no llevan marca, pero su nodo de origen trae el <c>origin</c> de OfficeTools:
+    /// salen como de la ingesta, no como heurística de cbm, y siguen avisando de que no están resueltas.
+    /// </summary>
+    [Fact]
+    public async Task Office_calls_are_labelled_as_office_ingestion_and_not_as_a_cbm_heuristic()
+    {
+        using var g = await CbmTestGraph.CreateAsync(Path.Combine(_temp.Path, "codebase.db"), "demo");
+        const string vba = "{\"origin\":\"access_vba_extractor\",\"cyclomatic\":2}";
+        var boton = await g.NodeAsync("Sub", "Boton_Click", "FPedidos.Boton_Click", "export/FPedidos.frm", 3, 9, vba);
+        var guardar = await g.NodeAsync("Sub", "Guardar", "MPedidos.Guardar", "export/MPedidos.bas", 1, 20, vba);
+        var cbmCaller = await g.NodeAsync("Function", "otra", "demo.otra", "src/otra.py", 1, 3);
+        await g.EdgeAsync(boton, guardar, "CALLS");
+        await g.EdgeAsync(cbmCaller, guardar, "CALLS", "{\"strategy\":\"unique_name\"}");
+
+        var outgoing = await NeighborsAsync(g.DatabasePath, """{"qualified_name":"FPedidos.Boton_Click","direction":"out"}""");
+        Assert.Contains("| ingesta Office · `access_vba_extractor` |", Row(outgoing, "MPedidos.Guardar"));
+        Assert.DoesNotContain("heurística cbm", outgoing);
+        Assert.Contains("- Procedencia: 1 de la ingesta de Office.", outgoing);
+        Assert.Contains("> Aviso: 1 arista no está resuelta (heurística de cbm, que decide el destino por nombre, ingesta de Office, "
+            + "que también lo decide por el nombre del procedimiento, o estimación del LLM).", outgoing);
+
+        // Entrantes: la de Office y la de cbm, cada una con su procedencia.
+        var incoming = await NeighborsAsync(g.DatabasePath, """{"qualified_name":"MPedidos.Guardar","direction":"in"}""");
+        Assert.Contains("| ingesta Office · `access_vba_extractor` |", Row(incoming, "FPedidos.Boton_Click"));
+        Assert.Contains("| heurística cbm · `unique_name` |", Row(incoming, "demo.otra"));
+        Assert.Contains("- Procedencia: 1 heurística de cbm · 1 de la ingesta de Office.", incoming);
+    }
+
+    [Fact]
+    public async Task Graph_domain_shows_an_unknown_authentication_as_unknown()
+    {
+        using var g = await CbmTestGraph.CreateAsync(Path.Combine(_temp.Path, "codebase.db"), "demo");
+        var handler = await g.NodeAsync("Method", "run", "demo.Api.run", "src/Api.cs", 1, 9);
+        foreach (var (path, auth) in new[] { ("/abierta", ",\"auth_required\":false"), ("/protegida", ",\"auth_required\":true"), ("/struts", "") })
+        {
+            var route = await g.NodeAsync("Route", path, $"__route__GET__{path}", "src/Api.cs", 1, 1);
+            await g.EdgeAsync(handler, route, "HANDLES", $"{{\"http_method\":\"GET\",\"route_path\":\"{path}\"{auth}}}");
+        }
+
+        var text = await RunAsync(new GraphDomainTool(), """{"view":"routes"}""", g.DatabasePath);
+
+        string RouteRow(string path) => text.Split('\n').Single(l => l.Contains($"`{path}`", StringComparison.Ordinal));
+        Assert.Contains("| 🔓 No |", RouteRow("/abierta"));
+        Assert.Contains("| 🔒 Sí |", RouteRow("/protegida"));
+        Assert.Contains("| ❔ Desconocida |", RouteRow("/struts"));
+    }
+
+    /// <summary>
+    /// Un nodo con <c>properties</c> que no es JSON válido (los deja cbm) no vacía el resultado de las demás tools del grafo:
+    /// sin <c>json_valid</c>, un solo <c>json_extract</c> sobre él tumbaba la consulta entera.
+    /// </summary>
+    [Fact]
+    public async Task Health_map_flows_and_domain_survive_a_node_with_invalid_json()
+    {
+        using var g = await CbmTestGraph.CreateAsync(Path.Combine(_temp.Path, "codebase.db"), "demo");
+        const string broken = "{\"base_classes\":[\"extends\nBase\"],\"cyclomatic\":99}";
+        foreach (var label in new[] { "Method", "Class", "Flow", "DiRegistration" })
+            await g.NodeAsync(label, $"Roto{label}", $"demo.Roto{label}", "src/Roto.java", 1, 3, broken);
+        Assert.Equal(0, await g.CountAsync("SELECT COUNT(1) FROM nodes WHERE json_valid(properties)"));
+        await g.NodeAsync("Method", "complejo", "demo.Svc.complejo", "src/Svc.java", 1, 30, "{\"cyclomatic\":12,\"hotspot\":8,\"fan_in\":3}");
+        await g.NodeAsync("Class", "Svc", "demo.Svc", "src/Svc.java", 1, 40,
+            "{\"afferent_coupling\":2,\"efferent_coupling\":1,\"instability\":0.33,\"community_id\":4,\"community_name\":\"pedidos\"}");
+        await g.NodeAsync("Flow", "Alta", "demo.Flow.Alta", "src/Svc.java", 1, 1, "{\"flow_kind\":\"http\",\"step_count\":3,\"path_count\":1}");
+        await g.NodeAsync("DiRegistration", "IRepo", "demo.di.IRepo", "src/Startup.cs", 5, 5, "{\"di_lifetime\":\"Scoped\"}");
+
+        Assert.Contains("| `complejo` | 12 |", await RunAsync(new GraphHealthTool(), """{"view":"complexity"}""", g.DatabasePath));
+        Assert.Contains("| `complejo` | 8 | 12 | 3 |", await RunAsync(new GraphHealthTool(), """{"view":"hotspots"}""", g.DatabasePath));
+        Assert.Contains("| `Svc` | 2 | 1 | ", await RunAsync(new GraphMapTool(), """{"view":"coupling"}""", g.DatabasePath));
+        Assert.Contains("| 4 | pedidos | 1 |", await RunAsync(new GraphMapTool(), """{"view":"communities"}""", g.DatabasePath));
+        Assert.Contains("| **Alta** | `http` | 3 | 1 |", await RunAsync(new GraphFlowsTool(), "{}", g.DatabasePath));
+        var di = await RunAsync(new GraphDomainTool(), """{"view":"di"}""", g.DatabasePath);
+        Assert.Contains("| `IRepo` | **Scoped** |", di);
+        Assert.Contains("| `RotoDiRegistration` | **Transient** |", di);
+    }
+
     [Fact]
     public async Task Struts_edges_show_the_forward_and_the_role()
     {

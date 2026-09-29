@@ -78,7 +78,7 @@ public sealed class GraphMapTool : LlmTool
     {
         var csProjects = await _graphDb.GetNodesByLabelAsync("CsProject", dbPath, ct);
         var depEdges = await _graphDb.SelectAsync(
-            "SELECT a.name AS from_proj, b.name AS to_proj, json_extract(e.properties, '$.layer_violation') AS violation " +
+            $"SELECT a.name AS from_proj, b.name AS to_proj, json_extract({CbmGraphDb.SafeEdgeProperties},'$.layer_violation') AS violation " +
             "FROM edges e " +
             "JOIN nodes a ON e.source_id = a.id " +
             "JOIN nodes b ON e.target_id = b.id " +
@@ -137,11 +137,11 @@ public sealed class GraphMapTool : LlmTool
     {
         var rows = await _graphDb.SelectAsync(
             "SELECT name, qualified_name AS qn, " +
-            "CAST(json_extract(properties,'$.afferent_coupling') AS INTEGER) AS ca, " +
-            "CAST(json_extract(properties,'$.efferent_coupling') AS INTEGER) AS ce, " +
-            "json_extract(properties,'$.instability') AS instability " +
+            $"CAST(json_extract({CbmGraphDb.SafeProperties},'$.afferent_coupling') AS INTEGER) AS ca, " +
+            $"CAST(json_extract({CbmGraphDb.SafeProperties},'$.efferent_coupling') AS INTEGER) AS ce, " +
+            $"json_extract({CbmGraphDb.SafeProperties},'$.instability') AS instability " +
             "FROM nodes WHERE label IN ('Class','Interface') " +
-            "AND json_extract(properties,'$.afferent_coupling') IS NOT NULL " +
+            $"AND json_extract({CbmGraphDb.SafeProperties},'$.afferent_coupling') IS NOT NULL " +
             "ORDER BY ca DESC, ce DESC LIMIT @lim",
             p => p.AddWithValue("@lim", limit), dbPath, ct);
 
@@ -164,10 +164,10 @@ public sealed class GraphMapTool : LlmTool
     private async Task<string> MapCommunitiesAsync(string? dbPath, int limit, CancellationToken ct)
     {
         var rows = await _graphDb.SelectAsync(
-            "SELECT json_extract(properties,'$.community_id') AS community_id, " +
-            "json_extract(properties,'$.community_name') AS community_name, count(*) AS members " +
+            $"SELECT json_extract({CbmGraphDb.SafeProperties},'$.community_id') AS community_id, " +
+            $"json_extract({CbmGraphDb.SafeProperties},'$.community_name') AS community_name, count(*) AS members " +
             "FROM nodes WHERE label IN ('Class','Interface') " +
-            "AND json_extract(properties,'$.community_id') IS NOT NULL " +
+            $"AND json_extract({CbmGraphDb.SafeProperties},'$.community_id') IS NOT NULL " +
             "GROUP BY community_id ORDER BY members DESC LIMIT @lim",
             p => p.AddWithValue("@lim", limit), dbPath, ct);
 

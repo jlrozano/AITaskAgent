@@ -33,8 +33,4 @@ Calcular el índice de salud técnica del repositorio, diagnosticar la densidad 
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]

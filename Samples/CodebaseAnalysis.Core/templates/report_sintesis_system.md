@@ -46,7 +46,3 @@ Recibir las conclusiones, métricas y hallazgos clave de todos los informes téc
 ---
 
 @[_mermaid_guidelines.md]
-
----
-
-@[_common_rules.md]

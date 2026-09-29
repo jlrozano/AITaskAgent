@@ -42,8 +42,4 @@ Evaluar la mantenibilidad y salud interna del código en el repositorio analizad
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]

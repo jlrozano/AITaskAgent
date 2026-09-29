@@ -268,6 +268,27 @@ public sealed class DocumentTests
         }
     }
 
+    /// <summary>
+    /// Las reglas comunes llegan una sola vez a cada auditor y a la síntesis: van en el prompt y no en el sistema, que las
+    /// repetía. Se cuenta sobre lo renderizado (system + prompt), que es lo que recibe el modelo.
+    /// </summary>
+    [Fact]
+    public void Each_auditor_receives_the_common_rules_once()
+    {
+        var provider = AnalysisPipelineFactory.CreateDefaultTemplateProvider();
+        var templatesDir = Path.Combine(AppContext.BaseDirectory, "templates");
+        var model = new Dictionary<string, object?> { ["provided_documentation"] = "[]", ["detected_languages"] = "Java" };
+        var prompts = Directory.GetFiles(templatesDir, "report_*_prompt.md");
+        Assert.Equal(10, prompts.Length);
+        foreach (var prompt in prompts)
+        {
+            var prefix = Path.GetFileNameWithoutExtension(prompt)[..^"_prompt".Length];
+            var rendered = provider.Render($"{prefix}_system", model) + "\n" + provider.Render($"{prefix}_prompt", model);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(rendered, "### Directrices Obligatorias de Entrega y Estilo"));
+            Assert.Contains("Línea Final de Metadatos", rendered);
+        }
+    }
+
     private sealed class CapturingLlmService(string answer) : ILlmService
     {
         public LlmRequest? Last { get; private set; }

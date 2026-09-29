@@ -20,8 +20,4 @@ Analizar las entidades de dominio, formularios, tablas, consultas y módulos par
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]

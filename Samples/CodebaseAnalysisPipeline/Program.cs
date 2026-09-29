@@ -48,11 +48,15 @@ internal static class Program
             _ => Serilog.Events.LogEventLevel.Information
         };
 
+        // Las plantillas por defecto de Serilog con el paso o auditor que emite cada línea delante del mensaje (StepOriginEnricher).
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Is(logEventLevel)
             .Enrich.FromLogContext()
-            .WriteTo.Console(restrictedToMinimumLevel: logEventLevel)
-            .WriteTo.File(Path.Combine(logDir, "analysis-pipeline-.log"), rollingInterval: RollingInterval.Day, restrictedToMinimumLevel: logEventLevel)
+            .Enrich.With<StepOriginEnricher>()
+            .WriteTo.Console(restrictedToMinimumLevel: logEventLevel,
+                outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Origin:l}{Message:lj}{NewLine}{Exception}")
+            .WriteTo.File(Path.Combine(logDir, "analysis-pipeline-.log"), rollingInterval: RollingInterval.Day, restrictedToMinimumLevel: logEventLevel,
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Origin:l}{Message:lj}{NewLine}{Exception}")
             .CreateLogger();
 
         Console.WriteLine($"🔍 Nivel de logging configurado a: {msLogLevel}");

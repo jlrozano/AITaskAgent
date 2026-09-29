@@ -35,8 +35,4 @@ El análisis DEBE centrarse en el código real y ajustarse con exactitud al leng
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]

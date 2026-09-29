@@ -27,6 +27,12 @@ public sealed record JavaGraphWriteRequest
 
     /// <summary>Inicio de la pasada (para <c>duration_ms</c>); por defecto, el de la escritura.</summary>
     public DateTimeOffset? StartedAt { get; init; }
+
+    /// <summary>
+    /// Raíz del repositorio, para medir la ruta absoluta de los ficheros que cbm no indexó (límite MAX_PATH de Windows). Sin
+    /// ella no se mide y <c>details.cbm_match.unindexed_files_long_path</c> queda a null.
+    /// </summary>
+    public string? RepositoryPath { get; init; }
 }
 
 /// <summary>Recuentos propios del analizador Java, además de los de <c>enrichment_runs</c>.</summary>
@@ -42,6 +48,26 @@ public sealed record JavaGraphStats
     public int OverloadsCreated { get; init; }
 
     public int MethodsUnmatched { get; init; }
+
+    /// <summary>
+    /// Ficheros analizados sin ningún nodo de cbm en su <c>file_path</c>: cbm no los indexó (p. ej. por una ruta por encima
+    /// del MAX_PATH de Windows) y todas sus declaraciones se crean. Es el mismo recuento que
+    /// <see cref="EnrichmentOutcome.FilesUnmatched"/>.
+    /// </summary>
+    public int UnindexedFiles { get; init; }
+
+    /// <summary>
+    /// De <see cref="UnindexedFiles"/>, los que tienen una ruta absoluta de <see cref="JavaGraphWriter.WindowsMaxPath"/>
+    /// caracteres o más; null si no se conoce la raíz del repositorio.
+    /// </summary>
+    public int? UnindexedLongPathFiles { get; init; }
+
+    /// <summary>Tipos creados (incluidos en <see cref="TypesCreated"/>) en ficheros que cbm no indexó.</summary>
+    public int TypesCreatedInUnindexedFiles { get; init; }
+
+    /// <summary>Métodos creados sin contar sobrecargas (incluidos en <see cref="MethodsCreated"/>) en ficheros que cbm no indexó.</summary>
+    public int MethodsCreatedInUnindexedFiles { get; init; }
+
     public int CallEdges { get; init; }
     public int InheritsEdges { get; init; }
     public int ImplementsEdges { get; init; }
@@ -86,13 +112,36 @@ public sealed record JavaGraphStats
     /// </summary>
     public double MethodsUnmatchedRatio => Ratio(MethodsCreated - OverloadsCreated, MethodsMatched + MethodsCreated - OverloadsCreated);
 
+    /// <summary>Tipos creados en ficheros que cbm sí indexó: su nombre no casa con el de cbm.</summary>
+    public int TypesCreatedNameMismatch => TypesCreated - TypesCreatedInUnindexedFiles;
+
+    /// <summary>Métodos creados sin contar sobrecargas en ficheros que cbm sí indexó.</summary>
+    public int MethodsCreatedNameMismatch => MethodsCreated - OverloadsCreated - MethodsCreatedInUnindexedFiles;
+
     /// <summary>
-    /// Más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos o de métodos sin casar: lo normal es que casen casi
-    /// todos (D3 replica las rarezas de cbm), así que suele ser que una versión nueva de cbm deriva los QN de otra forma y la
-    /// pasada está duplicando sus nodos en lugar de enriquecerlos.
+    /// <see cref="TypesUnmatchedRatio"/> solo en los ficheros que cbm indexó: un tipo de un fichero sin nodos de cbm no puede
+    /// casar con nada y no dice nada de cómo deriva cbm los QN.
+    /// </summary>
+    public double TypesNameMismatchRatio => Ratio(TypesCreatedNameMismatch, TypesMatched + TypesCreatedNameMismatch);
+
+    /// <summary><see cref="MethodsUnmatchedRatio"/> solo en los ficheros que cbm indexó.</summary>
+    public double MethodsNameMismatchRatio => Ratio(MethodsCreatedNameMismatch, MethodsMatched + MethodsCreatedNameMismatch);
+
+    /// <summary>
+    /// Más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos o de métodos sin casar en total, sea cual sea la causa:
+    /// es lo que decide si la pasada avisa.
+    /// </summary>
+    public bool ExceedsUnmatchedThreshold =>
+        TypesUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold || MethodsUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold;
+
+    /// <summary>
+    /// Más de <see cref="JavaGraphWriter.CbmDriftThreshold"/> de tipos o de métodos sin casar en los ficheros que cbm indexó:
+    /// lo normal es que casen casi todos (D3 replica las rarezas de cbm), así que suele ser que una versión nueva de cbm deriva
+    /// los QN de otra forma y la pasada está duplicando sus nodos en lugar de enriquecerlos. Los ficheros que cbm no indexó no
+    /// cuentan: sus declaraciones se crean siempre (<see cref="UnindexedFiles"/>).
     /// </summary>
     public bool SuspectsCbmDrift =>
-        TypesUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold || MethodsUnmatchedRatio > JavaGraphWriter.CbmDriftThreshold;
+        TypesNameMismatchRatio > JavaGraphWriter.CbmDriftThreshold || MethodsNameMismatchRatio > JavaGraphWriter.CbmDriftThreshold;
 
     private static double Ratio(int part, int total) => total > 0 ? (double)part / total : 0;
 }
@@ -118,6 +167,12 @@ public static class JavaGraphWriter
     /// posible deriva de los QN de cbm (<see cref="JavaGraphStats.SuspectsCbmDrift"/>). Queda en <c>details.cbm_match</c>.
     /// </summary>
     public const double CbmDriftThreshold = 0.05;
+
+    /// <summary>
+    /// Longitud de ruta absoluta a partir de la cual Windows no abre un fichero sin el prefijo de rutas largas (MAX_PATH, 260
+    /// con el terminador): en la prueba M, cbm no indexó los <c>.java</c> que llegaban a ella.
+    /// </summary>
+    public const int WindowsMaxPath = 260;
 
     /// <summary>Labels con los que cbm guarda un tipo; <c>Function</c> se acepta aparte (enums, ver <c>ApplyTypesAsync</c>).</summary>
     private static readonly HashSet<string> TypeLabels = new(StringComparer.Ordinal) { "Class", "Interface", "Enum", "Annotation" };
@@ -321,6 +376,10 @@ public static class JavaGraphWriter
         private int _typesMatched, _typesCreated, _typesUnmatched;
         private int _methodsMatched, _methodsCreated, _overloadsCreated, _methodsUnmatched;
         private int _callEdges, _inheritsEdges, _implementsEdges, _definesEdges, _projectCallsUnmatched;
+        private int _typesCreatedUnindexed, _methodsCreatedUnindexed;
+
+        // Ficheros con algún nodo de cbm antes de escribir nada: una declaración creada fuera de ellos no es deriva de los QN.
+        private HashSet<string> _filesWithCbmNodes = new(StringComparer.Ordinal);
 
         public async Task<JavaGraphWriteResult> RunAsync(JavaGraphWriteRequest request, CollectedInput input, CancellationToken ct)
         {
@@ -339,6 +398,7 @@ public static class JavaGraphWriter
                 .ToHashSet(StringComparer.Ordinal);
             await LoadNodesAsync(analyzedFiles, ct);
             var filesWithNodes = _byQn.Values.Select(n => n.FilePath).ToHashSet(StringComparer.Ordinal);
+            _filesWithCbmNodes = filesWithNodes;
             timings.Lap("load_nodes");
 
             // P10: las aristas heurísticas de cbm que salen de los ficheros analizados se sustituyen por las resueltas.
@@ -363,6 +423,10 @@ public static class JavaGraphWriter
                 unresolved[reason] = unresolved.GetValueOrDefault(reason) + count;
             var analyzedSet = analyzed.ToHashSet(StringComparer.Ordinal);
             var unreadable = input.DiagnosticPaths.Count(p => !analyzedSet.Contains(p));
+            var unindexed = analyzed.Where(f => !filesWithNodes.Contains(f)).ToList();
+            int? unindexedLongPath = string.IsNullOrWhiteSpace(request.RepositoryPath)
+                ? null
+                : unindexed.Count(f => AbsoluteLength(request.RepositoryPath, f) >= WindowsMaxPath);
 
             var summary = input.Summary;
             var stats = new JavaGraphStats
@@ -374,6 +438,10 @@ public static class JavaGraphWriter
                 MethodsCreated = _methodsCreated,
                 OverloadsCreated = _overloadsCreated,
                 MethodsUnmatched = _methodsUnmatched,
+                UnindexedFiles = unindexed.Count,
+                UnindexedLongPathFiles = unindexedLongPath,
+                TypesCreatedInUnindexedFiles = _typesCreatedUnindexed,
+                MethodsCreatedInUnindexedFiles = _methodsCreatedUnindexed,
                 CallEdges = _callEdges,
                 InheritsEdges = _inheritsEdges,
                 ImplementsEdges = _implementsEdges,
@@ -411,11 +479,20 @@ public static class JavaGraphWriter
                 {
                     ["CALLS"] = _callEdges, ["INHERITS"] = _inheritsEdges, ["IMPLEMENTS"] = _implementsEdges, ["DEFINES_METHOD"] = _definesEdges
                 },
-                // H-9: la deriva de los QN de cbm se ve aquí y en el aviso del paso, no solo en los recuentos.
+                // H-9: la deriva de los QN de cbm se ve aquí y en el aviso del paso, no solo en los recuentos. Lo que no casa
+                // se separa por causa: ficheros que cbm no indexó (sin ningún nodo suyo) y nombres que no casan en los que sí.
                 ["cbm_match"] = new JsonObject
                 {
                     ["types_unmatched_ratio"] = Math.Round(stats.TypesUnmatchedRatio, 4),
                     ["methods_unmatched_ratio"] = Math.Round(stats.MethodsUnmatchedRatio, 4),
+                    ["unindexed_files"] = stats.UnindexedFiles,
+                    ["unindexed_files_long_path"] = stats.UnindexedLongPathFiles,
+                    ["types_created_unindexed_file"] = stats.TypesCreatedInUnindexedFiles,
+                    ["methods_created_unindexed_file"] = stats.MethodsCreatedInUnindexedFiles,
+                    ["types_created_name_mismatch"] = stats.TypesCreatedNameMismatch,
+                    ["methods_created_name_mismatch"] = stats.MethodsCreatedNameMismatch,
+                    ["types_name_mismatch_ratio"] = Math.Round(stats.TypesNameMismatchRatio, 4),
+                    ["methods_name_mismatch_ratio"] = Math.Round(stats.MethodsNameMismatchRatio, 4),
                     ["threshold"] = CbmDriftThreshold,
                     ["drift_suspected"] = stats.SuspectsCbmDrift
                 },
@@ -430,7 +507,7 @@ public static class JavaGraphWriter
             var outcome = new EnrichmentOutcome
             {
                 FilesAnalyzed = analyzed.Count,
-                FilesUnmatched = analyzed.Count(f => !filesWithNodes.Contains(f)),
+                FilesUnmatched = unindexed.Count,
                 NodesCreated = _nodesCreated,
                 NodesUpdated = _nodesUpdated,
                 NodesRemoved = testNodes,
@@ -520,6 +597,8 @@ public static class JavaGraphWriter
 
                 var id = await CreateNodeAsync(LabelOf(type.Kind), chain[^1], qn, type.Path, type.Line, type.End, properties, ct);
                 _typesCreated++;
+                if (!IndexedByCbm(type.Path))
+                    _typesCreatedUnindexed++;
                 _typeNodeIds.Add(id);
                 _typesByFqn[type.Fqn] = new MappedType(id, qn, type.Kind, prefix);
             }
@@ -592,6 +671,8 @@ public static class JavaGraphWriter
                         MethodProperties(kept, owner, overloadOf: null, created: true), ct);
                     await DefinesMethodAsync(owner.Id, id, ct);
                     _methodsCreated++;
+                    if (!IndexedByCbm(kept.Path))
+                        _methodsCreatedUnindexed++;
                     _methodsByKey[kept.Key] = id;
                 }
 
@@ -637,6 +718,21 @@ public static class JavaGraphWriter
                 && !_typeNodeIds.Contains(function.Id))
                 return function;
             return null;
+        }
+
+        private bool IndexedByCbm(string path) => _filesWithCbmNodes.Contains(path.Replace('\\', '/'));
+
+        /// <summary>Longitud de la ruta absoluta de un fichero del repositorio; 0 si la ruta no es válida.</summary>
+        private static int AbsoluteLength(string repositoryPath, string relative)
+        {
+            try
+            {
+                return Path.GetFullPath(Path.Combine(repositoryPath, relative.Replace('/', Path.DirectorySeparatorChar))).Length;
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return 0;
+            }
         }
 
         /// <summary>Nombre del nodo en cbm: un constructor es un método con el nombre de la clase.</summary>

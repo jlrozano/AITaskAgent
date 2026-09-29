@@ -38,8 +38,4 @@ Evaluar la arquitectura global del sistema, la topología de dependencias entre 
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]

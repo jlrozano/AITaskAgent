@@ -9,8 +9,4 @@ Mapear y documentar los flujos de ejecución principales de la aplicación, desd
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]

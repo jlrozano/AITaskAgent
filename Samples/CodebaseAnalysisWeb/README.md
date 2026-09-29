@@ -48,7 +48,7 @@ La web carga dos ficheros. `appsettings.json`, el suyo, solo lleva `Urls`, `Allo
 | `CodebaseAnalysis:DatabasePath`, `OutputReportsPath` | `.codebase/codebase.db`, `reports` | Relativas al repositorio abierto, con la misma regla que la CLI. No se cambian por petición. |
 | `CodebaseAnalysis:RequestedReports` | los nueve | Informes preseleccionados en la interfaz (`defaultReports` de `/api/meta`). |
 | `LlmConfiguration:Roles:ChatAssistant` | declarado en `appsettings.analysis.json` | Rol del chat: plantilla `chat_system`, `MaxOutputTokens` 32768, `UseStreaming: true`. Si no se declara, se crea desde `DefaultProvider` y con streaming activado. |
-| `LlmConfiguration:Roles:ChatAssistant:StreamingInactivityTimeoutSeconds` | 120 (el del proveedor, si lo fija) | Espera máxima de cada trozo del stream del chat; 0 la quita. Con Azure y `gpt-5.4`, que entregan la respuesta entera al final, una respuesta que tarde más en generarse corta el turno con un error que nombra la clave: en ese caso hay que subirla. Sin streaming manda `RequestTimeoutSeconds` (600). Los dos plazos se explican en el apartado 3.6 del README de la CLI. |
+| `LlmConfiguration:Roles:ChatAssistant:StreamingInactivityTimeoutSeconds` | 300 en `appsettings.analysis.json`; sin la clave, 120 (o el del proveedor, si lo fija) | Espera máxima de cada trozo del stream del chat; 0 la quita. Con Azure y `gpt-5.4`, que entregan la respuesta entera al final, una respuesta que tarde más en generarse corta el turno con un error que nombra la clave: en ese caso hay que subirla. Sin streaming manda `RequestTimeoutSeconds` (600). Los dos plazos se explican en el apartado 3.6 del README de la CLI. |
 | `CodebaseAnalysis:Chat:MaxToolIterations` | 12 | Iteraciones de herramientas por turno. |
 | `CodebaseAnalysis:Chat:MaxHistoryTurns` | 20 | Turnos completados que se reenvían al modelo como contexto. |
 | `CodebaseAnalysis:Chat:TurnTimeoutMinutes` | 5 | Plazo de un turno de chat; 0 lo quita. Al superarlo, el turno falla con un error que nombra esta clave. |
@@ -110,7 +110,7 @@ Las propuestas (planes, recomendaciones, código nuevo, criterios) no se marcan.
 - las líneas que enseñó `view_file`;
 - las coincidencias de `grep_search`;
 - los tramos de `graph_search` con `include_code` (la tabla y las propiedades de `graph_search`, `graph_neighbors` y `graph_domain` son del grafo y no cuentan como código leído, aunque citen `ruta:línea`: el prompt pide abrir esa línea con `view_file` para marcar `[V]`, o marcar `[I]` diciendo que sale del grafo);
-- el fichero entero de `view_code_item`;
+- de `view_code_item`, solo el tramo `Location` de cada nodo que devuelve, no el fichero entero;
 - los informes y documentos de `read_report` y `read_document`.
 
 Una marca que no se respalda queda `unchecked` con el motivo: no se leyó en este turno, se leyó solo en parte, esas líneas no existen, el fichero no existe o falta la referencia. Nunca se rechaza la respuesta. Como `BaseLlmStep` compacta la conversación al par pregunta/respuesta al terminar, el step del chat guarda los mensajes del turno justo antes. En la interfaz, las marcas son insignias (V, D, I, o «?» si están sin comprobar, con el motivo al pasar el ratón), cada referencia abre su código o su informe en el visor y cada respuesta lleva un resumen por estado al pie.

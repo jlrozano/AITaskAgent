@@ -34,7 +34,7 @@ Genera el **Informe de Arquitectura, Acoplamiento y Dependencias Modulares** par
 {{ type_hierarchy }}
 ```
 
-- **Pantallas (JSP) con Código de Negocio, SQL o Sesión (`suspicious`, con sus motivos)**:
+- **Pantallas (JSP) con Acceso a Datos (SQL, `java.sql`, DAO) o Código de Negocio en Scriptlets (`suspicious`, con sus motivos; `session_access` es un dato aparte y no marca la pantalla)**:
 ```json
 {{ suspicious_jsps }}
 ```

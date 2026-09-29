@@ -37,7 +37,7 @@ Los argumentos de línea de comandos se imponen a la configuración:
 
 Cualquier clave de configuración admite también la sintaxis estándar de .NET, por ejemplo `--AITaskAgent:Conversation:UseSlidingWindow true`.
 
-El log se escribe en consola y en `<repositorio>/logs/analysis-pipeline-<fecha>.log`; con `--debug` incluye el cuerpo de cada request al modelo.
+El log se escribe en consola y en `<repositorio>/logs/analysis-pipeline-<fecha>.log`; con `--debug` incluye el cuerpo de cada request al modelo. Cada línea lleva la hora y, entre corchetes, el paso o el auditor que la emite: los mensajes de progreso salen como `12:31:39 [Auditor_CodeSmells] 🤖 [LLM] Iniciando auditoría…`, y las del log del framework, también las de cada llamada a una herramienta, como `[12:31:39 INF] [Auditor_CodeSmells] Executing Tool: view_file …`, de modo que con los nueve auditores en paralelo se sabe de quién es cada una.
 
 El primer Ctrl+C cancela el análisis: el pipeline se detiene, el indexador se termina con todo su árbol de procesos, los informes ya escritos se conservan y el proceso sale con código 130. Un segundo Ctrl+C termina el proceso sin esperar.
 

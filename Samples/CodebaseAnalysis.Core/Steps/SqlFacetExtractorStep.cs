@@ -280,8 +280,9 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             WHERE label = 'Route' AND json_extract(properties, '$.auth_required') = 0
             ORDER BY path, qualified_name LIMIT 40;", cancellationToken);
 
-        // JSP marcadas como sospechosas por el plugin Struts/JSP (código de negocio, SQL o sesión en la pantalla), con sus
-        // motivos. Las de más motivos y más scriptlets primero.
+        // JSP marcadas como sospechosas por el plugin Struts/JSP (SQL, imports de acceso a datos o código de negocio usado en
+        // un scriptlet; el acceso a sesión va aparte en session_access y no la marca), con sus motivos. Las de más motivos y
+        // más scriptlets primero.
         facetResult.SuspiciousJsps = await QueryToJsonAsync(conn, $@"
             SELECT n.name AS jsp, n.qualified_name, n.file,
                    {StartLineExpr} AS start_line,
@@ -410,13 +411,16 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
                    SUM(CASE WHEN json_extract(properties, '$.docstring') IS NOT NULL OR json_extract(properties, '$.xml_doc') IS NOT NULL THEN 1 ELSE 0 END) AS documented
             FROM nodes WHERE label NOT IN ('UserDocument', 'UserDocSection') GROUP BY label;", cancellationToken);
 
+        // [Obsolete] de C# (attributes) y @Deprecated de Java (annotations, que el analizador Java escribe con el nombre simple
+        // de cada anotación).
         facetResult.ObsoleteElements = await QueryToJsonAsync(conn, @"
-            SELECT name, qualified_name, file, 
+            SELECT name, qualified_name, file,
                    coalesce(nullif(line_start, 0), start_line, 1) AS start_line,
                    coalesce(nullif(line_end, 0), end_line, 0) AS end_line,
-                   properties 
-            FROM nodes 
+                   properties
+            FROM nodes
             WHERE json_extract(properties, '$.is_obsolete') = 1 OR json_extract(properties, '$.attributes') LIKE '%Obsolete%'
+               OR json_extract(properties, '$.annotations') LIKE '%""Deprecated""%'
             ORDER BY file, start_line, qualified_name LIMIT 30;", cancellationToken);
 
         // Solo clases con algún dato: sin loc_total ni cyclomatic_total (propios o calculados), 25 clases cualesquiera.

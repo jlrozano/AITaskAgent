@@ -14,8 +14,4 @@ Identificar métodos no invocados (`fan_in = 0`), clases o formularios sin refer
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]

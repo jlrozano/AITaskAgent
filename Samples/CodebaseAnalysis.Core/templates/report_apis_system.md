@@ -9,8 +9,4 @@ Inventariar la superficie expuesta del aplicativo, auditar los riesgos de seguri
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]

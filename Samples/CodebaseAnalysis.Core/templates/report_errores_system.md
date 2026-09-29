@@ -9,8 +9,4 @@ Identificar, clasificar por criticidad (P0-P3) y proponer soluciones para los de
 
 ---
 
-@[_common_rules.md]
-
----
-
 @[_graph_rules.md]
