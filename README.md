@@ -111,6 +111,7 @@ steps:
 
 ### Getting Started
 - [Installation](docs/getting-started/installation.md)
+- [Starting a New Project](docs/getting-started/new-project.md) - From an empty folder to a running pipeline
 - [Quick Start](docs/getting-started/quick-start.md)
 - [Architecture](docs/getting-started/architecture.md)
 

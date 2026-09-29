@@ -55,7 +55,7 @@ var llmStep = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>(
 |----------|---------|-------------|
 | `Tools` | `role.Tools ?? []` | Tools offered to the model |
 | `MaxToolIterations` | `5` | Tool-calling round trips before aborting |
-| `StreamingHandlers` | `[]` | `IStreamingTagHandler` instances for inline artifacts |
+| `TagHandlers` | `[]` | `ITagHandler` instances for in-text action tags (e.g. `<write_file>`); scanned in every response, streamed or not, reasoning or content |
 | `SystemPrompt` / `Prompt` | from ctor | Mutable after construction |
 | `MaxRetries` | `3` | Inherited from `StepBase` |
 

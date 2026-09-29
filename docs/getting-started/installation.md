@@ -6,17 +6,23 @@
 - **C# 14** language version
 - Visual Studio 2025+ / VS Code with C# extension / JetBrains Rider
 
-## Install via NuGet
+## Reference the framework
+
+The framework is **not published to NuGet** — no project in this repository sets
+`PackageId`, `IsPackable` or `GeneratePackageOnBuild`. Reference it as a project:
 
 ```bash
-dotnet add package AITaskAgent
+dotnet add reference ../AITaskAgent/Framework/AITaskAgent.csproj
 ```
 
 Or in your `.csproj`:
 
 ```xml
-<PackageReference Include="AITaskAgent" Version="1.0.0" />
+<ProjectReference Include="..\AITaskAgent\Framework\AITaskAgent.csproj" />
 ```
+
+For the full walkthrough from an empty folder, see
+[Starting a New Project](new-project.md).
 
 ## Basic Setup
 

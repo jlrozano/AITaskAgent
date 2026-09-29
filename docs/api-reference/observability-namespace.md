@@ -365,26 +365,38 @@ public sealed record ToolCompletedEvent : ProgressEventBase
 
 ---
 
-### Artifact Generation Events (Streaming)
+### Artifact Generation Events (Tags)
 
 > [!NOTE]
-> Unlike standard Tools (`ITool`), Streaming Tags (Artifacts) represent side-effects generated directly during the LLM streaming process (e.g., writing a file). They **do not** create a new turn in the conversation history and are "fire-and-forget" from the Agent's cognitive perspective. These events provide observability for those side-effects.
+> Unlike standard Tools (`ITool`), Tag Handlers (`ITagHandler`) represent side-effects the model
+> triggers by writing an in-text tag (e.g. `<write_file>`) instead of a tool call. The framework
+> scans every response for tags with `StreamingTagParser` - streamed or not, content or reasoning
+> channel - and calls `OnCompleteTagAsync` exactly once per closed tag, with its complete body. A
+> tag never creates a new turn in the conversation history and is "fire-and-forget" from the
+> Agent's cognitive perspective. These events provide observability for those side-effects.
 
 ### System Prompt Injection
 
-When Streaming Tags are enabled, the Framework automatically enriches the System Prompt to instruct the LLM on how to generate these artifacts. This ensures the model uses the correct XML syntax without manual user prompting.
+When a step has `BaseLlmStep.TagHandlers` configured, the Framework automatically enriches the
+System Prompt with an `## IN-TEXT ACTION TAGS (NOT TOOLS)` section, listing the available tags and
+appending each handler's `GetInstructions()` under `### TAG REFERENCE`. This ensures the model uses
+the correct syntax without manual user prompting.
 
-**Injected Instruction Example:**
+**Injected Instruction Example** (excerpt - see `WriteFileTagHandler.GetInstructions()` in
+`FileTools/Streaming/WriteFileTagHandler.cs` for the full text of one handler):
 ```markdown
-## Available Streaming Actions
-You can perform the following actions inline:
+## IN-TEXT ACTION TAGS (NOT TOOLS)
+Besides your tools you have these action tags: <write_file>.
+A tag is executed by TYPING it literally in your reply text, exactly as documented below. It is not a function:
+none of these names exists in your tools list, so a tool_call with one of them always fails and wastes a turn.
 
-- **Create files**: Use <write_file path="relative/path.md">content</write_file>
+**How the user sees it:** the text between the opening and closing tag is hidden and replaced by a one-line
+reference (e.g. `[write_file: demo.py (1.2 KB) — Prime numbers script]`). So, right after the closing tag, always
+add one or two sentences saying what you did - never end your reply on the closing tag.
 
-IMPORTANT:
-- Content inside tags will NOT appear in conversation history
-- Only a file reference will be added: [File: path/to/file.md]
-- If you need to verify the content later, use view_file tool
+### TAG REFERENCE
+### Tag: write_file
+...
 ```
 
 #### TagStartedEvent

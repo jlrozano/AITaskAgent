@@ -286,9 +286,9 @@ no pricing configured. `BaseLlmStep` calls it after each request and stores the 
 | `Timeouts.StreamingActivityTimeout` | `TimeSpan` | `00:00:30` | No |
 | `Conversation.MaxTokens` | `int` | `8192` | Yes — the transient `ConversationContext` |
 | `Conversation.UseBookmarks` | `bool` | `true` | No |
-| `Conversation.UseSlidingWindow` | `bool` | `true` | No |
-| `Conversation.KeepFirstNMessages` | `int` | `2` | No |
-| `Conversation.SlidingWindowMaxTokens` | `int` | `8192` | No |
+| `Conversation.UseSlidingWindow` | `bool` | `true` | Yes — copied into every `LlmRequest` by `BaseLlmStep` |
+| `Conversation.KeepFirstNMessages` | `int` | `2` | No (the window always keeps the first 2) |
+| `Conversation.SlidingWindowMaxTokens` | `int` | `8192` | Yes — copied into every `LlmRequest` by `BaseLlmStep` |
 | `CircuitBreaker.FailureThreshold` | `int` | `5` | No |
 | `CircuitBreaker.OpenDurationSeconds` | `int` | `60` | No |
 | `RateLimit.MaxTokens` | `int` | `100` | No |
@@ -299,8 +299,16 @@ no pricing configured. `BaseLlmStep` calls it after each request and stores the 
 > The options marked "No" are bound and readable through `IOptions<AITaskAgentOptions>`, but the
 > framework does not act on them today. `CircuitBreaker` and `RateLimit` in particular exist so
 > that *you* can construct the corresponding primitives (see [Resilience](resilience.md)); setting
-> them alone changes nothing. Sliding-window behaviour is currently decided per request by
-> `LlmRequest.UseSlidingWindow` / `SlidingWindowMaxTokens`, not by these settings.
+> them alone changes nothing. The sliding window *is* applied: `BaseLlmStep` copies
+> `Conversation.UseSlidingWindow` / `SlidingWindowMaxTokens` into each `LlmRequest` (when the step
+> runs under DI; otherwise `LlmRequest`'s own defaults, `true` / `8192`, apply) and every bundled
+> provider trims the history with them. The token count is an estimate (about 4 characters per
+> token). The window keeps the first `KeepFirstNMessages` messages and the last group (the last
+> message, plus the `assistant(tool_calls)` message it answers) even over budget, and never sends an
+> orphaned `tool` message. Size it to the model's context: a long tool loop with the 8192 default
+> silently drops the intermediate tool results of the turn. With `UseSlidingWindow: false` the whole
+> history is sent and `SlidingWindowMaxTokens` is ignored; exceeding the context then fails with the
+> provider's error instead of silently losing messages.
 
 All of these are `init`-only records: they are bound from configuration, not mutated at runtime.
 To change them programmatically, supply the values through a configuration source (for example

@@ -158,7 +158,7 @@ public abstract partial class BaseLlmStep(
 {
     public int MaxToolIterations { get; init; } = 5;
     public IList<ITool> Tools { get; set; }
-    public List<IStreamingTagHandler> StreamingHandlers { get; init; } = [];
+    public List<ITagHandler> TagHandlers { get; init; } = [];
     public string? SystemPrompt { get; set; }
     public string? Prompt { get; set; }
 

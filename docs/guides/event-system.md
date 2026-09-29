@@ -165,8 +165,8 @@ yourself.
 | `LlmResponseEvent` | `llm.response` | `BaseLlmStep` | LLM response (streaming chunk or final) |
 | `ToolStartedEvent` | `tool.started` | `LlmTool` | Tool execution begins |
 | `ToolCompletedEvent` | `tool.completed` | `LlmTool` | Tool execution ends |
-| `TagStartedEvent` | `tag.started` | `StreamingTagHandlerBase` | Artifact generation begins |
-| `TagCompletedEvent` | `tag.completed` | `StreamingTagHandlerBase` | Artifact generation ends |
+| `TagStartedEvent` | `tag.started` | `StreamingTagParser` | An action tag's opening tag was recognised (its body may still be arriving) |
+| `TagCompletedEvent` | `tag.completed` | `TagHandlerBase` / `StreamingTagParser` | The tag's handler finished (`Success`), or the tag was never closed (`Success = false`) |
 
 The string literals are available as constants on `AITaskAgentConstants.EventTypes`.
 
