@@ -34,6 +34,19 @@ Genera el **Informe de Detección de Código Muerto y Elementos Huérfanos** par
 {{ unread_fields }}
 ```
 
+- **Candidatos agrupados por un patrón común** (tipos sin uso y campos sin leer): los de las dos listas anteriores que comparten prefijo o sufijo del nombre (los campos, por el tipo que los declara) o directorio van aquí resumidos, con su patrón, su recuento y tres ejemplos, y no se repiten en las listas. `likely_dynamic` marca los grupos cuyo patrón aparece en un punto de instanciación por nombre o con miembros que nombra la configuración, con su `evidence`. Es una heurística: indica dónde mirar.
+```json
+{{ zero_fanin_groups }}
+```
+```json
+{{ unread_field_groups }}
+```
+
+- **Instanciación dinámica y clases nombradas en configuración** (heurística por expresiones regulares): puntos donde el código crea o carga un tipo por nombre con un argumento que no es un literal, y cuántas clases nombra cada XML de configuración. Un candidato suelto que nombra la configuración o un literal del código lleva `named_in_configuration`.
+```json
+{{ dynamic_instantiation_sites }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -41,7 +54,8 @@ Genera el **Informe de Detección de Código Muerto y Elementos Huérfanos** par
    - En Access/VBA: formularios huérfanos, tablas temporales/backup (`_temp`, `_tmp`, `_bak`, `_old`, `_copy`, `_test`), consultas no vinculadas a ningún formulario o módulo.
    - En C#/.NET u otros: clases sin uso, endpoints sin handler, dependencias no resueltas.
 2. Antes de declarar muerto un candidato, sigue la regla de puntos ciegos del grafo: busca quién lo llama o lo hereda con `graph_neighbors` (`direction: in`), si atiende una ruta (`HANDLES`) y si lo importa alguna JSP (`page_imports`), y comprueba la configuración que pueda referenciarlo. Lo que no puedas descartar queda como candidato sin confirmar, no como código muerto.
-3. Clasifica cada elemento por nivel de confianza y produce el informe estructurado en Markdown con su correspondiente diagrama Mermaid.
+3. Un grupo grande de candidatos con un patrón común es señal de uso dinámico. Antes de afirmar que sus miembros están muertos, busca la factoría con `grep_search` (el sufijo, el prefijo o el paquete del grupo, en el código y en `**/*.xml`), lee con `view_file` el código que compone el nombre y comprueba que puede llegar a esas clases. Si la instanciación dinámica es plausible, lleva `likely_dynamic` o no, clasifica el grupo entero como **dudoso por instanciación dinámica**, con la evidencia (fichero y línea de la factoría o de la configuración), y no como código muerto; si no encuentras ninguna vía, dilo y déjalo como candidato sin confirmar. Un candidato con `named_in_configuration` no está muerto: lo nombra la configuración o el código.
+4. Clasifica cada elemento por nivel de confianza y produce el informe estructurado en Markdown con su correspondiente diagrama Mermaid.
 
 ---
 

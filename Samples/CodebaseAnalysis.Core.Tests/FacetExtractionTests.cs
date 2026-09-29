@@ -619,6 +619,8 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
         Assert.Contains(new GraphSearchTool().Name, AnalysisPipelineFactory.AuditorToolNames);
         Assert.Contains("view_file", AnalysisPipelineFactory.AuditorToolNames);
         Assert.Contains(ReadDocumentTool.ToolName, AnalysisPipelineFactory.AuditorToolNames);
+        // Para lo que el grafo no ve (factorías por reflexión, nombres en XML), tanda C.
+        Assert.Contains(new AITaskAgent.FileTools.Tools.GrepSearchTool().Name, AnalysisPipelineFactory.AuditorToolNames);
     }
 
     /// <summary>Todas las plantillas de auditor incluyen la regla del grafo; la síntesis, que no tiene tools, no.</summary>
@@ -635,6 +637,42 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
             Assert.DoesNotContain("@[_graph_rules.md]", system);
         }
         Assert.DoesNotContain("Código sin llamadas no es código muerto", templates.Render("report_sintesis_system", new ReportFacetInput()));
+    }
+
+    /// <summary>
+    /// Capa 3 de (d): el 03 recibe los grupos y la faceta de instanciación dinámica y la regla de verificarlos con
+    /// <c>grep_search</c>; el 02, los grupos de campos. La regla común nombra <c>grep_search</c> en todos los auditores.
+    /// </summary>
+    [Fact]
+    public void The_dead_code_prompts_carry_the_groups_the_dynamic_sites_and_the_rule_to_verify_them()
+    {
+        var templates = AnalysisPipelineFactory.CreateDefaultTemplateProvider();
+        var facets = new ReportFacetInput
+        {
+            ZeroFaninGroups = "{\"marca\":\"GRUPOS-TIPOS\"}",
+            UnreadFieldGroups = "{\"marca\":\"GRUPOS-CAMPOS\"}",
+            DynamicInstantiationSites = "{\"marca\":\"SITIOS\"}"
+        };
+
+        var deadCode = templates.Render("report_codigomuerto_prompt", facets)!;
+        Assert.Contains("GRUPOS-TIPOS", deadCode);
+        Assert.Contains("GRUPOS-CAMPOS", deadCode);
+        Assert.Contains("SITIOS", deadCode);
+        Assert.Contains("**dudoso por instanciación dinámica**", deadCode);
+        Assert.Contains("busca la factoría con `grep_search`", deadCode);
+        Assert.Contains("Dudosos por instanciación dinámica", templates.Render("report_codigomuerto_system", facets));
+
+        var smells = templates.Render("report_codesmells_prompt", facets)!;
+        Assert.Contains("GRUPOS-CAMPOS", smells);
+        Assert.DoesNotContain("GRUPOS-TIPOS", smells);
+        Assert.Contains("reflexión o serialización", smells);
+
+        foreach (var type in Enum.GetValues<ReportType>())
+        {
+            var system = templates.Render($"{AnalysisPipelineInput.GetTemplatePrefix(type)}_system", facets)!;
+            Assert.Contains("con `grep_search`", system);
+            Assert.Contains("Un grupo grande de candidatos con un patrón común es señal de uso dinámico", system);
+        }
     }
 }
 
@@ -675,6 +713,7 @@ public sealed class AuditorToolsTests
             var tools = a.GetType().GetProperty("Tools")!.GetValue(a) as IList<AITaskAgent.LLM.Tools.Abstractions.ITool>;
             Assert.NotNull(tools);
             Assert.Equal(AnalysisPipelineFactory.AuditorToolNames.Order(), tools.Select(t => t.Name).Order());
+            Assert.Contains(tools, t => t.Name == "grep_search");
         });
     }
 }

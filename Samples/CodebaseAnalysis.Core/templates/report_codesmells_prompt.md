@@ -24,6 +24,11 @@ Genera el **Informe de Auditoría de Code Smells y Mantenibilidad** para el proy
 {{ unread_fields }}
 ```
 
+- **Campos sin leer agrupados por un patrón común** del tipo que los declara o de su directorio (resumidos: patrón, recuento, tres ejemplos; no se repiten en la lista anterior). Un grupo grande suele ser de campos que se escriben o leen por reflexión o serialización (formularios, beans, DTO): compruébalo antes de tratarlos como estado inútil.
+```json
+{{ unread_field_groups }}
+```
+
 ---
 
 ### Metodología de Ejecución del Auditor:
