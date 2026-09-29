@@ -169,11 +169,16 @@ Mientras tanto se sigue con el código que no depende del LLM, por tandas:
   - sin prefijo de clave en los logs y `logs/` configurable;
   - aviso de Latin-1 en FileTools;
   - `[JdkFact]` que encuentre el JDK instalado.
-- **B. Coste y trazabilidad:**
-  - facetas en JSON compacto;
-  - precios y coste por ejecución;
-  - procedencia en `analysis-meta`;
-  - volcado de los límites de tiempo efectivos.
+- **B. Coste y trazabilidad — hecha el 2026-09-29** (detalle y tests en «Seguimiento» de la auditoría; Core 529 con JDK,
+  Web 113, framework 112 de 113 con el fallo conocido de `OutDir`, OpenAILLmService 80, Vitest 204). Toca el framework en lo
+  mínimo: el evento final de cada llamada lleva tokens de entrada y salida y coste. Clave nueva:
+  `LlmConfiguration:Providers:<p>:Models` (precios), a `null` en el sample hasta tener la tarifa del contrato:
+  - facetas en JSON compacto (un 21 % menos de caracteres en el grafo sintético);
+  - consumo y coste por ejecución y por auditor en `run.completed`, en el resumen de la CLI, en `reports/_run_meta.json` y
+    en `ProgressSummary`;
+  - procedencia en `analysis-meta` (modelo, servicio, SHA de plantillas, huella del grafo, filas de `enrichment_runs`,
+    fecha y versión);
+  - volcado de los límites de tiempo efectivos al arrancar el análisis y la web.
 - **C. Auditores:** `grep_search` y las capas 2-3 de (d), y `view_code_item` para Java.
 - **D. Streaming:** buffers perdidos sin `finish_reason` y `hasYieldedText` por choice.
 - **E. Evaluación:** validador determinista de informes.

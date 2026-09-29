@@ -9,7 +9,8 @@ namespace CodebaseAnalysis.Core.Reports;
 /// estado de la última ejecución que escribió en la carpeta, sea un análisis o una regeneración. Va en un fichero y no en
 /// el <c>analysis-meta</c> del resumen ejecutivo porque es de la ejecución y no de un informe: una regeneración sin síntesis
 /// no reescribe el <c>00</c>, y la síntesis no puede contar su propia llamada antes de escribirlo. No es un informe del
-/// catálogo, así que ni se lista ni se copia a <c>backups/</c>.
+/// catálogo, así que ni se lista ni se copia a <c>backups/</c>. En la web, tras una regeneración, <c>kind</c> es
+/// <c>regeneration</c> y <c>startedAt</c> y <c>usage</c> son de la ejecución entera, desde el análisis.
 /// </summary>
 public static class RunMetaFile
 {

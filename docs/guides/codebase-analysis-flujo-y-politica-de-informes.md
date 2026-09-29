@@ -292,8 +292,15 @@ pide redactar el informe con lo reunido y señalar lo no verificado (`CORE/Steps
 `:143-155`, `CORE/AnalysisPipelineFactory.cs:229-232`). Un fallo del proveedor pasa al fallback del rol; un resultado
 con error no se escribe como informe (`CustomStatelessTemplateLlmStep.cs:79-83`). Antes de escribir, el paso quita un H1 que sea solo el nombre del
 fichero, lee la línea `analysis-meta` y, si el informe declara `critical` o es el de errores, lo recalcula desde la
-matriz de severidad y corrige la línea (`:104-110`, `:185-198`). El informe se escribe en disco en cuanto termina su
-auditor y se emite `report.written` (`:114-130`).
+matriz de severidad y corrige la línea (`:130-132`, `:243`). Después añade a esa línea la procedencia del informe
+(`:139`, recomendación 12 de la auditoría): `generated_at`, `model` y `provider` del rol, `response_model` si el
+servicio dice que respondió otro, `system_sha` y `prompt_sha` (SHA-256 corto de cada plantilla renderizada sin datos,
+con las inclusiones resueltas), `graph` (la huella de indexación de cbm), `enrichment` (las filas `ok` de
+`enrichment_runs` con esa huella) y `app` (`CORE/Support/ReportProvenance.cs:51-120`). La huella y las filas las deja
+en el contexto el paso de facetas (`CORE/Steps/SqlFacetExtractorStep.cs:65`). Los lectores de la línea parten por `;` y
+por el primer `=` e ignoran las claves que no conocen, así que el semáforo y `critical` no cambian
+(`ReportProvenanceTests.cs`). El informe se escribe en disco en cuanto termina su auditor y se emite `report.written`
+(`:153-154`).
 
 ## 1.8 Síntesis ejecutiva
 
@@ -302,15 +309,17 @@ disco (marcados como de una ejecución anterior) y los fallidos con su motivo (`
 De cada informe manda al rol `ExecutiveSynthesizer` el semáforo, el recuento `critical` si lo hay, un fragmento de
 resumen y hasta 30 encabezados `##`/`###` (`:305-362`), junto con las métricas globales de las facetas (`:177-202`). Los
 defectos críticos son los del informe de errores, o «no disponible» si no hay dato (`:217-224`). Si el modelo no
-devuelve texto, escribe un resumen de respaldo sin LLM (`:246-249`). Después reincorpora al grafo los informes del
-catálogo que estaban marcados (`:262-270`).
+devuelve texto, escribe un resumen de respaldo sin LLM (`:249-253`). Antes de escribir el `00` le añade la misma
+procedencia que a los informes, con `fallback=true` si el resumen es el de respaldo (`:257-260`). Después reincorpora al
+grafo los informes del catálogo que estaban marcados.
 
 ## 1.9 Informes y demás ficheros en disco
 
 | Ruta | Quién escribe | Contenido |
 |---|---|---|
-| `reports/01…09_*.md` | cada auditor al terminar | informe con la línea `<!-- analysis-meta: health=…; critical=… -->` al final |
-| `reports/00_resumen_ejecutivo.md` | síntesis | resumen y dashboard |
+| `reports/01…09_*.md` | cada auditor al terminar | informe con la línea `<!-- analysis-meta: health=…; critical=…; generated_at=…; model=…; … -->` al final, con la procedencia del apartado 1.7 |
+| `reports/00_resumen_ejecutivo.md` | síntesis | resumen y dashboard, con la misma línea de procedencia |
+| `reports/_run_meta.json` | anfitrión (CLI o web) al terminar | consumo LLM de la ejecución: llamadas, tokens de entrada y salida y coste, en total y por paso (apartado 1.13) |
 | `reports/custom/*.md` | chat (`create_report`) | informes propios; el pipeline no los toca ni los lee |
 | `.codebase/codebase.db` | detección, ingestas, enriquecedores | copia del grafo con `enrichment_runs` |
 | `.codebase/enrichment/java/` | analizador Java | `request.txt`, `java-analysis.jsonl` (1003 MB en el repositorio objetivo con las referencias y 744 MB sin ellas; no se borra) y `java-analyzer.log` |
@@ -330,6 +339,14 @@ preparación de una regeneración, 5 minutos fijos. Por debajo, el proveedor Ope
 600 s y cada silencio de streaming a los 120 s, configurables por proveedor o rol
 (`OpenAILLmService/OpenAILlmService.cs:145-158`); con los valores por defecto un intento colgado consume 10 de los 15
 minutos del auditor.
+
+Al arrancar cada análisis o regeneración se vuelcan los límites efectivos, una línea por grupo:
+`CodebaseAnalysis:Timeouts` con los dos fijos, `JavaAnalyzer`, los plazos LLM de los roles del análisis agrupados por
+valor y con su origen (`[rol]`, `[proveedor]` o `[servicio]`) y `AITaskAgent:Timeouts`, el del framework que no aparece
+en ningún JSON (`CORE/Hosting/EffectiveLimits.cs:23-39`, `CORE/Hosting/AnalysisRunner.cs:102`). Van por el reporter, así
+que la web los guarda en el log de la ejecución y en su registro de eventos; la CLI los escribe también en su fichero de
+log (`Samples/CodebaseAnalysisPipeline/Program.cs:173`). La web vuelca al arrancar los del chat: el turno y los plazos de su rol
+(`WEB/Hosting/AnalysisHost.cs:27`).
 
 ## 1.11 La web
 
@@ -395,7 +412,18 @@ compartida, y paga en tokens el código que lee, aunque otro auditor ya lo haya 
 plantilla de sistema y la de prompt de cada auditor incluían las dos `_common_rules.md`, y cada uno recibía esas reglas
 dos veces; ahora solo las incluye el prompt (corregido, apartado 2.13). La única medición de tokens es de la ejecución del 27/09 sobre TestAgenteAnalisis (262 nodos): unos 545 000 tokens entre
 los nueve auditores y la síntesis, 231 535 de ellos en el de arquitectura, y el volumen lo explica el reenvío del
-historial en cada iteración de tools (`docs/auditoria/2026-09-29-auditoria-app-analisis-codigo.md:289-296`).
+historial en cada iteración de tools (`docs/auditoria/2026-09-29-auditoria-app-analisis-codigo.md:289-296`). Las
+facetas van en JSON compacto desde la tanda B: la sangría era el 21 % de sus caracteres en el grafo sintético de los
+tests (`CORE/Steps/SqlFacetExtractorStep.cs:856`).
+
+Desde la tanda B cada ejecución cuenta su consumo. El evento final de cada llamada lleva los tokens de entrada y de
+salida y el coste (`Framework/Observability/Events/LlmResponseEvent.cs:43-52`, `Framework/LLM/Steps/BaseLlmStep.LlmInvocation.cs:710`,
+`:794`), y `LlmUsageTracker` los suma por paso y en total (`CORE/Progress/LlmUsageTracker.cs:89-129`). La web lo manda en
+el `usage` de `run.completed` y la SPA lo enseña en el resumen (`WEB/Analysis/AnalysisRunManager.cs:391`, `:481`), la
+CLI lo imprime al terminar (`Samples/CodebaseAnalysisPipeline/Program.cs:213`, `:222`), y los dos lo escriben en `reports/_run_meta.json`
+(`CORE/Reports/RunMetaFile.cs:46`). El coste sale de los precios de `LlmConfiguration:Providers:<p>:Models`
+(`CORE/Hosting/LlmRoleFactory.cs:99`), que en el sample están a `null`: sin la tarifa del contrato de Azure el coste es
+`null`, no 0.
 
 ## 1.14 Mediciones del análisis completo (prueba M, 2026-09-29)
 
@@ -415,7 +443,7 @@ en `C:\Users\juan.rozano\m\Online`.
 | Tamaño del primer prompt de cada auditor | log `--debug` | entre 18 000 y 38 000 tokens, unos 234 000 entre los nueve |
 | Tiempo por auditor y del paralelo | eventos de `Auditor_<tipo>` | pendiente: exige LLM |
 | Tiempo de la síntesis | log | pendiente: exige LLM |
-| Tokens de prompt y de respuesta por auditor, con las iteraciones de tools | eventos `tokens`/`costUsd` o log `--debug` | pendiente: exige LLM; el coste, además, sale null porque no hay precios configurados |
+| Tokens de prompt y de respuesta por auditor, con las iteraciones de tools | `bySource` de `reports/_run_meta.json` o `usage` de `run.completed` (apartado 1.13) | pendiente: exige LLM; el coste, además, sale null hasta configurar los precios del contrato |
 | Iteraciones de tools por auditor y auditores que agotaron el tope | log («agotó su tope de herramientas») | pendiente: exige LLM |
 | Ficheros y líneas leídos por más de un auditor | argumentos de `view_file` y `graph_search` con `include_code` | pendiente: exige LLM |
 | Calidad por informe: hallazgos confirmados, falsos positivos y ausencias | revisión manual contra el código | pendiente: exige LLM |

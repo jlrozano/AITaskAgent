@@ -664,3 +664,63 @@ nada (`FileTools/Tools/FileToolsHelper.cs:33`, `ReplaceFileContentTool.cs:157`, 
 **Tests con JDK (§4), corregido.** `[JdkFact]` busca además `JavaAnalyzer:JdkPath` en los user secrets de la app y el primer
 JDK 17 o superior de `%LOCALAPPDATA%\Programs\jdk-*` (`CodebaseAnalysis.Core.Tests/Enrichment/JdkFactAttribute.cs:70,83`); en
 esta máquina ya no se omite ninguno sin la variable de entorno.
+
+**§4 (coste, procedencia y configuración) y recomendación 12 (tanda B, mismo día).** Suites al terminar: Core 529 con JDK
+(509 antes), Web 113 (112), framework 112 de 113 (107 de 108; el fallo es el conocido de `SampleConfigurationTests` con
+`OutDir` fuera del repositorio), OpenAILLmService 80, Vitest 204 (198) y `typecheck` limpio. Ninguna llamada real a un LLM.
+Los valores por defecto de tiempos del framework (recomendación 17) no se han tocado.
+
+**Facetas en JSON compacto, hecho.** `FacetJsonOptions` pasa a `WriteIndented = false` y conserva
+`UnsafeRelaxedJsonEscaping` (`CORE/Steps/SqlFacetExtractorStep.cs:856`), y la faceta de secretos, que se serializaba
+sangrada y escapando las tildes, usa las mismas opciones (`CORE/Support/HardcodedSecretScanner.cs:103`). Medido sobre el grafo
+sintético con el plugin Struts/JSP: 27 facetas no vacías, 21 122 caracteres compactas frente a 26 807 sangradas, un 21,2 % menos
+(`FacetExtractionTests.cs`, `The_facets_are_compact_json`, que además comprueba que cada faceta es su propia forma compacta).
+Ninguna plantilla depende del formato, porque todas envuelven la faceta en un bloque `json`, y ningún test comparaba texto
+sangrado. El ahorro sobre el repositorio grande no se ha medido; los `code_snippet` no se comprimen y pesan más allí.
+
+**Coste por ejecución, hecho, con los precios sin rellenar.** La premisa de partida no era exacta: `llm.response` llevaba
+`tokens` pero no `costUsd`; lo que llevaba `costUsd` era `step.completed`, que venía de sumar las iteraciones de tools con un
+`?? 0`, así que un modelo sin precio aparecía con coste 0 en cuanto había una iteración. Y el reparto entrada/salida no viajaba
+en ningún evento. Se ha tocado el framework en lo mínimo: el evento final de la opción principal lleva `PromptTokens`,
+`CompletionTokens` y `CostUsd` (`Framework/Observability/Events/LlmResponseEvent.cs:43-52`), también cuando la respuesta viene
+vacía, que es el caso caro de un modelo de razonamiento que gasta `MaxTokens` pensando (`Framework/LLM/Steps/BaseLlmStep.LlmInvocation.cs:794`);
+el coste acumulado queda null si ninguna iteración tiene precio; y el precio se busca también por el modelo pedido cuando el
+servicio responde con el nombre versionado, como hace Azure (`:825`). Tests: `Tests/LlmCallUsageEventTests.cs`. En la app,
+`LlmUsageTracker` suma llamadas, tokens y coste por paso y en total (`CORE/Progress/LlmUsageTracker.cs:89-129`); la web lo manda
+en el `usage` de `run.completed`, acumulado con las regeneraciones (`WEB/Analysis/AnalysisRunManager.cs:391`, `:481`), la CLI lo
+imprime al terminar, también si se cancela o falla (`Samples/CodebaseAnalysisPipeline/Program.cs:213`, `:222`), y los dos lo
+escriben en `reports/_run_meta.json` (`CORE/Reports/RunMetaFile.cs:46`). Se ha elegido un fichero y no el `analysis-meta` del
+`00` porque el consumo es de la ejecución: una regeneración sin síntesis no reescribe el `00` y la síntesis no puede contar su
+propia llamada antes de escribirlo. La SPA lo suma en vivo de los `llm.response` y lo enseña en `ProgressSummary`, con el
+coste solo si alguna llamada tiene precio (`ProgressSummary.test.tsx`, `runReducer.test.ts`). Los precios: el framework ya los
+admite en `LlmProvider.Models` (`LlmModelSettings`), pero la app construye sus proveedores desde `LlmConfiguration` y no los
+leía; ahora lee `LlmConfiguration:Providers:<p>:Models` con esa misma forma (`CORE/Hosting/LlmRoleFactory.cs:99`). El JSON del
+sample declara `gpt-5.4` con los precios a `null`, porque no se conoce la tarifa del contrato de Azure, y al arrancar se avisa de
+que no hay precio. Tests: `CodebaseAnalysis.Core.Tests/LlmUsageTests.cs` y `CodebaseAnalysisWeb.Tests/AnalysisEndpointsTests.cs`
+(`Run_completed_and_the_run_meta_file_carry_the_llm_usage`). Limitación: una respuesta con varias opciones solo cuenta el uso
+en la principal, y la app pide siempre una.
+
+**Recomendación 12, hecha.** Tras cada auditor y antes de escribir el `00`, el pipeline añade a la línea `analysis-meta`
+`generated_at`, `model` y `provider` del rol, `response_model` si el servicio dice que respondió otro, `system_sha` y `prompt_sha`,
+`graph` (la huella de `EnrichmentRuns.IndexFingerprintAsync`), `enrichment` (la última fila `ok` de cada enriquecedor con esa
+huella) y `app` (la `InformationalVersion`, con el commit en el que se compiló), y `fallback=true` en el `00` de respaldo
+(`CORE/Steps/CustomStatelessTemplateLlmStep.cs:139`, `CORE/Steps/ExecutiveSynthesizerStep.cs:257-260`,
+`CORE/Support/ReportProvenance.cs:51-120`). Los SHA son de cada plantilla renderizada sin datos: con las inclusiones resueltas y las
+variables vacías. El fichero crudo no cambia cuando cambia una inclusión, y el texto con las facetas cambia con cada grafo, que
+ya identifican `graph` y `enrichment`. `ReportMarkdown.SetMetaValues` sustituye las claves que el modelo haya escrito con esos
+nombres y neutraliza `;` y `-->` en los valores (`CORE/Support/ReportMarkdown.cs:115`). Lectores de la línea revisados:
+`SingleReportResult` (listado de la web, síntesis y semáforo), `SetCriticalInMeta`, `ReportWriter.KeepAnalysisMeta` (ediciones
+desde el chat) y el `MarkdownView` de la SPA, que la oculta; todos parten por `;` y por el primer `=` e ignoran las claves
+desconocidas, así que no ha habido que cambiar ninguno. Tests: `ReportProvenanceTests.cs` (cada lector, SHA que sigue a las
+inclusiones y no a los datos, todas las plantillas reales con SHA distinto, huella y filas), `OfflinePipelineTests.cs` (la línea
+de los diez ficheros del pipeline completo) y `MarkdownView.test.tsx`. Límite: una edición posterior desde el chat conserva la
+procedencia de la última generación; el cambio queda en el historial de versiones.
+
+**Volcado de límites efectivos (§4, «Configuración»), hecho.** Al arrancar cada análisis y cada regeneración, `AnalysisRunner`
+emite una línea por grupo: `CodebaseAnalysis:Timeouts` con los dos fijos de 5 min, `JavaAnalyzer`, los plazos LLM de los roles
+del análisis agrupados por valor y con su origen (`[rol]`, `[proveedor]` o `[servicio]`) y `AITaskAgent:Timeouts`
+(`CORE/Hosting/EffectiveLimits.cs:23-39`, `CORE/Hosting/AnalysisRunner.cs:102`). La web vuelca al arrancar los del chat
+(`WEB/Hosting/AnalysisHost.cs:27`). En la CLI los mensajes del reporter solo van a la consola, así que las líneas de límites se
+escriben además en el fichero de log con una propiedad que las excluye de la consola (`Samples/CodebaseAnalysisPipeline/Program.cs:173`);
+el resto de mensajes del pipeline sigue sin llegar al fichero de la CLI, como antes. Tests: `EffectiveLimitsTests.cs` y
+`OfflinePipelineTests.cs`. No se ha unificado la configuración de tiempos en una sección (recomendación 16).
