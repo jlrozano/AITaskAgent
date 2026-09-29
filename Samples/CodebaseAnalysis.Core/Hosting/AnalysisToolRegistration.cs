@@ -36,9 +36,22 @@ public static class AnalysisToolRegistration
         // pom.xml) o, si no declara ninguna, con Latin-1: las tildes de un repositorio ISO-8859-1 salían como U+FFFD (H-8).
         FileToolsConfiguration.DefaultEncoding = SourceEncoding.ResolveReadFallback(input.RepositoryPath, input.SourceDefaultEncoding);
         AvailableTools.Instance.Register(new ViewFileTool());
-        AvailableTools.Instance.Register(new ViewCodeItemTool());
+        // view_code_item fuera de C#: el rango de líneas del nodo del grafo (en Java, el de javac que escribe el analizador) y,
+        // sin grafo o sin nodo, el localizador por llaves para Java. Los .cs siguen con Roslyn.
+        AvailableTools.Instance.Register(new ViewCodeItemTool(
+            [new GraphCodeItemLocator(input.DatabasePath, input.RepositoryPath, fallback: new JavaCodeItemLocator())]));
 
-        // Búsqueda en el repositorio para el chat: localizar ficheros y líneas antes de abrirlos, en vez de adivinar rutas.
+        // grep_search no entra en la carpeta de la BD (copia, JSONL y logs del análisis) ni en la de informes: una búsqueda de
+        // un sufijo en el repositorio encontraba el informe anterior, que no es código.
+        FileToolsConfiguration.SearchExcludedDirectories =
+        [
+            .. new[] { Path.GetDirectoryName(input.DatabasePath), input.OutputReportsPath }
+                .Where(d => !string.IsNullOrWhiteSpace(d) && !IsRepositoryRoot(input.RepositoryPath, d!))
+                .Select(d => d!)
+        ];
+
+        // Búsqueda en el repositorio para el chat y los auditores (grep_search): localizar ficheros y líneas antes de
+        // abrirlos, en vez de adivinar rutas.
         AvailableTools.Instance.Register(new ListDirTool());
         AvailableTools.Instance.Register(new FindByNameTool());
         AvailableTools.Instance.Register(new GrepSearchTool());
@@ -59,4 +72,10 @@ public static class AnalysisToolRegistration
         AvailableTools.Instance.Register(new DescribeImageTool(knowledge));
         AvailableTools.Instance.Register(new SemanticSearchTool());
     }
+
+    /// <summary>Excluir la raíz dejaría la búsqueda vacía: una BD o unos informes en la raíz no se excluyen.</summary>
+    private static bool IsRepositoryRoot(string repositoryPath, string directory) =>
+        !string.IsNullOrWhiteSpace(repositoryPath)
+        && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)), StringComparison.OrdinalIgnoreCase);
 }

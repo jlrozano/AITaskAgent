@@ -240,14 +240,17 @@ public static class AnalysisPipelineFactory
         "y señala en él lo que no hayas podido verificar.";
 
     /// <summary>
-    /// Tools de cada auditor: el código (<c>view_file</c>, <c>view_code_item</c>), el grafo (<c>graph_search</c>, los vecinos de
-    /// un nodo con la procedencia de cada arista en <c>graph_neighbors</c>, y rutas, DI y atributos en <c>graph_domain</c>) y
-    /// la documentación aportada. <c>graph_map</c>, <c>graph_health</c> y <c>graph_flows</c> no están: ninguna plantilla las
-    /// usa. Cómo usar el grafo lo dice <c>templates/_graph_rules.md</c>.
+    /// Tools de cada auditor: el código (<c>view_file</c>, <c>view_code_item</c>), la búsqueda textual en el repositorio
+    /// (<c>grep_search</c>, para lo que el grafo no ve: nombres de clase en cadenas o en XML y factorías por reflexión), el
+    /// grafo (<c>graph_search</c>, los vecinos de un nodo con la procedencia de cada arista en <c>graph_neighbors</c>, y rutas,
+    /// DI y atributos en <c>graph_domain</c>) y la documentación aportada. <c>graph_map</c>, <c>graph_health</c> y
+    /// <c>graph_flows</c> no están: ninguna plantilla las usa; <c>find_by_name</c> y <c>list_dir</c> tampoco, porque
+    /// <c>grep_search</c> con <c>Includes</c> ya localiza ficheros. Cómo usar el grafo y la búsqueda lo dice
+    /// <c>templates/_graph_rules.md</c>.
     /// </summary>
     public static IReadOnlyList<string> AuditorToolNames { get; } =
     [
-        "view_file", "view_code_item", "graph_search", Tools.GraphNeighborsTool.ToolName, "graph_domain", Tools.ReadDocumentTool.ToolName
+        "view_file", "view_code_item", "grep_search", "graph_search", Tools.GraphNeighborsTool.ToolName, "graph_domain", Tools.ReadDocumentTool.ToolName
     ];
 
     private static IStep CreateReportStep(
