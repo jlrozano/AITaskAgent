@@ -92,6 +92,14 @@ con un LLM real ni sobre el grafo de `delta/Online`.
   tría leyendo el código.
 - (c) Medir en el análisis completo los tokens por auditor y cuánto código repiten entre ellos, antes de plantear
   exploración compartida, caché de prompts o tope de concurrencia.
+- (d) **Requisito del usuario (2026-09-29): el propio workflow tiene que hacer este tipo de razonamiento**, es decir,
+  detectar que un grupo de candidatos sigue un patrón de uso dinámico y verificarlo antes de afirmarlo. Propuesta en tres
+  capas genéricas: faceta de puntos de instanciación dinámica y de clases nombradas en XML; candidatos agrupados por
+  patrón de paquete o sufijo; y una regla en la plantilla del auditor, que además recibe `grep_search`. Pendiente del OK
+  para planificarlo. Caso que lo motivó, instanciación por reflexión: en `delta/Online`, unos 400 de los 817 `ZeroFaninClasses` son DAO creados con
+  `Class.forName` a partir de un nombre compuesto (`UtilidadesDAO.java:202-206` de la copia). La propuesta genérica es
+  que el analizador detecte `Class.forName` y `newInstance` con argumento no literal y que la faceta marque como dudosos
+  los tipos de los paquetes afectados. Filtrar la factoría concreta haría la app específica de un repo.
 
 **Corregido tras la prueba M (2026-09-29, hecho).** Discrepancias que encontró la guía
 `docs/guides/codebase-analysis-flujo-y-politica-de-informes.md` (sección 2.13, donde quedan como corregidas):
