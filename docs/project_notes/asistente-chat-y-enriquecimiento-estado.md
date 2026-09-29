@@ -111,7 +111,8 @@ Además, en la misma tanda:
   casan, y guarda los dos recuentos en `details.cbm_match`.
 - La consola de la CLI lleva hora y origen, paso o auditor, también en «Executing Tool».
 - El índice por label de `GraphSchema` tiene nombre propio: el de antes chocaba con el `idx_nodes_label (project, label)`
-  de cbm y no se creaba. Falta medir el efecto en las facetas sobre la BD real, que tardaron 51,5 s.
+  de cbm y no se creaba. Medido después sobre la BD real con referencias: 45,9 s con él y 46,7 s sin él, así que no es
+  lo que cuesta; 24 s son de `PrepareDerivedMetricsAsync`.
 
 **Incidencias abiertas tras la prueba M:**
 - Azure no tiene deployments en el recurso (`404 DeploymentNotFound` en los nueve auditores): bloquea todo lo de la
@@ -120,8 +121,26 @@ Además, en la misma tanda:
   temporal larga, cbm no indexó los ficheros que llegaban al MAX_PATH, y el analizador Java encontró 1364 ficheros más de
   los que tenía cbm.
 - `LlmProvider.CalculateCost` devuelve null porque no hay precios configurados, así que `costUsd` no sirve para medir.
+- La copia `C:\Users\juan.rozano\m\Online` se conserva para repetir la prueba con LLM; el proyecto de cbm se borró al
+  cerrar la tarea 4 y hay que reindexar antes.
+- Falsos positivos de `ZeroFaninClasses` en el repo objetivo: 400 de 817 son DAO que `UtilidadesDAO` instancia por
+  nombre compuesto. Descartarlos exige saber de esa factoría, que es del proyecto y no genérica; sin decidir.
 
 Matiz para la propuesta (a): en Java, 06 y 09 comparten menos evidencia de la que se suponía.
+
+**Hecho el 2026-09-29: referencias de tipos y campos** (`docs/plans/2026-09-29-referencias-tipos-campos-plan.md`, los 7
+criterios cumplidos). El grafo Java sabe dónde se declara lo que usa cada método:
+- `USES_TYPE` de método, campo o tipo a tipo, con `lines`, `count` y `contexts`, y `READS`/`WRITES` a campos, que
+  sustituyen las `USAGE` de cbm en los `.java`; los campos casan con el `Field` de cbm o se crean.
+- `graph_neighbors` las incluye por defecto y filtra por `line`; el `fan_in` de los tipos cuenta las `USES_TYPE`;
+  faceta nueva `UnreadFields` para 02 y 03, y `ZeroFaninClasses` sin el requisito del constructor declarado y sin los
+  tipos que Struts instancia por reflexión.
+- Sobre `C:\Users\juan.rozano\m\Online`: 253 753 `USES_TYPE`, 121 659 `READS` y 56 250 `WRITES`; el 99,996 % de las
+  referencias del proyecto resueltas; el 95,85 % de los campos casados; dos pasadas idénticas.
+- Tiempo del paso, 1,39 veces el de la versión sin referencias (mediana 166,6 s frente a 119,4 s en 6 pares alternos,
+  con la máquina cargada; 1,07 en el par más tranquilo), y JSONL de 1003 MB (1,35 veces). Facetas en 45,9 s.
+- `ZeroFaninClasses` da 817 tipos, y 400 son DAO `*Oracle*Impl` que la factoría instancia por `Class.forName`: falsos
+  positivos. `UnreadFields` da 154 campos y los 5 revisados son verdaderos.
 
 ## Pendiente (en orden)
 
