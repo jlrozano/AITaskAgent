@@ -706,7 +706,8 @@ a.btn--primary {
 
 .summary {
   display: grid;
-  grid-template-columns: minmax(180px, 1.3fr) repeat(4, minmax(80px, auto)) minmax(200px, 2fr);
+  /* --summary-cells: celdas entre el estado y el progreso (4, o 5-6 con el consumo LLM); lo fija ProgressSummary. */
+  grid-template-columns: minmax(180px, 1.3fr) repeat(var(--summary-cells, 4), minmax(80px, auto)) minmax(200px, 2fr);
   align-items: end;
   gap: 18px;
   padding: 12px 16px;
@@ -738,6 +739,12 @@ a.btn--primary {
 }
 .summary__cell .num {
   font-size: var(--fs-l);
+}
+.summary__detail {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
 }
 .live-dot {
   display: inline-flex;

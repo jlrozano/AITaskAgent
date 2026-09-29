@@ -201,6 +201,8 @@ public sealed class FakeAnalysisWorkflow : IAnalysisWorkflow
             Content = string.Empty,
             FinishReason = FinishReason.ToolCalls,
             TokensUsed = 900,
+            PromptTokens = 800,
+            CompletionTokens = 100,
             Model = "fake-model",
             ToolCalls =
             [

@@ -1,9 +1,11 @@
 using AITaskAgent.Configuration;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.LLM.Tools.Implementation;
+using AITaskAgent.Observability;
 using CodebaseAnalysis.Core.Hosting;
 using CodebaseAnalysis.Core.Models;
 using CodebaseAnalysis.Core.Progress;
+using CodebaseAnalysis.Core.Reports;
 using CodebaseAnalysis.Core.Support;
 using McpIntegration.Configuration;
 using McpIntegration.Extensions;
@@ -148,11 +150,22 @@ internal static class Program
         };
         Console.CancelKeyPress += onCancelKey;
 
+        // Un canal solo para contar el consumo LLM de cada llamada (LlmUsageTracker): los mensajes siguen yendo a la consola
+        // por el reporter, y el canal no registra nada (LogLevel.None).
+        var usageTracker = new LlmUsageTracker();
+        var usageChannel = new EventChannel(LogLevel.None, serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<EventChannel>());
+        var usageSubscription = usageChannel.Subscribe((evt, _) =>
+        {
+            usageTracker.Observe(evt);
+            return Task.CompletedTask;
+        });
+        var startedAt = DateTimeOffset.UtcNow;
+
         IStepResult? finalResult = null;
         try
         {
             finalResult = await AnalysisRunner.RunAsync(
-                input, roles, serviceProvider, eventChannel: null, ConsoleAnalysisReporter.Instance, cancellation.Token);
+                input, roles, serviceProvider, usageChannel, ConsoleAnalysisReporter.Instance, cancellation.Token);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -160,6 +173,21 @@ internal static class Program
         finally
         {
             Console.CancelKeyPress -= onCancelKey;
+            // Cerrar el canal espera a que el suscriptor haya visto todos los eventos.
+            await usageChannel.DisposeAsync();
+            usageSubscription.Dispose();
+        }
+
+        // Consumo de la ejecución en reports/_run_meta.json, también si se cancela o falla (lo gastado se gastó).
+        var usage = usageTracker.Snapshot();
+        var runStatus = cancellation.IsCancellationRequested ? "cancelled"
+            : finalResult is AnalysisPipelineFinalResult { HasError: false, Success: true } done
+                ? done.FailedReports.Count > 0 ? "completed_with_failures" : "succeeded"
+                : "failed";
+        if (RunMetaFile.TryWrite(input.OutputReportsPath,
+                RunMetaFile.Build(RunMetaFile.KindAnalysis, runId: null, runStatus, startedAt, DateTimeOffset.UtcNow, usage)) is { } metaWarning)
+        {
+            Console.WriteLine(metaWarning);
         }
 
         // Regla del runner web: la cancelación se decide por el token, no por el tipo de resultado.
@@ -167,6 +195,7 @@ internal static class Program
         {
             Console.WriteLine();
             Console.WriteLine("⚠️ Análisis cancelado por el usuario. Los informes escritos hasta ahora se conservan.");
+            PrintUsage(usage);
             Environment.ExitCode = 130;
             return;
         }
@@ -175,6 +204,7 @@ internal static class Program
         Console.WriteLine("══════════════════════════════════════════════════════════════════════════════");
         Console.WriteLine("                       RESUMEN DE EJECUCIÓN DEL PIPELINE                       ");
         Console.WriteLine("══════════════════════════════════════════════════════════════════════════════");
+        PrintUsage(usage);
 
         if (finalResult is AnalysisPipelineFinalResult res && !res.HasError && res.Success)
         {
@@ -218,5 +248,16 @@ internal static class Program
             Console.WriteLine("❌ Proceso terminado con errores.");
             Environment.ExitCode = 1;
         }
+    }
+
+    /// <summary>Consumo LLM de la ejecución: el total y una línea por paso que llamó al modelo (auditores, síntesis, fallback).</summary>
+    private static void PrintUsage(LlmUsageSummary usage)
+    {
+        Console.WriteLine($"💰 Consumo LLM: {usage.Total.Describe()}");
+        foreach (var source in usage.BySource)
+        {
+            Console.WriteLine($"   • {source.Source}: {source.Describe()}");
+        }
+        Console.WriteLine($"   (detalle en {RunMetaFile.FileName}, en la carpeta de informes)");
     }
 }

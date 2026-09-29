@@ -76,7 +76,8 @@ public static class LlmRoleFactory
                         // Plazo por intento y de inactividad del streaming; sin la clave, los del servicio (10 y 2 min).
                         RequestTimeoutSeconds = section.GetValue<int?>("Inference:RequestTimeoutSeconds"),
                         StreamingInactivityTimeoutSeconds = section.GetValue<int?>("Inference:StreamingInactivityTimeoutSeconds")
-                    }
+                    },
+                    Models = ReadModelPrices(section, log)
                 },
                 model);
         }
@@ -87,6 +88,44 @@ public static class LlmRoleFactory
         }
 
         return providers;
+    }
+
+    /// <summary>
+    /// Precios por millón de tokens de <c>LlmConfiguration:Providers:&lt;p&gt;:Models</c>, con la forma de
+    /// <see cref="LlmModelSettings"/> del framework (<c>Name</c>, <c>InputPricePerMillion</c>, <c>OutputPricePerMillion</c>), que
+    /// es lo que lee <see cref="LlmProvider.CalculateCost"/>. Una entrada sin los dos precios no cuenta: el coste de ese modelo
+    /// queda en null y no en 0, que parecería gratis. <c>Name</c> es el nombre del modelo del rol (en Azure, el despliegue).
+    /// </summary>
+    internal static List<LlmModelSettings> ReadModelPrices(IConfigurationSection provider, Action<string> log)
+    {
+        var models = new List<LlmModelSettings>();
+        var unpriced = new List<string>();
+        foreach (var entry in provider.GetSection("Models").GetChildren())
+        {
+            var name = Value(entry["Name"]);
+            if (name == null)
+                continue;
+
+            var input = entry.GetValue<decimal?>("InputPricePerMillion");
+            var output = entry.GetValue<decimal?>("OutputPricePerMillion");
+            if (input is decimal i && output is decimal o && i >= 0 && o >= 0)
+                models.Add(new LlmModelSettings(name, i, o, new LlmInferenceSettings()));
+            else
+                unpriced.Add(name);
+        }
+
+        if (models.Count > 0)
+        {
+            log($"💲 Precios de '{provider.Key}' (USD por millón de tokens, entrada/salida): " +
+                string.Join(", ", models.Select(m => FormattableString.Invariant($"{m.Name} {m.InputPricePerMillion}/{m.OutputPricePerMillion}"))));
+        }
+        if (unpriced.Count > 0)
+        {
+            log($"💲 Sin precio en '{provider.Key}' para {string.Join(", ", unpriced)}: su coste no se calcula " +
+                "(rellena InputPricePerMillion y OutputPricePerMillion en LlmConfiguration:Providers:<proveedor>:Models).");
+        }
+
+        return models;
     }
 
     // Una ${VARIABLE} que no existe queda literal tras la expansión: cuenta como ausente.

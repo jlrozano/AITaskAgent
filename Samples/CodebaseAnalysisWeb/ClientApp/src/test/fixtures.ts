@@ -151,6 +151,9 @@ export const successfulRun: AnalysisEventDto[] = build([
   ev('llm.response', 'Auditor_CodeSmells', 'reports', {
     finishReason: 'ToolCalls',
     tokens: 900,
+    promptTokens: 800,
+    completionTokens: 100,
+    costUsd: null,
     model: 'gpt-5.4',
     contentLength: 0,
     toolCalls: [
@@ -221,6 +224,17 @@ export const successfulRun: AnalysisEventDto[] = build([
     failedReports: [],
     executiveReportPath: 'C:\\repos\\miapp\\reports\\00_resumen_ejecutivo.md',
     error: null,
+    usage: {
+      calls: 1,
+      promptTokens: 800,
+      completionTokens: 100,
+      totalTokens: 900,
+      costUsd: null,
+      unpricedCalls: 1,
+      bySource: [
+        { source: 'Auditor_CodeSmells', report: 'CodeSmells', calls: 1, promptTokens: 800, completionTokens: 100, totalTokens: 900, costUsd: null, unpricedCalls: 1 },
+      ],
+    },
   }, { level: 'success' }),
 ]);
 

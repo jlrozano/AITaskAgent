@@ -5,6 +5,7 @@ using AITaskAgent.Observability;
 using CodebaseAnalysis.Core.Hosting;
 using CodebaseAnalysis.Core.Models;
 using CodebaseAnalysis.Core.Progress;
+using CodebaseAnalysis.Core.Reports;
 using CodebaseAnalysisWeb.Api;
 using CodebaseAnalysisWeb.Workspace;
 using Serilog.Context;
@@ -387,6 +388,7 @@ public sealed class AnalysisRunManager(
         var mapper = new AnalysisEventMapper(run.RunId);
         using var subscription = channel.Subscribe((evt, _) =>
         {
+            run.Usage.Observe(evt);
             var dto = mapper.Map(evt);
             if (dto != null)
             {
@@ -421,7 +423,7 @@ public sealed class AnalysisRunManager(
     }
 
     /// <summary>
-    /// Cierra la ejecución en este orden: estado final, <c>run.completed</c> y cierre del log.Un cliente que
+    /// Cierra la ejecución en este orden: <c>_run_meta.json</c>, estado final, <c>run.completed</c> y cierre del log. Un cliente que
     /// recibe <c>run.completed</c> y pide <c>/api/analysis/current</c> ya no la ve en curso, y ni un fallo al
     /// añadir el evento deja la ejecución en <c>running</c> ni el SSE abierto.
     /// </summary>
@@ -430,7 +432,19 @@ public sealed class AnalysisRunManager(
     {
         try
         {
-            run.Finish(status, failedReports, error, clock.GetUtcNow());
+            // Antes del estado final: quien ve la ejecución terminada ya encuentra el fichero, y entre el estado final y el
+            // run.completed no se hace nada lento. Tras una regeneración describe la ejecución entera, desde el análisis, con
+            // el consumo acumulado, igual que el usage del evento.
+            var finishedAt = clock.GetUtcNow();
+            var usage = run.Usage.Snapshot();
+            if (RunMetaFile.TryWrite(run.Input.OutputReportsPath, RunMetaFile.Build(
+                    regeneration ? RunMetaFile.KindRegeneration : RunMetaFile.KindAnalysis, run.RunId, status,
+                    run.StartedAt, finishedAt, usage)) is { } metaWarning)
+            {
+                _logger.LogWarning("{Warning}", metaWarning);
+            }
+
+            run.Finish(status, failedReports, error, finishedAt);
 
             var exitCode = status == RunStatuses.Succeeded ? 0 : 1;
             run.EventLog.Append(new AnalysisEventDto
@@ -462,11 +476,14 @@ public sealed class AnalysisRunManager(
                     ["durationMs"] = durationMs,
                     ["failedReports"] = failedReports,
                     ["executiveReportPath"] = string.IsNullOrEmpty(executiveReportPath) ? null : executiveReportPath,
-                    ["error"] = error
+                    ["error"] = error,
+                    // Acumulado de la ejecución y sus regeneraciones (AnalysisRun.Usage).
+                    ["usage"] = usage.ToData()
                 }
             });
 
             _logger.LogInformation("Análisis {RunId} terminado: {Status} en {Seconds:F1} s", run.RunId, status, durationMs / 1000.0);
+            _logger.LogInformation("Análisis {RunId}, consumo LLM: {Usage}", run.RunId, usage.Total.Describe());
         }
         catch (Exception ex)
         {

@@ -40,6 +40,13 @@ public sealed class AnalysisRun
     public string LogsPath { get; }
     public DateTimeOffset StartedAt { get; }
     public AnalysisEventLog EventLog { get; }
+
+    /// <summary>
+    /// Consumo LLM de la ejecución y de sus regeneraciones, acumulado: el <c>usage</c> de cada <c>run.completed</c> es el total
+    /// hasta ese momento, igual que el que suma la SPA de los <c>llm.response</c> del mismo registro.
+    /// </summary>
+    public CodebaseAnalysis.Core.Progress.LlmUsageTracker Usage { get; } = new();
+
     /// <summary>Cancelación de la ejecución en curso; la regeneración estrena una, porque la anterior puede estar cancelada.</summary>
     public CancellationTokenSource Cancellation => Volatile.Read(ref _cancellation);
 

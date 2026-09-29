@@ -1,6 +1,7 @@
+import type { CSSProperties } from 'react';
 import type { RunStatus } from '../api/types';
 import type { SseConnectionStatus } from '../api/sse';
-import { formatDuration, formatTime } from '../format';
+import { formatCost, formatDuration, formatNumber, formatTime } from '../format';
 import { progressOf, type RunState } from '../state/runReducer';
 
 export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
@@ -33,9 +34,18 @@ export function ProgressSummary({ state, connection, now }: Props) {
   const elapsed = state.durationMs ?? (Number.isFinite(started) ? (Number.isFinite(finished) ? finished : now) - started : null);
   const percent = Math.round(ratio * 100);
   const status = state.status;
+  // Consumo LLM: tokens siempre que haya llamadas; el coste solo si alguna tiene precio (sin precios no es 0, es desconocido).
+  const usage = state.usage;
+  const usageDetail = usage
+    ? `${formatNumber(usage.promptTokens)} de entrada · ${formatNumber(usage.completionTokens)} de salida · ${formatNumber(usage.calls)} ${usage.calls === 1 ? 'llamada' : 'llamadas'}`
+    : '';
 
   return (
-    <section className={`summary summary--${status ?? 'none'}`} aria-label="Resumen de la ejecución">
+    <section
+      className={`summary summary--${status ?? 'none'}`}
+      aria-label="Resumen de la ejecución"
+      style={{ '--summary-cells': 4 + (usage ? 1 : 0) + (usage?.costUsd != null ? 1 : 0) } as CSSProperties}
+    >
       <div className="summary__status">
         <span className="summary__label">Estado</span>
         <strong aria-live="polite">{status ? RUN_STATUS_LABELS[status] : '—'}</strong>
@@ -59,6 +69,22 @@ export function ProgressSummary({ state, connection, now }: Props) {
         <span className="summary__label">Errores</span>
         <span className={`num${state.errors > 0 ? ' text-error' : ''}`}>{state.errors}</span>
       </div>
+      {usage && (
+        <div className="summary__cell">
+          <span className="summary__label">Tokens</span>
+          <span className="num">{formatNumber(usage.totalTokens)}</span>
+          <span className="summary__detail">{usageDetail}</span>
+        </div>
+      )}
+      {usage && usage.costUsd !== null && (
+        <div className="summary__cell">
+          <span className="summary__label">Coste</span>
+          <span className="num">
+            {formatCost(usage.costUsd)}
+            {usage.unpricedCalls > 0 ? ' (mínimo)' : ''}
+          </span>
+        </div>
+      )}
       <div className="summary__progress">
         <span className="summary__label" id="progress-label">
           Progreso · {done}/{total}

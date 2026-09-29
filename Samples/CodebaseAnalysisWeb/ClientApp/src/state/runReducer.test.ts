@@ -13,6 +13,36 @@ const upTo = (type: string, occurrence = 1) => {
   return successfulRun.slice(0, index + 1);
 };
 
+describe('runReducer: consumo LLM', () => {
+  it('suma en vivo los llm.response con reparto de tokens y run.completed lo sustituye por el total del servidor', () => {
+    const live = replay(upTo('llm.response'));
+    expect(live.usage).toEqual({ calls: 1, promptTokens: 800, completionTokens: 100, totalTokens: 900, costUsd: null, unpricedCalls: 1 });
+
+    const done = replay(successfulRun.map((e) =>
+      e.type === 'run.completed'
+        ? { ...e, data: { ...e.data, usage: { calls: 2, promptTokens: 1000, completionTokens: 150, totalTokens: 1150, costUsd: 0.25, unpricedCalls: 0 } } }
+        : e,
+    ));
+    expect(done.usage).toEqual({ calls: 2, promptTokens: 1000, completionTokens: 150, totalTokens: 1150, costUsd: 0.25, unpricedCalls: 0 });
+  });
+
+  it('un llm.response sin reparto no cuenta como llamada, y el coste solo existe si alguna llamada lo trae', () => {
+    const base = upTo('run.started');
+    const call = (seq: number, data: Record<string, unknown>): AnalysisEventDto => ({
+      ...successfulRun.find((e) => e.type === 'llm.response')!,
+      seq,
+      data: { finishReason: 'Stop', tokens: 10, toolCalls: [], ...data },
+    });
+    const state = replay([
+      ...base,
+      call(100, {}),
+      call(101, { promptTokens: 10, completionTokens: 5, costUsd: null }),
+      call(102, { promptTokens: 20, completionTokens: 5, costUsd: 0.5 }),
+    ]);
+    expect(state.usage).toEqual({ calls: 2, promptTokens: 30, completionTokens: 10, totalTokens: 40, costUsd: 0.5, unpricedCalls: 1 });
+  });
+});
+
 describe('runReducer', () => {
   it('parte de los auditores pedidos en RunStatusDto, todos en espera', () => {
     const state = createRunState(runningStatus);

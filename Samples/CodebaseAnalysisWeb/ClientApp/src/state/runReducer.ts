@@ -130,6 +130,20 @@ export interface LogEntry {
   durationMs: number | null;
 }
 
+/**
+ * Consumo LLM de la ejecución: se suma en vivo de los `llm.response` que traen el reparto de tokens (uno por llamada) y
+ * el `usage` de `run.completed`, que es el total del servidor (`LlmUsageTracker`), lo sustituye. `costUsd` es null si
+ * ninguna llamada tiene precio; con `unpricedCalls > 0` es un mínimo.
+ */
+export interface RunUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costUsd: number | null;
+  unpricedCalls: number;
+}
+
 export interface RunState {
   runId: string | null;
   repositoryPath: string | null;
@@ -161,6 +175,8 @@ export interface RunState {
   reportsVersion: number;
   /** Argumentos pendientes de emparejar por step: se toman del `llm.response` y se asignan en orden (§3.3). */
   pendingToolArgs: Record<string, { name: string; arguments: string }[]>;
+  /** Null hasta la primera llamada con reparto de tokens o el `usage` de un `run.completed`. */
+  usage: RunUsage | null;
 }
 
 export type RunAction =
@@ -225,6 +241,7 @@ export function createRunState(status: RunStatusDto | null): RunState {
     droppedUpToSeq: null,
     reportsVersion: 0,
     pendingToolArgs: {},
+    usage: null,
   };
   for (const report of state.requestedReports) addAuditor(state, report);
   return state;
@@ -274,6 +291,39 @@ export function isCancellationError(text: string | null | undefined): boolean {
 }
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
+
+/** Suma una llamada (`llm.response` con `promptTokens` o `completionTokens`) al consumo; null si el evento no trae reparto. */
+function addCall(usage: RunUsage | null, data: Record<string, unknown>): RunUsage | null {
+  const prompt = num(data.promptTokens);
+  const completion = num(data.completionTokens);
+  if (prompt === null && completion === null) return usage;
+  const cost = num(data.costUsd);
+  const current = usage ?? { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: null, unpricedCalls: 0 };
+  return {
+    calls: current.calls + 1,
+    promptTokens: current.promptTokens + (prompt ?? 0),
+    completionTokens: current.completionTokens + (completion ?? 0),
+    totalTokens: current.totalTokens + (prompt ?? 0) + (completion ?? 0),
+    costUsd: cost === null ? current.costUsd : (current.costUsd ?? 0) + cost,
+    unpricedCalls: current.unpricedCalls + (cost === null ? 1 : 0),
+  };
+}
+
+/** El `usage` de `run.completed`; null si no viene o no tiene la forma esperada. */
+function usageOf(value: unknown): RunUsage | null {
+  if (!value || typeof value !== 'object') return null;
+  const u = value as Record<string, unknown>;
+  const calls = num(u.calls);
+  if (calls === null) return null;
+  return {
+    calls,
+    promptTokens: num(u.promptTokens) ?? 0,
+    completionTokens: num(u.completionTokens) ?? 0,
+    totalTokens: num(u.totalTokens) ?? 0,
+    costUsd: num(u.costUsd),
+    unpricedCalls: num(u.unpricedCalls) ?? 0,
+  };
+}
 
 /** Argumento principal de una tool para mostrarlo en una línea (`path`, `name_pattern`, `file_name`...). */
 export function mainArgument(args: string | null | undefined): string | null {
@@ -447,6 +497,7 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
         }
         state.pendingToolArgs = { ...state.pendingToolArgs, [event.source]: queue };
       }
+      state.usage = addCall(state.usage, data);
       if (report) {
         updateAuditor(state, report, (a) => ({ finishReason: str(data.finishReason) ?? a.finishReason }));
       }
@@ -519,6 +570,8 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
         : state.failedReports;
       state.executiveReportPath = str(data.executiveReportPath);
       state.error = str(data.error);
+      // El total del servidor manda sobre lo sumado en vivo (que pierde lo descartado por log.truncated).
+      state.usage = usageOf(data.usage) ?? state.usage;
       const interrupted: PhaseStatus = status === 'cancelled' ? 'cancelled' : 'failed';
       for (const phase of PHASES) {
         const current = state.phases[phase].status;

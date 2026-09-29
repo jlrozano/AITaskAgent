@@ -144,6 +144,40 @@ public sealed class AnalysisEndpointsTests : IDisposable
         Assert.Equal("warning", retry.GetProperty("level").GetString());
     }
 
+    /// <summary>
+    /// El consumo LLM de la ejecución (auditoría §4): <c>run.completed</c> lo trae en <c>data.usage</c>, en total y por paso,
+    /// y queda también en <c>reports/_run_meta.json</c>. Sin precios configurados, el coste es null y no 0.
+    /// </summary>
+    [Fact]
+    public async Task Run_completed_and_the_run_meta_file_carry_the_llm_usage()
+    {
+        var client = await ClientWithWorkspaceAsync();
+        var runId = await client.StartRunAsync(new { reports = new[] { "smells", "di" } });
+        await client.WaitForRunEndAsync();
+
+        using var response = await client.GetSseAsync($"/api/analysis/{runId}/events?after=0");
+        var events = await response.ReadAllSseAsync();
+        var usage = events[^1].Data.GetProperty("data").GetProperty("usage");
+
+        Assert.Equal(1, usage.GetProperty("calls").GetInt32());
+        Assert.Equal(800, usage.GetProperty("promptTokens").GetInt64());
+        Assert.Equal(100, usage.GetProperty("completionTokens").GetInt64());
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, usage.GetProperty("costUsd").ValueKind);
+        Assert.Equal(1, usage.GetProperty("unpricedCalls").GetInt32());
+        var smells = Assert.Single(usage.GetProperty("bySource").EnumerateArray());
+        Assert.Equal(("Auditor_CodeSmells", "CodeSmells"), (smells.GetProperty("source").GetString(), smells.GetProperty("report").GetString()));
+
+        var llm = events.First(e => e.Data.GetProperty("type").GetString() == "llm.response").Data.GetProperty("data");
+        Assert.Equal(800, llm.GetProperty("promptTokens").GetInt32());
+
+        using var meta = System.Text.Json.JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(_repo.Path, "reports", CodebaseAnalysis.Core.Reports.RunMetaFile.FileName)));
+        Assert.Equal(runId, meta.RootElement.GetProperty("runId").GetString());
+        Assert.Equal("analysis", meta.RootElement.GetProperty("kind").GetString());
+        Assert.Equal("succeeded", meta.RootElement.GetProperty("status").GetString());
+        Assert.Equal(800, meta.RootElement.GetProperty("usage").GetProperty("promptTokens").GetInt64());
+    }
+
     [Fact]
     public async Task After_and_Last_Event_ID_return_only_later_events()
     {

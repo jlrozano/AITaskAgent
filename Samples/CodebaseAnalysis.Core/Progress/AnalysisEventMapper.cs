@@ -225,6 +225,10 @@ public sealed class AnalysisEventMapper(string runId)
             {
                 ["finishReason"] = lr.FinishReason.ToString(),
                 ["tokens"] = lr.TokensUsed,
+                // Los de esta llamada, solo en la opción principal: la SPA los suma para el consumo en vivo (LlmUsageTracker).
+                ["promptTokens"] = lr.PromptTokens,
+                ["completionTokens"] = lr.CompletionTokens,
+                ["costUsd"] = lr.CostUsd,
                 ["model"] = lr.Model,
                 ["contentLength"] = lr.Content?.Length ?? 0,
                 ["toolCalls"] = calls
