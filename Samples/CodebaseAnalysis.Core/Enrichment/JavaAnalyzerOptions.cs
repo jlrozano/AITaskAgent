@@ -47,6 +47,12 @@ public sealed record JavaAnalyzerOptions
     /// </summary>
     public int StepTimeoutSeconds { get; init; } = 3600;
 
+    /// <summary>
+    /// Conserva <c>java-analysis.jsonl</c> tras aplicarlo al grafo, para depurar el analizador. Por defecto se borra al
+    /// terminar bien la escritura: en el repositorio objetivo pesa del orden de 1 GB y no lo vuelve a leer nadie.
+    /// </summary>
+    public bool KeepIntermediate { get; init; }
+
     /// <summary>Margen para la escritura en el grafo y el plugin Struts/JSP que se espera entre los dos límites.</summary>
     public const int StepTimeoutMarginSeconds = 300;
 
@@ -71,7 +77,8 @@ public sealed record JavaAnalyzerOptions
             TestRoots = ReadList(section, nameof(TestRoots)) ?? defaults.TestRoots,
             DefaultEncoding = section[nameof(DefaultEncoding)] ?? defaults.DefaultEncoding,
             TimeoutSeconds = section.GetValue<int?>(nameof(TimeoutSeconds)) ?? defaults.TimeoutSeconds,
-            StepTimeoutSeconds = section.GetValue<int?>(nameof(StepTimeoutSeconds)) ?? defaults.StepTimeoutSeconds
+            StepTimeoutSeconds = section.GetValue<int?>(nameof(StepTimeoutSeconds)) ?? defaults.StepTimeoutSeconds,
+            KeepIntermediate = section.GetValue<bool?>(nameof(KeepIntermediate)) ?? defaults.KeepIntermediate
         };
     }
 

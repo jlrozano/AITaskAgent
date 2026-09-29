@@ -10,6 +10,7 @@ using AITaskAgent.Support.Template;
 using CodebaseAnalysis.Core.Models;
 using CodebaseAnalysis.Core.Progress;
 using CodebaseAnalysis.Core.Support;
+using System.Runtime.CompilerServices;
 
 namespace CodebaseAnalysis.Core.Steps;
 
@@ -27,10 +28,27 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
     /// </summary>
     public string? ToolLimitFinalAnswerPrompt { get; init; }
 
-    // Conversación de la invocación en curso: la que el intento con respuesta final reutiliza en vez de
-    // pedir una nueva. Cuando el fallback se decide, BaseLlmStep aún no ha restaurado el bookmark.
-    private ConversationContext? _conversation;
-    private bool _finalAnswerMode;
+    /// <summary>
+    /// Lo que una invocación recuerda entre intentos: la conversación, que el intento con respuesta final reutiliza en vez
+    /// de pedir una nueva (cuando el fallback se decide, BaseLlmStep aún no ha restaurado el bookmark), y si ya está en ese
+    /// intento. Vive por <see cref="PipelineContext"/> y no en campos del paso, como el estado de <see cref="BaseLlmStep"/>:
+    /// dos ejecuciones del mismo paso, o dos ramas de un <c>ParallelStep</c>, tienen cada una su contexto.
+    /// </summary>
+    private sealed class InvocationState
+    {
+        public ConversationContext? Conversation;
+        public bool FinalAnswerMode;
+    }
+
+    // Por identidad del contexto (PipelineContext es un record, y dos contextos iguales no son la misma ejecución) y sin
+    // retenerlo: una invocación que no llega a FinalizeAsync no deja nada vivo cuando su contexto se recoge. El estado de
+    // BaseLlmStep usa PipelineContext.StepState, que es interno del framework.
+    private readonly ConditionalWeakTable<PipelineContext, InvocationState> _invocations = new();
+
+    private InvocationState State(PipelineContext context) => _invocations.GetOrCreateValue(context);
+
+    private bool IsFinalAnswerMode(PipelineContext context) =>
+        _invocations.TryGetValue(context, out var state) && state.FinalAnswerMode;
 
     public CustomStatelessTemplateLlmStep(
         string name,
@@ -57,7 +75,7 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
         CancellationToken cancellationToken)
     {
         var targetInfo = !string.IsNullOrEmpty(OutputFileName) ? $" '{OutputFileName}'" : $" ({Name})";
-        context.Report(Name, AnalysisLogLevel.Info, _finalAnswerMode
+        context.Report(Name, AnalysisLogLevel.Info, IsFinalAnswerMode(context)
             ? $"🤖 [LLM] Redactando{targetInfo} sin más herramientas..."
             : $"🤖 [LLM] Iniciando auditoría{targetInfo}...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -66,7 +84,7 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
 
         sw.Stop();
 
-        if (CanAnswerWithoutTools(result))
+        if (CanAnswerWithoutTools(result, context))
         {
             // No es un fallo del informe: SwitchToNextFallback lo convierte en un último intento sin tools.
             context.Report(Name, AnalysisLogLevel.Warning,
@@ -134,47 +152,50 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
     }
 
     /// <summary>Tope de tools agotado por primera vez en esta invocación, con un mensaje de respuesta final configurado.</summary>
-    private bool CanAnswerWithoutTools(IStepResult result) =>
-        !_finalAnswerMode
-        && ToolLimitFinalAnswerPrompt != null
-        && _conversation != null
+    private bool CanAnswerWithoutTools(IStepResult result, PipelineContext context) =>
+        ToolLimitFinalAnswerPrompt != null
+        && _invocations.TryGetValue(context, out var state)
+        && !state.FinalAnswerMode
+        && state.Conversation != null
         && result.Error?.OriginalException is ToolIterationLimitExceededException;
 
     protected override bool SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)
     {
-        if (CanAnswerWithoutTools(error))
+        if (CanAnswerWithoutTools(error, context))
         {
             // Sin llamar a la base: no se restaura el bookmark y la conversación conserva la evidencia.
-            _finalAnswerMode = true;
+            State(context).FinalAnswerMode = true;
             return true;
         }
 
         // Ya en el intento sin tools, cambiar de proveedor le pasaría el tráfico de tools de otro motor:
         // el step falla como fallaría sin esta estrategia.
-        return !_finalAnswerMode && base.SwitchToNextFallback(error, context, attempt);
+        return !IsFinalAnswerMode(context) && base.SwitchToNextFallback(error, context, attempt);
     }
 
-    protected override ConversationContext GetConversationContext(PipelineContext context) =>
-        _finalAnswerMode && _conversation != null
-            ? _conversation
-            : _conversation = base.GetConversationContext(context);
+    protected override ConversationContext GetConversationContext(PipelineContext context)
+    {
+        var state = State(context);
+        return state.FinalAnswerMode && state.Conversation != null
+            ? state.Conversation
+            : state.Conversation = base.GetConversationContext(context);
+    }
 
     protected override Task<string?> BuildUserMessageAsync(IStepResult input, PipelineContext context) =>
-        _finalAnswerMode
+        IsFinalAnswerMode(context)
             ? Task.FromResult(ToolLimitFinalAnswerPrompt)
             : base.BuildUserMessageAsync(input, context);
 
     protected override LlmRequest ConfigureLlmRequest(LlmRequest request, PipelineContext context)
     {
         var configured = base.ConfigureLlmRequest(request, context);
-        return _finalAnswerMode ? configured with { Tools = null } : configured;
+        return IsFinalAnswerMode(context) ? configured with { Tools = null } : configured;
     }
 
     protected override async Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {
         await base.FinalizeAsync(result, context, cancellationToken);
-        _finalAnswerMode = false;
-        _conversation = null;
+        _invocations.Remove(context);
     }
 
     /// <summary>

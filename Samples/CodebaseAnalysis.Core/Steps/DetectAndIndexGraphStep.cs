@@ -38,11 +38,6 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
         context.Set(AnalysisContextKeys.CbmDbPath, input.DatabasePath);
         context.Set(AnalysisContextKeys.KnowledgePaths, new Knowledge.KnowledgePaths(input.RepositoryPath, input.OutputReportsPath));
 
-        if (input.ForceReindex)
-        {
-            BackupPreviousRun(input, context);
-        }
-
         var config = context.ServiceProvider.GetService<IConfiguration>();
         var (exePath, locatorError) = CodebaseMemoryLocator.Locate(config);
 
@@ -59,9 +54,29 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
                     $"Asegúrate de instalar 'codebase-memory-mcp' o configurar 'McpServers:CodebaseMemory:Command' en appsettings.analysis.json.");
             }
 
-            context.Report(StepName, AnalysisLogLevel.Info, $"🔍 Indexando repositorio '{input.RepositoryPath}' con CLI: {exePath}...");
-            await RunCodebaseMemoryIndexAsync(context, exePath, input.RepositoryPath, input.DatabasePath, cancellationToken);
-            await RemovePipelineArtifactsFromGraphAsync(context, input, cancellationToken);
+            // La versión va a la huella de la indexación (H-9): sin ella, una versión de cbm que derive los QN de otra forma
+            // solo se notaría por los nodos duplicados.
+            var cbmVersion = await CodebaseMemoryLocator.GetVersionAsync(exePath, cancellationToken);
+
+            // ForceReindex no destruye antes de construir (H-11): lo anterior sigue en su sitio hasta que la indexación
+            // nueva termina, y si falla o se cancela se restaura desde la copia.
+            var previous = input.ForceReindex ? BackupPreviousRun(input, context) : null;
+
+            context.Report(StepName, AnalysisLogLevel.Info,
+                $"🔍 Indexando repositorio '{input.RepositoryPath}' con CLI: {exePath} ({(cbmVersion != null ? $"versión {cbmVersion}" : "versión desconocida")})...");
+            try
+            {
+                await RunCodebaseMemoryIndexAsync(context, exePath, input.RepositoryPath, input.DatabasePath, cancellationToken);
+                await RecordCbmVersionAsync(context, input.DatabasePath, cbmVersion, cancellationToken);
+                await RemovePipelineArtifactsFromGraphAsync(context, input, cancellationToken);
+            }
+            catch (Exception) when (previous != null)
+            {
+                previous.Restore(context);
+                throw;
+            }
+
+            previous?.DiscardSuperseded(context);
         }
         else
         {
@@ -153,18 +168,29 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
         return retired;
     }
 
+    /// <summary>Nombre de cada carpeta de <c>backups/</c>; la rotación solo toca las que lo siguen.</summary>
+    internal const string BackupFolderFormat = "yyyyMMdd_HHmmss";
+
     /// <summary>
-    /// ForceReindex parte de cero, pero lo anterior se conserva para poder comparar resultados:
-    /// la BD, la exportación de Access y los informes del pipeline se mueven a
-    /// <c>&lt;carpeta de la BD&gt;/backups/&lt;yyyyMMdd_HHmmss&gt;/</c>, manteniendo su ruta relativa al
-    /// repositorio. Cuando la BD está en <c>.codebase/</c>, los escáneres ya excluyen esa carpeta.
+    /// ForceReindex parte de cero, pero lo anterior se conserva para poder comparar resultados: la BD (con sus
+    /// <c>-wal</c>, <c>-shm</c> y <c>-journal</c>), la exportación de Access y los informes del pipeline se guardan en
+    /// <c>&lt;carpeta de la BD&gt;/backups/&lt;yyyyMMdd_HHmmss&gt;/</c>, manteniendo su ruta relativa al repositorio. Cuando la
+    /// BD está en <c>.codebase/</c>, los escáneres ya excluyen esa carpeta.
     /// </summary>
-    internal static void BackupPreviousRun(AnalysisPipelineInput input, PipelineContext context)
+    /// <remarks>
+    /// La BD y los informes se copian y siguen en su sitio mientras se indexa (H-11): si el indexador falla, la web no se
+    /// queda sin grafo ni informes. Las carpetas <c>access_export</c> se mueven como antes, porque el indexador las leería
+    /// como código y la ingesta de Office las regenera. El resultado sabe deshacerlo (<see cref="PreviousRunBackup.Restore"/>)
+    /// y cerrarlo (<see cref="PreviousRunBackup.DiscardSuperseded"/>). Al terminar la copia se rotan las carpetas de
+    /// <c>backups/</c> según <see cref="AnalysisPipelineInput.BackupsToKeep"/>.
+    /// </remarks>
+    internal static PreviousRunBackup BackupPreviousRun(AnalysisPipelineInput input, PipelineContext context)
     {
         var repoRoot = Path.GetFullPath(input.RepositoryPath);
         var dbPath = Path.GetFullPath(input.DatabasePath);
         var dbDir = Path.GetDirectoryName(dbPath)!;
-        var backupDir = Path.Combine(dbDir, "backups", DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture));
+        var backupsRoot = Path.Combine(dbDir, "backups");
+        var backupDir = Path.Combine(backupsRoot, DateTime.Now.ToString(BackupFolderFormat, CultureInfo.InvariantCulture));
 
         string BackupTarget(string path)
         {
@@ -174,16 +200,14 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
                 : Path.Combine(backupDir, relative);
         }
 
-        var moved = new List<string>();
+        var backup = new PreviousRunBackup(backupDir, dbPath);
 
-        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+        // Las conexiones del pool mantienen abiertos la BD y su -wal: se cierran para copiar un estado estable.
+        SqliteConnection.ClearAllPools();
+        foreach (var file in DatabaseFiles(dbPath).Where(File.Exists))
         {
-            var file = dbPath + suffix;
-            if (File.Exists(file))
-            {
-                MoveFile(file, BackupTarget(file));
-                moved.Add(file);
-            }
+            CopyFile(file, BackupTarget(file));
+            backup.DatabaseFiles.Add((file, BackupTarget(file)));
         }
 
         // OfficeTools exporta el código de cada .accdb/.mdb a <carpeta del fichero>/.codebase/access_export.
@@ -196,7 +220,7 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
         foreach (var exportDir in exportDirs.Where(Directory.Exists))
         {
             MoveDirectory(exportDir, BackupTarget(exportDir));
-            moved.Add(exportDir);
+            backup.MovedDirectories.Add((exportDir, BackupTarget(exportDir)));
         }
 
         // Solo los informes que genera el pipeline, por nombre: OutputReportsPath es configurable y
@@ -212,25 +236,110 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
                 var reportPath = Path.GetFullPath(Path.Combine(input.OutputReportsPath, reportName));
                 if (File.Exists(reportPath))
                 {
-                    MoveFile(reportPath, BackupTarget(reportPath));
-                    moved.Add(reportPath);
+                    CopyFile(reportPath, BackupTarget(reportPath));
+                    backup.Reports.Add(reportPath);
                 }
             }
         }
 
-        context.Report(StepName, AnalysisLogLevel.Info, moved.Count > 0
-            ? $"🗂️ ForceReindex: {moved.Count} elementos de la ejecución anterior guardados en '{backupDir}'."
+        var saved = backup.DatabaseFiles.Count + backup.MovedDirectories.Count + backup.Reports.Count;
+        context.Report(StepName, AnalysisLogLevel.Info, saved > 0
+            ? $"🗂️ ForceReindex: {saved} elementos de la ejecución anterior guardados en '{backupDir}'; la BD y los informes siguen en su sitio hasta que termine la indexación."
             : "ℹ️ ForceReindex: no había ejecución anterior que guardar.");
+
+        var pruned = PruneBackups(backupsRoot, input.BackupsToKeep);
+        if (pruned > 0)
+            context.Report(StepName, AnalysisLogLevel.Info,
+                $"🧹 ForceReindex: {pruned} {(pruned == 1 ? "copia antigua borrada" : "copias antiguas borradas")} de '{backupsRoot}' "
+                + $"(se conservan las {input.BackupsToKeep} más recientes, CodebaseAnalysis:Backups:Keep).");
+        return backup;
     }
 
-    private static void MoveFile(string source, string target)
+    /// <summary>
+    /// Borra de <paramref name="backupsRoot"/> las carpetas con nombre <see cref="BackupFolderFormat"/> más antiguas, hasta
+    /// dejar <paramref name="keep"/>; con 0 o menos no borra ninguna. Otras carpetas no se tocan. Devuelve las borradas.
+    /// </summary>
+    internal static int PruneBackups(string backupsRoot, int keep)
+    {
+        if (keep <= 0 || !Directory.Exists(backupsRoot))
+            return 0;
+
+        var stale = Directory.EnumerateDirectories(backupsRoot)
+            .Where(d => DateTime.TryParseExact(Path.GetFileName(d), BackupFolderFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+            .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal)
+            .Skip(keep)
+            .ToList();
+        foreach (var dir in stale)
+            Directory.Delete(dir, recursive: true);
+        return stale.Count;
+    }
+
+    /// <summary>La BD y los ficheros que SQLite deja a su lado.</summary>
+    private static IEnumerable<string> DatabaseFiles(string dbPath) =>
+        new[] { "", "-wal", "-shm", "-journal" }.Select(suffix => dbPath + suffix);
+
+    /// <summary>
+    /// Lo que <see cref="BackupPreviousRun"/> guardó, para restaurarlo si la indexación falla o para retirar lo que la
+    /// ejecución nueva sustituye si termina bien.
+    /// </summary>
+    internal sealed class PreviousRunBackup(string directory, string databasePath)
+    {
+        public string Directory { get; } = directory;
+
+        /// <summary>BD y ficheros de SQLite copiados: original y copia.</summary>
+        public List<(string Original, string Copy)> DatabaseFiles { get; } = [];
+
+        /// <summary>Carpetas <c>access_export</c> movidas: original y destino.</summary>
+        public List<(string Original, string Copy)> MovedDirectories { get; } = [];
+
+        /// <summary>Informes del pipeline copiados, por su ruta original.</summary>
+        public List<string> Reports { get; } = [];
+
+        /// <summary>
+        /// Deja la BD como estaba (la copia sobre lo que haya escrito el indexador, sin ficheros de SQLite que no sean
+        /// suyos) y devuelve las carpetas movidas; los informes no se tocaron. Un fallo aquí se avisa y no tapa el de la
+        /// indexación.
+        /// </summary>
+        public void Restore(PipelineContext context)
+        {
+            try
+            {
+                SqliteConnection.ClearAllPools();
+                foreach (var file in DetectAndIndexGraphStep.DatabaseFiles(databasePath).Where(File.Exists))
+                    File.Delete(file);
+                foreach (var (original, copy) in DatabaseFiles)
+                    File.Copy(copy, original, overwrite: true);
+                foreach (var (original, copy) in MovedDirectories.Where(d => !System.IO.Directory.Exists(d.Original)))
+                    CopyDirectory(copy, original);
+
+                context.Report(StepName, AnalysisLogLevel.Warning,
+                    $"↩️ ForceReindex: la indexación no terminó; se ha restaurado la ejecución anterior desde '{Directory}'.");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                context.Report(StepName, AnalysisLogLevel.Error,
+                    $"❌ ForceReindex: la indexación no terminó y no se pudo restaurar la ejecución anterior ({ex.Message}); la copia está en '{Directory}'.");
+            }
+        }
+
+        /// <summary>La indexación nueva terminó: los informes anteriores salen de su sitio y quedan solo en la copia.</summary>
+        public void DiscardSuperseded(PipelineContext context)
+        {
+            foreach (var report in Reports.Where(File.Exists))
+                File.Delete(report);
+            if (Reports.Count > 0)
+                context.Report(StepName, AnalysisLogLevel.Info,
+                    $"🗂️ ForceReindex: indexación terminada; los {Reports.Count} informes anteriores quedan solo en '{Directory}'.");
+        }
+    }
+
+    private static void CopyFile(string source, string target)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Move(source, target);
+        File.Copy(source, target);
     }
 
-    // Copia y borra en vez de Directory.Move, que falla si origen y destino están en volúmenes distintos.
-    private static void MoveDirectory(string source, string target)
+    private static void CopyDirectory(string source, string target)
     {
         foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
@@ -240,6 +349,12 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
         }
 
         Directory.CreateDirectory(target);
+    }
+
+    // Copia y borra en vez de Directory.Move, que falla si origen y destino están en volúmenes distintos.
+    private static void MoveDirectory(string source, string target)
+    {
+        CopyDirectory(source, target);
         Directory.Delete(source, recursive: true);
     }
 
@@ -329,6 +444,10 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
         {
             var targetDir = Path.GetDirectoryName(Path.GetFullPath(targetDbPath));
             if (!string.IsNullOrEmpty(targetDir)) Directory.CreateDirectory(targetDir);
+            // Con ForceReindex la BD anterior sigue en su sitio: su -wal o su -journal no pueden aplicarse sobre la nueva.
+            SqliteConnection.ClearAllPools();
+            foreach (var sidecar in DatabaseFiles(Path.GetFullPath(targetDbPath)).Skip(1).Where(File.Exists))
+                File.Delete(sidecar);
             File.Copy(expectedCacheDb, targetDbPath, overwrite: true);
             context.Report(StepName, AnalysisLogLevel.Info, $"📋 Sincronizada base de datos SQLite ({new FileInfo(targetDbPath).Length / 1024} KB) hacia: {targetDbPath}");
         }
@@ -383,6 +502,26 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
         {
             context.Report(StepName, AnalysisLogLevel.Info, $"🧹 Retirados del grafo {removed} nodos de la salida del propio pipeline ({string.Join(", ", prefixes)}).");
         }
+    }
+
+    /// <summary>
+    /// Apunta la versión de cbm de esta indexación (<see cref="Enrichment.EnrichmentRuns.RecordCbmVersionAsync"/>), que entra
+    /// en la huella de los enriquecedores. Sin versión lo avisa: la huella queda como antes, con el nombre y la fecha.
+    /// </summary>
+    private static async Task RecordCbmVersionAsync(PipelineContext context, string dbPath, string? cbmVersion, CancellationToken ct)
+    {
+        if (cbmVersion == null)
+        {
+            context.Report(StepName, AnalysisLogLevel.Warning,
+                "⚠️ No se pudo leer la versión de codebase-memory-mcp (--version): la huella de la indexación queda sin ella.");
+            return;
+        }
+        if (!File.Exists(dbPath))
+            return;
+
+        using var conn = new SqliteConnection($"Data Source={dbPath}");
+        await conn.OpenAsync(ct);
+        await Enrichment.EnrichmentRuns.RecordCbmVersionAsync(conn, cbmVersion, ct);
     }
 
     private static string? TryReadProjectName(string line)

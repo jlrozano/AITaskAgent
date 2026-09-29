@@ -109,9 +109,10 @@ public class OpenAILlmService : ILlmService, IDisposable
             _logger.LogInformation(
                 "Creating new HTTP client for provider: {Provider}, baseUrl: {BaseUrl}",
                 Name, request.BaseUrl);
+            // Only whether a key is set and its length: not even a prefix of it belongs in a log.
             _logger.LogInformation(
-                "ApiKey prefix: {Prefix}",
-                request.ApiKey?[..Math.Min(4, request.ApiKey?.Length ?? 0)]);
+                "ApiKey: {State}",
+                string.IsNullOrEmpty(request.ApiKey) ? "not set" : $"set (length {request.ApiKey.Length})");
         }
 
         // No client-wide timeout: the limits are per request (RequestTimeoutOf, StreamingInactivityTimeoutOf), because

@@ -244,6 +244,7 @@ public class EnrichmentOptionsTests
         Assert.Equal(900, java.TimeoutSeconds);
         Assert.Equal(3600, java.StepTimeoutSeconds);
         Assert.Equal(TimeSpan.FromHours(1), java.StepTimeout);
+        Assert.False(java.KeepIntermediate);
         Assert.True(struts.Enabled);
         Assert.Equal(3, struts.SuspiciousImportPatterns.Count);
         Assert.Single(struts.BusinessImportPatterns);
@@ -264,6 +265,7 @@ public class EnrichmentOptionsTests
             ("JavaAnalyzer:DefaultEncoding", "ISO-8859-1"),
             ("JavaAnalyzer:TimeoutSeconds", "60"),
             ("JavaAnalyzer:StepTimeoutSeconds", "0"),
+            ("JavaAnalyzer:KeepIntermediate", "true"),
             ("StrutsJsp:Enabled", "false"),
             ("StrutsJsp:SuspiciousImportPatterns:0", "^com\\.acme\\.dao"),
             ("StrutsJsp:BusinessImportPatterns:0", "\\.bo\\."));
@@ -282,6 +284,7 @@ public class EnrichmentOptionsTests
         Assert.Equal(60, java.TimeoutSeconds);
         Assert.Equal(0, java.StepTimeoutSeconds);
         Assert.Equal(Timeout.InfiniteTimeSpan, java.StepTimeout);
+        Assert.True(java.KeepIntermediate);
         Assert.False(struts.Enabled);
         Assert.Equal(["^com\\.acme\\.dao"], struts.SuspiciousImportPatterns);
         Assert.Equal(["\\.bo\\."], struts.BusinessImportPatterns);
@@ -307,6 +310,8 @@ public class EnrichmentOptionsTests
         Assert.Equal(defaults.DefaultEncoding, java.DefaultEncoding);
         Assert.Equal(defaults.TimeoutSeconds, java.TimeoutSeconds);
         Assert.Equal(defaults.StepTimeoutSeconds, java.StepTimeoutSeconds);
+        Assert.Equal(defaults.KeepIntermediate, java.KeepIntermediate);
+        Assert.Equal("false", configuration["JavaAnalyzer:KeepIntermediate"], ignoreCase: true);
         Assert.Equal(new StrutsJspOptions().SuspiciousImportPatterns, StrutsJspOptions.FromConfiguration(configuration).SuspiciousImportPatterns);
         Assert.Equal(new StrutsJspOptions().BusinessImportPatterns, StrutsJspOptions.FromConfiguration(configuration).BusinessImportPatterns);
     }
@@ -343,6 +348,44 @@ public class EnrichmentRunsTests
 
         Assert.Equal("C-repo|2026-09-28T10:00:00Z", await EnrichmentRuns.IndexFingerprintAsync(graph.Connection, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Index_fingerprint_carries_the_cbm_version_of_that_indexing_and_another_version_invalidates_it()
+    {
+        using var temp = new TempDirectory();
+        using var graph = await CbmTestGraph.CreateAsync(Path.Combine(temp.Path, "codebase.db"), "C-repo");
+        var conn = graph.Connection;
+        var ct = CancellationToken.None;
+
+        await EnrichmentRuns.RecordCbmVersionAsync(conn, "0.6.1", ct);
+        var withVersion = await EnrichmentRuns.IndexFingerprintAsync(conn, ct);
+        Assert.Equal("C-repo|2026-09-28T10:00:00Z|cbm=0.6.1", withVersion);
+        await EnrichmentRuns.InsertAsync(conn, Run(index: withVersion!), ct);
+        Assert.True(await EnrichmentRuns.HasSuccessfulRunAsync(conn, "JavaAnalyzer", "1", withVersion, "cfg", ct));
+
+        // La misma indexación apuntada con otra versión de cbm ya no casa con la pasada anterior (H-9).
+        await EnrichmentRuns.RecordCbmVersionAsync(conn, "0.7.0", ct);
+        var otherVersion = await EnrichmentRuns.IndexFingerprintAsync(conn, ct);
+        Assert.Equal("C-repo|2026-09-28T10:00:00Z|cbm=0.7.0", otherVersion);
+        Assert.False(await EnrichmentRuns.HasSuccessfulRunAsync(conn, "JavaAnalyzer", "1", otherVersion, "cfg", ct));
+
+        // Una indexación que no apuntó versión (otro indexed_at) no hereda la de la anterior.
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE projects SET indexed_at = '2026-09-29T08:00:00Z'";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        Assert.Equal("C-repo|2026-09-29T08:00:00Z", await EnrichmentRuns.IndexFingerprintAsync(conn, ct));
+    }
+
+    [Theory]
+    [InlineData("codebase-memory-mcp 0.6.1", "0.6.1")]
+    [InlineData("level=info msg=mem.init budget_mb=16116\ncodebase-memory-mcp 0.6.1\r\n", "0.6.1")]
+    [InlineData("codebase-memory-mcp v1.2.0-beta.1", "1.2.0-beta.1")]
+    [InlineData("Usage: codebase-memory-mcp cli <tool>", null)]
+    [InlineData("", null)]
+    public void Cbm_version_is_read_from_the_version_line(string output, string? expected) =>
+        Assert.Equal(expected, Core.Support.CodebaseMemoryLocator.ParseVersion(output));
 
     [Fact]
     public async Task Index_fingerprint_is_null_without_projects_table()

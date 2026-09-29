@@ -122,6 +122,74 @@ public class SourceEncodingToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Replace_file_content_refuses_characters_that_latin1_cannot_hold_and_writes_nothing()
+    {
+        var file = WriteLatin1("Pedido.bas", "' Añade la acción\nx = 1\n");
+        var before = await File.ReadAllBytesAsync(file);
+
+        var result = await new ReplaceFileContentTool().ExecuteAsync($$"""
+            {
+                "TargetFile": "{{Json(file)}}",
+                "TargetContent": "x = 1",
+                "ReplacementContent": "x = 2 ' 5 € 😀 más € 😀",
+                "StartLine": 2,
+                "EndLine": 2,
+                "AllowMultiple": false
+            }
+            """, Context(), "test", NullLogger.Instance);
+
+        // Antes salían como '?' en silencio.
+        Assert.StartsWith("Error: ", result);
+        Assert.Contains("iso-8859-1", result);
+        Assert.Contains("'€' (U+20AC), '😀' (U+1F600)", result);
+        Assert.DoesNotContain("'ñ'", result);
+        Assert.DoesNotContain("'á'", result);
+        Assert.Contains("Nothing was written", result);
+        Assert.Equal(before, await File.ReadAllBytesAsync(file));
+    }
+
+    [Fact]
+    public async Task Multi_replace_file_content_refuses_characters_that_latin1_cannot_hold_and_writes_nothing()
+    {
+        var file = WriteLatin1("Pedido.bas", "' Añade la acción\nx = 1\ny = 2\n");
+        var before = await File.ReadAllBytesAsync(file);
+
+        var result = await new MultiReplaceFileContentTool().ExecuteAsync($$"""
+            {
+                "TargetFile": "{{Json(file)}}",
+                "ReplacementChunks": [
+                    { "TargetContent": "x = 1", "ReplacementContent": "x = 3 ' corrección", "StartLine": 2, "EndLine": 2, "AllowMultiple": false },
+                    { "TargetContent": "y = 2", "ReplacementContent": "y = 4 ' 10 €", "StartLine": 3, "EndLine": 3, "AllowMultiple": false }
+                ]
+            }
+            """, Context(), "test", NullLogger.Instance);
+
+        Assert.StartsWith("Error: ", result);
+        Assert.Contains("'€' (U+20AC)", result);
+        Assert.Equal(before, await File.ReadAllBytesAsync(file));
+    }
+
+    [Fact]
+    public async Task Replace_file_content_writes_an_emoji_into_a_utf8_file()
+    {
+        var file = WriteUtf8("notas.md", "# Año\nx\n");
+
+        var result = await new ReplaceFileContentTool().ExecuteAsync($$"""
+            {
+                "TargetFile": "{{Json(file)}}",
+                "TargetContent": "x",
+                "ReplacementContent": "5 € 😀",
+                "StartLine": 2,
+                "EndLine": 2,
+                "AllowMultiple": false
+            }
+            """, Context(), "test", NullLogger.Instance);
+
+        Assert.Contains("Successfully replaced", result);
+        Assert.Equal(new UTF8Encoding(false).GetBytes("# Año\n5 € 😀\n"), await File.ReadAllBytesAsync(file));
+    }
+
+    [Fact]
     public async Task View_code_item_shows_the_accents_of_a_latin1_csharp_file()
     {
         var file = WriteLatin1("Pedido.cs", "class Pedido\n{\n    string Estado() => \"acción\";\n}\n");

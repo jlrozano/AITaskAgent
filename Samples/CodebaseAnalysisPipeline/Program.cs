@@ -35,7 +35,7 @@ internal static class Program
         // 2. Resolver ubicación del repositorio target y configurar Serilog
         var repoPath = AnalysisRunOptions.ResolveRepositoryPath(configuration);
 
-        var logDir = Path.Combine(repoPath, "logs");
+        var logDir = AnalysisRunOptions.ResolveLogsPath(configuration, repoPath);
         Directory.CreateDirectory(logDir);
 
         var msLogLevel = AnalysisRunOptions.ResolveLogLevel(configuration, args);
@@ -60,6 +60,8 @@ internal static class Program
             .CreateLogger();
 
         Console.WriteLine($"🔍 Nivel de logging configurado a: {msLogLevel}");
+        if (AnalysisRunOptions.DebugLogWarning(msLogLevel, logDir) is { } debugWarning)
+            Console.WriteLine(debugWarning);
 
         // 3. Configurar Contenedor de Inyección de Dependencias
         var services = new ServiceCollection();

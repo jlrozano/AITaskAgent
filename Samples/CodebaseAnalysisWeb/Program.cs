@@ -27,7 +27,7 @@ builder.Configuration.AddAnalysisConfiguration(
 
 WebSecurity.EnsureLoopbackUrls(builder.Configuration);
 
-// Serilog: consola y, dentro de un análisis, <repo>/logs/analysis-pipeline-<fecha>.log como la CLI. El
+// Serilog: consola y, dentro de un análisis, <LogsPath>/analysis-pipeline-<fecha>.log como la CLI. El
 // runner hace LogContext.PushProperty(AnalysisLogDir) y Map abre un fichero por carpeta. Solo llegan a Map
 // los eventos con la propiedad (sin clave por defecto que ocupe sitio) y con sinkMapCountLimit: 1 queda
 // abierto únicamente el fichero del último repositorio analizado: cambiar de repositorio cierra el anterior.
@@ -85,6 +85,16 @@ _ = app.Services.GetRequiredService<AnalysisHost>();
 
 // El último repositorio abierto, si sigue existiendo; si falla, la web arranca sin workspace (con aviso).
 app.Services.GetRequiredService<WorkspaceState>().TryRestoreLast();
+
+// Con el log en Debug o Trace, el proveedor vuelca el cuerpo de cada petición al modelo en el log del análisis.
+var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("CodebaseAnalysisWeb");
+var debugLevel = startupLogger.IsEnabled(LogLevel.Trace) ? LogLevel.Trace : startupLogger.IsEnabled(LogLevel.Debug) ? LogLevel.Debug : (LogLevel?)null;
+var logsSetting = app.Configuration[$"{AnalysisRunOptions.SectionName}:LogsPath"];
+if (debugLevel is { } level && AnalysisRunOptions.DebugLogWarning(level,
+        string.IsNullOrWhiteSpace(logsSetting) ? "<repositorio>/logs" : logsSetting) is { } debugWarning)
+{
+    startupLogger.LogWarning("{Warning}", debugWarning);
+}
 
 // Errores de lectura del cuerpo con el formato de la API (plan §4.1).
 app.Use(async (context, next) =>

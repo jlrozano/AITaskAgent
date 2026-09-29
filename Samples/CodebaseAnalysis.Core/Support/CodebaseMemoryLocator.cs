@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 
 namespace CodebaseAnalysis.Core.Support;
@@ -59,6 +60,69 @@ public static class CodebaseMemoryLocator
         }
 
         return (null, "No se encontró el ejecutable 'codebase-memory-mcp.exe' ni 'codebase-memory' en PATH, ni en %LOCALAPPDATA%\\Programs\\codebase-memory-mcp\\, ni en la configuración.");
+    }
+
+    /// <summary>Plazo de <c>--version</c>: responde al instante, así que más es un ejecutable que no lo entiende.</summary>
+    private static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(30);
+
+    private static readonly Regex VersionLine = new(
+        @"^codebase-memory(?:-mcp)?(?:\.exe)?\s+v?(?<version>\d+(?:\.\d+)+[\w.+-]*)$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Versión de cbm según <c>codebase-memory-mcp --version</c> (<c>codebase-memory-mcp 0.6.1</c>), o null si el proceso no
+    /// arranca, no termina en <see cref="VersionTimeout"/>, sale con error o no imprime una versión reconocible. La BD de cbm
+    /// no guarda la versión que la produjo, así que es la única fuente fiable.
+    /// </summary>
+    public static async Task<string?> GetVersionAsync(string exePath, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = exePath,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("--version");
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(VersionTimeout);
+        try
+        {
+            using var process = Process.Start(startInfo);
+            if (process == null)
+                return null;
+            // Sin argumentos reconocidos arranca el servidor MCP por stdin: cerrarlo lo hace terminar.
+            process.StandardInput.Close();
+            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            _ = process.StandardError.ReadToEndAsync(timeout.Token);
+            await ProcessCancellation.WaitForExitOrKillAsync(process, timeout.Token);
+            return process.ExitCode == 0 ? ParseVersion(await stdout) : null;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>La versión de la primera línea con forma <c>&lt;nombre&gt; X.Y[.Z…]</c>, o null.</summary>
+    internal static string? ParseVersion(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return null;
+        foreach (var line in output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var match = VersionLine.Match(line);
+            if (match.Success)
+                return match.Groups["version"].Value;
+        }
+        return null;
     }
 
     private static string? FindInPath(string fileName)

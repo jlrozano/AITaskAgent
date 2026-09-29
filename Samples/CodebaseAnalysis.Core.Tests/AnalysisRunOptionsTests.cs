@@ -59,6 +59,40 @@ public sealed class AnalysisRunOptionsTests
     }
 
     [Fact]
+    public void Logs_path_defaults_to_logs_in_the_repository_and_can_be_relative_or_absolute()
+    {
+        using var repo = new TempDirectory();
+        using var outside = new TempDirectory();
+
+        Assert.Equal(Path.Combine(repo.Path, "logs"), AnalysisRunOptions.ResolveLogsPath(TestConfig.FromPairs(), repo.Path));
+        Assert.Equal(Path.Combine(repo.Path, "out", "logs"),
+            AnalysisRunOptions.ResolveLogsPath(TestConfig.FromPairs(("CodebaseAnalysis:LogsPath", "out/logs")), repo.Path));
+
+        var absolute = Path.Combine(outside.Path, "analysis-logs");
+        AnalysisRunOptions.BuildInput(TestConfig.FromPairs(("CodebaseAnalysis:LogsPath", absolute)), repo.Path, _ => { });
+
+        Assert.True(Directory.Exists(absolute));
+        Assert.False(Directory.Exists(Path.Combine(repo.Path, "logs")));
+    }
+
+    [Theory]
+    [InlineData(LogLevel.Information, false)]
+    [InlineData(LogLevel.Warning, false)]
+    [InlineData(LogLevel.Debug, true)]
+    [InlineData(LogLevel.Trace, true)]
+    public void Debug_and_trace_warn_that_the_log_keeps_the_request_bodies(LogLevel level, bool warns)
+    {
+        var warning = AnalysisRunOptions.DebugLogWarning(level, @"C:\repo\logs");
+
+        Assert.Equal(warns, warning != null);
+        if (warning != null)
+        {
+            Assert.Contains(@"'C:\repo\logs' guardará el cuerpo de cada petición al modelo", warning);
+            Assert.Contains("CodebaseAnalysis:LogsPath", warning);
+        }
+    }
+
+    [Fact]
     public void Db_and_output_default_to_codebase_folder_and_reports()
     {
         using var repo = new TempDirectory();

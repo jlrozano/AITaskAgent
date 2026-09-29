@@ -154,8 +154,8 @@ public sealed class WorkspaceState(IConfiguration configuration, WorkspaceSettin
     }
 
     /// <summary>
-    /// Rutas de un repositorio: BD e informes con <c>CodebaseAnalysis:DatabasePath</c> y
-    /// <c>OutputReportsPath</c> relativos a él (igual que la CLI); el chat, en <c>&lt;carpeta de la BD&gt;/chat</c>.
+    /// Rutas de un repositorio: BD, informes y logs con <c>CodebaseAnalysis:DatabasePath</c>, <c>OutputReportsPath</c> y
+    /// <c>LogsPath</c> relativos a él (igual que la CLI); el chat, en <c>&lt;carpeta de la BD&gt;/chat</c>.
     /// </summary>
     public ActiveWorkspace Resolve(string repositoryPath)
     {
@@ -163,7 +163,7 @@ public sealed class WorkspaceState(IConfiguration configuration, WorkspaceSettin
         var db = AnalysisRunOptions.ResolveDatabasePath(configuration, repo);
         var reports = AnalysisRunOptions.ResolveReportsPath(configuration, repo);
         var chat = Path.Combine(Path.GetDirectoryName(db) ?? repo, "chat");
-        return new ActiveWorkspace(repo, db, reports, chat, Path.Combine(repo, "logs"));
+        return new ActiveWorkspace(repo, db, reports, chat, AnalysisRunOptions.ResolveLogsPath(configuration, repo));
     }
 
     /// <summary>

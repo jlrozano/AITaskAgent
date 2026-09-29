@@ -50,6 +50,15 @@ public class AnalysisPipelineInput : StepResult
     /// </summary>
     public string SourceDefaultEncoding { get; set; } = string.Empty;
 
+    /// <summary>Copias de <c>backups/</c> que se conservan si falta <c>CodebaseAnalysis:Backups:Keep</c>.</summary>
+    public const int DefaultBackupsToKeep = 5;
+
+    /// <summary>
+    /// <c>CodebaseAnalysis:Backups:Keep</c>: copias de ForceReindex que se conservan en <c>&lt;carpeta de la BD&gt;/backups/</c>,
+    /// las más recientes; 0 = sin límite. Cada una lleva la BD entera, que en un repositorio grande pasa del GB.
+    /// </summary>
+    public int BackupsToKeep { get; set; } = DefaultBackupsToKeep;
+
     /// <summary>Tope de iteraciones de tools del auditor de ese rol.</summary>
     public int GetAuditorMaxToolIterations(string roleName) =>
         AuditorMaxToolIterationsByRole.TryGetValue(roleName, out var max) ? max : AuditorMaxToolIterations;

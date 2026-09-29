@@ -154,6 +154,11 @@ public sealed class ReplaceFileContentTool : BaseFileTool
             result = result.Replace("\n", lineEnding);
         }
 
+        if (FileToolsHelper.DescribeUnencodable(resolvedTargetFile, result, encoding) is { } encodingError)
+        {
+            return encodingError;
+        }
+
         await FileToolsHelper.WriteAtomicAsync(resolvedTargetFile, result, encoding, cancellationToken);
 
         return $"Successfully replaced content in {resolvedTargetFile}.";

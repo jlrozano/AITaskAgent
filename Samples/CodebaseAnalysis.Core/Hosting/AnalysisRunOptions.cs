@@ -95,8 +95,29 @@ public static class AnalysisRunOptions
     }
 
     /// <summary>
+    /// <c>CodebaseAnalysis:LogsPath</c> (por defecto <c>logs</c>), relativa al repositorio o absoluta: la carpeta del log de
+    /// cada análisis. Con una absoluta la salida no cae dentro del repositorio analizado. No crea nada en disco.
+    /// </summary>
+    public static string ResolveLogsPath(IConfiguration configuration, string repositoryPath)
+    {
+        var rawLogs = configuration.GetSection(SectionName)["LogsPath"];
+        rawLogs = string.IsNullOrWhiteSpace(rawLogs) ? "logs" : rawLogs;
+        return Path.IsPathRooted(rawLogs) ? rawLogs : Path.GetFullPath(rawLogs, repositoryPath);
+    }
+
+    /// <summary>
+    /// Aviso de <c>--debug</c> y <c>--trace</c>: el log guarda el cuerpo de cada petición al modelo, con código y fragmentos
+    /// del repositorio. Null en los demás niveles.
+    /// </summary>
+    public static string? DebugLogWarning(LogLevel level, string logsPath) =>
+        level <= LogLevel.Debug
+            ? $"⚠️ Log en nivel {level}: '{logsPath}' guardará el cuerpo de cada petición al modelo, con código y fragmentos del repositorio. "
+              + "No lo compartas ni lo subas al control de versiones; CodebaseAnalysis:LogsPath lo lleva fuera del repositorio."
+            : null;
+
+    /// <summary>
     /// Entrada del pipeline. <c>--db</c> y <c>--output</c> son relativos al repositorio. Crea las carpetas
-    /// de la BD, de los informes y <c>logs/</c> dentro del repositorio.
+    /// de la BD, de los informes y de los logs (<see cref="ResolveLogsPath"/>).
     /// </summary>
     public static AnalysisPipelineInput BuildInput(IConfiguration configuration, string repositoryPath, Action<string> warn)
     {
@@ -109,7 +130,7 @@ public static class AnalysisRunOptions
         var dbDir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dbDir)) Directory.CreateDirectory(dbDir);
         Directory.CreateDirectory(outputReportsPath);
-        Directory.CreateDirectory(Path.Combine(repositoryPath, "logs"));
+        Directory.CreateDirectory(ResolveLogsPath(configuration, repositoryPath));
 
         var forceReindex = configuration.GetValue<bool>("force-reindex",
             analysisSection.GetValue<bool>("ForceReindex", false));
@@ -124,8 +145,24 @@ public static class AnalysisRunOptions
             AuditorMaxToolIterations = ResolveAuditorMaxToolIterations(analysisSection.GetSection("Auditors"), warn),
             AuditorMaxToolIterationsByRole = ResolveAuditorMaxToolIterationsByRole(analysisSection.GetSection("Auditors"), warn),
             MaxParallelAuditors = ResolveMaxParallelAuditors(analysisSection.GetSection("Reports"), warn),
-            SourceDefaultEncoding = configuration[$"{Enrichment.JavaAnalyzerOptions.SectionName}:{nameof(Enrichment.JavaAnalyzerOptions.DefaultEncoding)}"] ?? string.Empty
+            SourceDefaultEncoding = configuration[$"{Enrichment.JavaAnalyzerOptions.SectionName}:{nameof(Enrichment.JavaAnalyzerOptions.DefaultEncoding)}"] ?? string.Empty,
+            BackupsToKeep = ResolveBackupsToKeep(analysisSection.GetSection("Backups"), warn)
         };
+    }
+
+    /// <summary>
+    /// <c>CodebaseAnalysis:Backups:Keep</c>; <see cref="AnalysisPipelineInput.DefaultBackupsToKeep"/> si falta, y también con
+    /// aviso si no es un entero ≥ 0. 0 = sin límite.
+    /// </summary>
+    public static int ResolveBackupsToKeep(IConfigurationSection backups, Action<string> warn)
+    {
+        var raw = backups["Keep"];
+        if (string.IsNullOrWhiteSpace(raw))
+            return AnalysisPipelineInput.DefaultBackupsToKeep;
+        if (int.TryParse(raw, out var keep) && keep >= 0)
+            return keep;
+        warn($"⚠️ CodebaseAnalysis:Backups:Keep='{raw}' no es un entero ≥ 0: se usa {AnalysisPipelineInput.DefaultBackupsToKeep}.");
+        return AnalysisPipelineInput.DefaultBackupsToKeep;
     }
 
     /// <summary><c>CodebaseAnalysis:Reports:MaxParallelAuditors</c>; 0 si falta, y también con aviso si no es un entero ≥ 0.</summary>

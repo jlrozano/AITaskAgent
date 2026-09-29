@@ -59,7 +59,8 @@ public static class LlmRoleFactory
             log($"🤖 Proveedor '{section.Key}' ({serviceType}): {baseUrl} | modelo por defecto: {model ?? "(ninguno)"}{(apiVersion != null ? $" | ApiVersion: {apiVersion}" : "")}");
             log(string.IsNullOrEmpty(apiKey)
                 ? $"⚠️ ADVERTENCIA: el proveedor '{section.Key}' no tiene ApiKey."
-                : $"🔑 ApiKey de '{section.Key}' configurada (prefijo: {apiKey[..Math.Min(4, apiKey.Length)]}***, longitud: {apiKey.Length})");
+                // Sin prefijo: ni cuatro caracteres de la clave llegan al log (auditoría, H-11).
+                : $"🔑 ApiKey de '{section.Key}' configurada (longitud: {apiKey.Length})");
 
             providers[section.Key] = new ConfiguredProvider(
                 new LlmProvider

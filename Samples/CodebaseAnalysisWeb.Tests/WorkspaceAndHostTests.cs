@@ -61,6 +61,31 @@ public sealed class WorkspaceAndHostTests : IDisposable
     }
 
     [Fact]
+    public async Task A_configured_logs_path_takes_the_run_log_out_of_the_repository()
+    {
+        using var logs = new TempDirectory();
+        var logsPath = Path.Combine(logs.Path, "analysis-logs");
+        using var factory = new WebTestFactory { ExtraConfiguration = new() { ["CodebaseAnalysis:LogsPath"] = logsPath } };
+        try
+        {
+            var client = factory.CreateClient();
+
+            var ws = await (await client.PutAsync("/api/workspace", Http.JsonBody(new { repositoryPath = _repo.Path }))).ReadJsonAsync();
+            Assert.Equal(logsPath, ws.GetProperty("logsPath").GetString());
+
+            await client.StartRunAsync();
+            await client.WaitForRunEndAsync();
+
+            Assert.Single(Directory.GetFiles(logsPath, "analysis-pipeline-*.log"));
+            Assert.False(Directory.Exists(Path.Combine(_repo.Path, "logs")));
+        }
+        finally
+        {
+            factory.Workflow.Release();
+        }
+    }
+
+    [Fact]
     public async Task Switching_repositories_does_not_widen_the_sandbox()
     {
         using var other = new TempDirectory();

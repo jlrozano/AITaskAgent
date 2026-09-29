@@ -39,7 +39,7 @@ public sealed class AnalysisRunManager(
     TimeProvider clock,
     IHostApplicationLifetime lifetime) : IHostedService
 {
-    /// <summary>Propiedad de Serilog que elige el fichero de log de la ejecución (<c>&lt;repo&gt;/logs</c>).</summary>
+    /// <summary>Propiedad de Serilog que elige el fichero de log de la ejecución (<c>CodebaseAnalysis:LogsPath</c>, por defecto <c>&lt;repo&gt;/logs</c>).</summary>
     public const string LogDirProperty = "AnalysisLogDir";
 
     public const string SourceName = "AnalysisRunManager";

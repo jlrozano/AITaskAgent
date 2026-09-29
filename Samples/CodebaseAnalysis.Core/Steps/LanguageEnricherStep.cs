@@ -190,6 +190,7 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
             }, JavaAnalysisReader.Read(run.ResultPath), ct);
 
             ReportJavaResult(context, result, stopwatch.Elapsed);
+            DeleteIntermediate(context, run.ResultPath, options.KeepIntermediate);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -202,6 +203,29 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
             var removed = await RemoveTestNodesAsync(context, scan, databasePath, ct);
             await RecordAsync(databasePath, enricher, JavaGraphWriter.EnricherVersion, toolVersion, indexFingerprint, configFingerprint,
                 startedAt, stopwatch, EnrichmentRuns.StatusFailed, ex.Message, ct, removed);
+        }
+    }
+
+    /// <summary>
+    /// Borra el resultado del analizador ya aplicado al grafo (auditoría, H-11: en el repositorio objetivo pasa de 700 MB), salvo
+    /// con <c>JavaAnalyzer:KeepIntermediate</c>. La petición y el log se quedan: son pequeños y dicen qué se analizó. Un fallo
+    /// al borrar solo se avisa.
+    /// </summary>
+    private static void DeleteIntermediate(PipelineContext context, string resultPath, bool keep)
+    {
+        if (keep)
+        {
+            context.Report(StepName, AnalysisLogLevel.Info,
+                $"ℹ️ Analizador Java: se conserva '{resultPath}' (JavaAnalyzer:KeepIntermediate).");
+            return;
+        }
+        try
+        {
+            File.Delete(resultPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            context.Report(StepName, AnalysisLogLevel.Warning, $"⚠️ Analizador Java: no se pudo borrar '{resultPath}': {ex.Message}");
         }
     }
 

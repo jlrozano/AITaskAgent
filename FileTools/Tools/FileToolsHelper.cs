@@ -22,6 +22,52 @@ internal static class FileToolsHelper
         string path, CancellationToken ct) =>
         TextFileEncoding.ReadAllTextAsync(path, ct);
 
+    /// <summary>Distinct characters listed in <see cref="DescribeUnencodable"/>; the rest are only counted.</summary>
+    private const int UnencodableShown = 10;
+
+    /// <summary>
+    /// A tool error naming the characters of <paramref name="content"/> that <paramref name="encoding"/> cannot represent,
+    /// or null when all of them fit. Writing them anyway turns each into <c>?</c> without a word: an emoji or <c>€</c>
+    /// added to an ISO-8859-1 file used to be lost that way. The caller returns the error and writes nothing.
+    /// </summary>
+    public static string? DescribeUnencodable(string path, string content, Encoding encoding)
+    {
+        var strict = (Encoding)encoding.Clone();
+        strict.EncoderFallback = EncoderFallback.ExceptionFallback;
+        try
+        {
+            strict.GetByteCount(content);
+            return null;
+        }
+        catch (EncoderFallbackException)
+        {
+            // Only now walk the text, to name every character that does not fit.
+        }
+
+        var unencodable = new List<Rune>();
+        var seen = new HashSet<Rune>();
+        foreach (var rune in content.EnumerateRunes())
+        {
+            if (seen.Contains(rune))
+                continue;
+            try
+            {
+                strict.GetByteCount(rune.ToString());
+            }
+            catch (EncoderFallbackException)
+            {
+                seen.Add(rune);
+                unencodable.Add(rune);
+            }
+        }
+
+        var shown = string.Join(", ", unencodable.Take(UnencodableShown).Select(r => $"'{r}' (U+{r.Value:X4})"));
+        var more = unencodable.Count > UnencodableShown ? $" and {unencodable.Count - UnencodableShown} more" : "";
+        return $"Error: {path} is encoded as {encoding.WebName}, which cannot represent {shown}{more}. " +
+               "Nothing was written. Use characters that exist in that encoding (for example 'EUR' instead of '€', " +
+               "or no emoji) and try again.";
+    }
+
     /// <summary>
     /// Returns the line-ending style found in <paramref name="content"/> - <c>"\r\n"</c>,
     /// <c>"\n"</c> or <c>"\r"</c> - based on the first line break encountered, so a caller that

@@ -226,9 +226,11 @@ public sealed class ReportWriteTests
         File.WriteAllText(db, "no es una BD");
 
         var input = new AnalysisPipelineInput { RepositoryPath = dir.Path, DatabasePath = db, OutputReportsPath = paths.ReportsPath, ForceReindex = true };
-        DetectAndIndexGraphStep.BackupPreviousRun(input, new PipelineContext());
+        var context = new PipelineContext();
+        DetectAndIndexGraphStep.BackupPreviousRun(input, context).DiscardSuperseded(context);
 
-        Assert.False(File.Exists(db));
+        // La BD la sustituye el indexador (se copia, no se mueve: H-11); los informes del catálogo salen al terminar.
+        Assert.True(File.Exists(db));
         Assert.False(File.Exists(Path.Combine(paths.ReportsPath, "05_errores_y_bugs.md")));
         Assert.True(File.Exists(paths.CustomReportFile(created.Source)));
         Assert.Single(writer.History.List(created.Source));

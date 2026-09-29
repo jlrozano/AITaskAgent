@@ -378,16 +378,28 @@ public class LanguageEnricherStepTests(ITestOutputHelper output)
             runs.Select(r => (r.Enricher, r.Status)));
         Assert.Equal(TestJdk.Info!.Version, runs[0].ToolVersion);
 
-        // P4: petición, resultado y log junto a la BD.
+        // P4: petición y log junto a la BD; el resultado, ya aplicado, se borra (H-11, sin JavaAnalyzer:KeepIntermediate).
         var work = JavaAnalyzerRunner.WorkingDirectoryFor(graph.DatabasePath);
         Assert.Equal(Path.Combine(setup.Temp.Path, "db", "enrichment", "java"), work);
         Assert.True(File.Exists(Path.Combine(work, JavaAnalyzerRunner.RequestFileName)));
-        Assert.True(File.Exists(Path.Combine(work, JavaAnalyzerRunner.ResultFileName)));
+        Assert.False(File.Exists(Path.Combine(work, JavaAnalyzerRunner.ResultFileName)));
         Assert.True(File.Exists(Path.Combine(work, JavaAnalyzerRunner.LogFileName)));
 
         Assert.Equal(await graph.CountAsync("SELECT COUNT(1) FROM nodes"), result.TotalNodes);
         Assert.Equal(await graph.CountAsync("SELECT COUNT(1) FROM edges"), result.TotalEdges);
         Assert.True(result.IsEnriched);
+    }
+
+    [JdkFact]
+    public async Task Keep_intermediate_leaves_the_analyzer_result_next_to_the_database()
+    {
+        using var setup = await CreateAsync();
+
+        var (_, reporter, _) = await RunAsync(setup, JdkConfig(("JavaAnalyzer:KeepIntermediate", "true")));
+
+        var result = Path.Combine(JavaAnalyzerRunner.WorkingDirectoryFor(setup.Graph.DatabasePath), JavaAnalyzerRunner.ResultFileName);
+        Assert.True(File.Exists(result));
+        Assert.Contains(reporter.Entries, e => e.Message == $"ℹ️ Analizador Java: se conserva '{result}' (JavaAnalyzer:KeepIntermediate).");
     }
 
     [JdkFact]

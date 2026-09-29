@@ -210,6 +210,11 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
             currentContent = currentContent.Replace("\n", lineEnding);
         }
 
+        if (FileToolsHelper.DescribeUnencodable(resolvedTargetFile, currentContent, encoding) is { } encodingError)
+        {
+            return encodingError;
+        }
+
         await FileToolsHelper.WriteAtomicAsync(resolvedTargetFile, currentContent, encoding, cancellationToken);
         return $"Successfully replaced {args.ReplacementChunks.Count} chunks in {resolvedTargetFile}.";
     }

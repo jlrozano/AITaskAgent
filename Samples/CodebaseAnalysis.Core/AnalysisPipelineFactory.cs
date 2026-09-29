@@ -162,13 +162,21 @@ public static class AnalysisPipelineFactory
     private static IPipeline ResolveEngine(IServiceProvider? serviceProvider, IPipeline? engine) =>
         engine ?? (serviceProvider?.GetService(typeof(IPipeline)) as IPipeline) ?? new Pipeline();
 
-    private static LlmRole ResolveRole(Dictionary<string, LlmRole> roles, string roleName)
+    /// <summary>
+    /// El rol pedido, o un error que lo nombra. Antes devolvía el primero configurado, y un auditor podía acabar con el
+    /// prompt de sistema y el modelo de otro rol sin aviso (auditoría, H-11). No rompe ninguna configuración válida:
+    /// <see cref="Hosting.LlmRoleFactory.BuildRoles"/> crea con el proveedor por defecto los
+    /// <see cref="Hosting.LlmRoleFactory.RequiredRoles"/> que falten, y la CLI y la web construyen los roles con él.
+    /// </summary>
+    internal static LlmRole ResolveRole(Dictionary<string, LlmRole> roles, string roleName)
     {
         if (roles.TryGetValue(roleName, out var role))
             return role;
 
-        return roles.Values.FirstOrDefault()
-            ?? throw new InvalidOperationException($"No se ha configurado ningún rol LLM disponible para {roleName}.");
+        throw new InvalidOperationException(
+            $"No hay rol LLM '{roleName}' (roles recibidos: {(roles.Count == 0 ? "ninguno" : string.Join(", ", roles.Keys.Order(StringComparer.OrdinalIgnoreCase)))}). "
+            + $"Decláralo en LlmConfiguration:Roles o construye los roles con LlmRoleFactory.BuildRoles, que crea los que faltan "
+            + $"con el proveedor por defecto.");
     }
 
     /// <summary>El paralelo tolerante con un auditor por informe, cada uno con su límite.</summary>

@@ -107,8 +107,17 @@ public static class EnrichmentRuns
     }
 
     /// <summary>
+    /// Tabla propia con la versión de cbm que produjo cada indexación, por <c>(project, indexed_at)</c>. cbm no la guarda
+    /// en su BD (ni tabla ni <c>user_version</c>), así que la escribe <see cref="Steps.DetectAndIndexGraphStep"/> al indexar,
+    /// con la salida de <c>codebase-memory-mcp --version</c>.
+    /// </summary>
+    public const string CbmIndexVersionsTable = "cbm_index_versions";
+
+    /// <summary>
     /// Huella de la indexación de cbm: <c>projects.name|projects.indexed_at</c> del proyecto de los nodos (o de la primera
-    /// fila si no casa ninguna). Null si la BD no tiene la tabla <c>projects</c> o está vacía: entonces no hay forma de
+    /// fila si no casa ninguna), seguida de <c>|cbm=&lt;versión&gt;</c> si <see cref="RecordCbmVersionAsync"/> la apuntó para
+    /// esa misma indexación (H-9). Una indexación que no hizo el pipeline (otro <c>indexed_at</c>) queda sin versión en vez
+    /// de heredar la de la anterior. Null si la BD no tiene la tabla <c>projects</c> o está vacía: entonces no hay forma de
     /// saber si la indexación cambió y el enriquecedor se ejecuta siempre.
     /// </summary>
     public static async Task<string?> IndexFingerprintAsync(SqliteConnection conn, CancellationToken ct, SqliteTransaction? tx = null)
@@ -119,13 +128,43 @@ public static class EnrichmentRuns
         var project = await GraphProject.ResolveAsync(conn, "", ct, tx);
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = """
-            SELECT name || '|' || indexed_at FROM projects
-            ORDER BY CASE WHEN name = @project THEN 0 ELSE 1 END, name
-            LIMIT 1
-            """;
+        cmd.CommandText = await TableExistsAsync(conn, CbmIndexVersionsTable, ct, tx)
+            ? $"""
+                SELECT p.name || '|' || p.indexed_at || COALESCE('|cbm=' || v.cbm_version, '') FROM projects p
+                LEFT JOIN {CbmIndexVersionsTable} v ON v.project = p.name AND v.indexed_at = p.indexed_at
+                ORDER BY CASE WHEN p.name = @project THEN 0 ELSE 1 END, p.name
+                LIMIT 1
+                """
+            : """
+                SELECT name || '|' || indexed_at FROM projects
+                ORDER BY CASE WHEN name = @project THEN 0 ELSE 1 END, name
+                LIMIT 1
+                """;
         cmd.Parameters.AddWithValue("@project", project);
         return await cmd.ExecuteScalarAsync(ct) as string;
+    }
+
+    /// <summary>
+    /// Apunta <paramref name="cbmVersion"/> como la versión de cbm de la indexación actual de cada fila de <c>projects</c>.
+    /// Sin tabla <c>projects</c> no hace nada.
+    /// </summary>
+    public static async Task RecordCbmVersionAsync(SqliteConnection conn, string cbmVersion, CancellationToken ct)
+    {
+        if (!await TableExistsAsync(conn, "projects", ct, null))
+            return;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            CREATE TABLE IF NOT EXISTS {CbmIndexVersionsTable}(
+                project TEXT NOT NULL,
+                indexed_at TEXT NOT NULL,
+                cbm_version TEXT NOT NULL,
+                PRIMARY KEY (project, indexed_at));
+            INSERT OR REPLACE INTO {CbmIndexVersionsTable}(project, indexed_at, cbm_version)
+                SELECT name, indexed_at, @version FROM projects;
+            """;
+        cmd.Parameters.AddWithValue("@version", cbmVersion);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>SHA-256 en hexadecimal de los valores que cambian el resultado de un enriquecedor, en orden.</summary>

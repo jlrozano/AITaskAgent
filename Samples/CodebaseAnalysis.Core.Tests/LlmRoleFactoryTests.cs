@@ -102,9 +102,11 @@ public sealed class LlmRoleFactoryTests
         Assert.Equal(
             [
                 "🤖 Proveedor 'Main' (azure-openai): https://section.example/ | modelo por defecto: section-model | ApiVersion: 2024-01-01",
-                "🔑 ApiKey de 'Main' configurada (prefijo: sect***, longitud: 11)"
+                "🔑 ApiKey de 'Main' configurada (longitud: 11)"
             ],
             log);
+        // Ni un prefijo de la clave (auditoría, H-11): la de AzureProvider empieza por «sect».
+        Assert.DoesNotContain(log, line => line.Contains("sect***", StringComparison.Ordinal) || line.Contains("prefijo", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -246,5 +248,31 @@ public sealed class LlmRoleFactoryTests
         var roles = LlmRoleFactory.BuildRoles(TestConfig.FromPairs(AzureProvider), Services(), _ => null, _ => { }, ["ChatAssistant"]);
 
         Assert.Equal(["ChatAssistant"], roles.Keys);
+    }
+
+    [Fact]
+    public void A_missing_role_fails_with_its_name_instead_of_borrowing_another_one()
+    {
+        // Antes, sin «ExecutiveSynthesizer», la factoría devolvía el primer rol del diccionario (auditoría, H-11).
+        var roles = LlmRoleFactory.BuildRoles(TestConfig.FromPairs(AzureProvider), Services(), _ => null, _ => { });
+        roles.Remove("ExecutiveSynthesizer");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => AnalysisPipelineFactory.CreatePipeline(
+            AnalysisPipelineFactory.CreateDefaultTemplateProvider(), roles, new Models.AnalysisPipelineInput()));
+
+        Assert.StartsWith("No hay rol LLM 'ExecutiveSynthesizer' (roles recibidos: ApiSecurityAuditor, ArchitectureAuditor, ", ex.Message);
+        Assert.Contains("LlmConfiguration:Roles", ex.Message);
+        Assert.Same(roles["DiAuditor"], AnalysisPipelineFactory.ResolveRole(roles, "diauditor"));
+    }
+
+    [Fact]
+    public void The_roles_built_by_the_factory_cover_every_role_the_pipeline_asks_for()
+    {
+        var roles = LlmRoleFactory.BuildRoles(TestConfig.FromPairs(AzureProvider), Services(), _ => null, _ => { });
+
+        var pipeline = AnalysisPipelineFactory.CreatePipeline(
+            AnalysisPipelineFactory.CreateDefaultTemplateProvider(), roles, new Models.AnalysisPipelineInput { RequestedReports = [.. Enum.GetValues<Models.ReportType>()] });
+
+        Assert.NotEmpty(pipeline.Steps);
     }
 }
