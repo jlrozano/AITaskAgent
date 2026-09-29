@@ -2,6 +2,7 @@ using AITaskAgent.Configuration;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
+using AITaskAgent.Core.StepResults;
 using AITaskAgent.FileTools;
 using AITaskAgent.FileTools.Streaming;
 using AITaskAgent.LLM.Abstractions;
@@ -24,8 +25,6 @@ using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 
 using Serilog;
-using System.Text.RegularExpressions;
-using System.Text;
 
 namespace FileToolsTestApp;
 
@@ -40,48 +39,24 @@ class Program
             projectDir = Path.GetFullPath(Path.Combine(projectDir, "..", "..", ".."));
         }
 
-        // Clean logs directory path (remove redundancy)
         var logsDir = Path.Combine(projectDir, "logs");
         Directory.CreateDirectory(logsDir);
 
-        // 2. Clear old logs
-        foreach (var file in Directory.GetFiles(logsDir))
-        {
-            try { File.Delete(file); } catch { }
-        }
+        // 2. One log file per run, previous runs kept. The evidence of a model misbehaving lives
+        // in these files and used to be wiped by the very next start, before anyone read it.
+        var logFile = Path.Combine(logsDir, $"trace_{DateTime.Now:yyyyMMdd_HHmmss}.log");
 
         // 3. Load configuration
         var environmentName = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Development";
-        
-        // Reads a settings file next to the binary, expanding ${VAR} placeholders from the
-        // environment. Returns null when the file is absent (environment overlays are optional).
-        static MemoryStream? ReadSettings(string fileName)
-        {
-            var path = Path.Combine(AppContext.BaseDirectory, fileName);
-            if (!File.Exists(path)) return null;
 
-            var json = Regex.Replace(
-                File.ReadAllText(path),
-                @"\$\{(\w+)\}",
-                m => Environment.GetEnvironmentVariable(m.Groups[1].Value) ?? m.Value);
-            return new MemoryStream(Encoding.UTF8.GetBytes(json));
-        }
-
-        using var configStream = ReadSettings("appsettings.json")
-            ?? throw new FileNotFoundException("appsettings.json not found next to the binary.");
-        // The environment overlay carries the API keys and must win over the base file.
-        using var envConfigStream = ReadSettings($"appsettings.{environmentName}.json");
-
-        var configBuilder = new ConfigurationBuilder()
+        // ${VAR} placeholders in AITaskAgent:LlmProviders (and any other section read via
+        // GetEx/BindEx) are expanded automatically by the framework itself
+        // (ConfigurationPatchExtensions.ExpandEnvVars) - no need to pre-process the raw JSON here.
+        var configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonStream(configStream);
-
-        if (envConfigStream != null)
-        {
-            configBuilder.AddJsonStream(envConfigStream);
-        }
-
-        var configuration = configBuilder
+            .AddJsonFile("appsettings.json", optional: false)
+            // The environment overlay carries the API keys and must win over the base file.
+            .AddJsonFile($"appsettings.{environmentName}.json", optional: true)
             .AddEnvironmentVariables()
             .Build();
 
@@ -90,8 +65,7 @@ class Program
             .MinimumLevel.Verbose() // Serilog Verbose = Trace
             .Enrich.FromLogContext()
             .WriteTo.File(
-                Path.Combine(logsDir, "trace.log"),
-                rollingInterval: RollingInterval.Day,
+                logFile,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}",
                 shared: true,
                 flushToDiskInterval: TimeSpan.FromSeconds(1))
@@ -114,9 +88,16 @@ class Program
         // Extra directories can be granted at runtime with /addFolder.
         services.AddFileTools(projectDir);
 
-        // Register OpenAI specifically
-        services.AddSingleton<ILlmService, OpenAILLmService.OpenAILlmService>();
+        // Register every provider's LLM service as ILlmService. AddAITaskAgent() below wires
+        // ConfigureLlmEnvironmentOptions, which matches each appsettings.json provider's
+        // ServiceType against these services' .Name (exact, then substring) and throws at
+        // startup if a provider's ServiceType matches none of them - see SimpleChatDemo for the
+        // same pattern with two services.
         services.AddSingleton<OpenAILLmService.OpenAILlmService>();
+        services.AddSingleton<ILlmService>(sp => sp.GetRequiredService<OpenAILLmService.OpenAILlmService>());
+        services.AddSingleton<ILlmService, OpenAILLmService.AzureOpenAILlmService>();
+        services.AddSingleton<ILlmService, OpenAILLmService.OpenRouterLlmService>();
+        services.AddSingleton<ILlmService, GeminiLlmService.GeminiLlmService>();
 
         var serviceProvider = services.BuildServiceProvider();
         var logger = serviceProvider.GetRequiredService<ILogger<Program>>();
@@ -167,6 +148,12 @@ class Program
                         case ToolCompletedEvent toolComp:
                             if (!toolComp.Success) Console.WriteLine($"\n❌ [Tool: {toolComp.ToolName}] Error: {toolComp.ErrorMessage}");
                             break;
+                        // Every FileTools tool already reports what it's doing via
+                        // NotifyProgressAsync (e.g. "📄 Reading file 'X'") - nothing was listening
+                        // for it, so it never reached the console.
+                        case StepProgressEvent progress:
+                            Console.WriteLine($"    {progress.Message}");
+                            break;
                     }
                 }
             }
@@ -174,45 +161,59 @@ class Program
             catch (Exception ex) { logger.LogError(ex, "Event loop error"); }
         });
 
-        // 8. Manual Hydration
-        var configSection = configuration.GetSection("AITaskAgent:LlmProviders");
-        var rawEnv = new LlmEnvironment();
-        configSection.Bind(rawEnv); 
-
-        var openAiService = serviceProvider.GetRequiredService<ILlmService>();
-        foreach (var kvp in rawEnv.Providers)
-        {
-            typeof(LlmProvider).GetProperty("Service")?.SetValue(kvp.Value, openAiService);
-        }
-
-        var rolesSection = configSection.GetSection("Roles");
-        foreach (var roleKvp in rawEnv.Roles)
-        {
-            var r = roleKvp.Value;
-            var providerName = rolesSection.GetSection(roleKvp.Key).GetValue<string>("Provider");
-            if (!string.IsNullOrEmpty(providerName) && rawEnv.Providers.TryGetValue(providerName, out var p))
-            {
-                typeof(LlmRole).GetProperty("Provider")?.SetValue(r, p);
-            }
-            else if (rawEnv.Providers.Count > 0)
-            {
-                 typeof(LlmRole).GetProperty("Provider")?.SetValue(r, rawEnv.Providers.Values.First());
-            }
-        }
+        // 8. Resolve LLM environment (providers/roles) through the framework's own mechanism.
+        // AddAITaskAgent() registered ConfigureLlmEnvironmentOptions, which builds LlmProvider and
+        // LlmRole - both `required init` - with Service/Provider already set at construction, and
+        // validates at startup (throws with a clear message if BaseUrl is missing, if a role names
+        // a provider that does not exist, or if a provider's ServiceType matches no registered
+        // ILlmService). No reflection needed to work around `init`, and no silent fallback to
+        // "whichever provider happens to be first" on a name mismatch.
+        var llmEnv = serviceProvider.GetRequiredService<IOptions<LlmEnvironment>>().Value;
 
         // 9. Shared State
         var conversation = new ConversationContext();
-        var handlers = new List<IStreamingTagHandler>
+        var handlers = new List<ITagHandler>
         {
-            new WriteFileTagHandler(projectDir, serviceProvider.GetRequiredService<ILogger<WriteFileTagHandler>>())
+            new WriteFileTagHandler(serviceProvider.GetRequiredService<ILogger<WriteFileTagHandler>>())
         };
 
         // 11. Define Agent Step
-        var defaultProvider = rawEnv.Providers.Values.FirstOrDefault() 
-            ?? new LlmProvider { Service = openAiService };
 
-        var role = rawEnv.Roles.GetValueOrDefault("default") 
-            ?? rawEnv.Roles.GetValueOrDefault(rawEnv.DefaultRole ?? string.Empty)
+        // Lets a run be pointed at any configured role (and therefore any provider/model) without
+        // editing appsettings.json: a role name on the command line skips the prompt; otherwise,
+        // with more than one role configured, ask which to use.
+        string ChooseRoleName()
+        {
+            var requested = args.FirstOrDefault(a => !a.StartsWith('/'));
+            if (requested != null && llmEnv.Roles.ContainsKey(requested))
+            {
+                return requested;
+            }
+
+            if (llmEnv.Roles.Count <= 1)
+            {
+                return llmEnv.DefaultRole;
+            }
+
+            var names = llmEnv.Roles.Keys.ToList();
+            Console.WriteLine("Selecciona el modelo a usar:");
+            for (var i = 0; i < names.Count; i++)
+            {
+                var isDefault = names[i].Equals(llmEnv.DefaultRole, StringComparison.OrdinalIgnoreCase);
+                Console.WriteLine($"  {i + 1}. {names[i]}{(isDefault ? " (default)" : "")}");
+            }
+            Console.Write($"Opción [1-{names.Count}] (Enter = default): ");
+            var input = Console.ReadLine()?.Trim();
+            return int.TryParse(input, out var choice) && choice >= 1 && choice <= names.Count
+                ? names[choice - 1]
+                : llmEnv.DefaultRole;
+        }
+
+        var defaultProvider = llmEnv.Providers.Values.FirstOrDefault()
+            ?? new LlmProvider { Service = serviceProvider.GetRequiredService<OpenAILLmService.OpenAILlmService>() };
+
+        var role = llmEnv.Roles.GetValueOrDefault(ChooseRoleName())
+            ?? llmEnv.Roles.GetValueOrDefault(llmEnv.DefaultRole ?? string.Empty)
             ?? new LlmRole { Provider = defaultProvider, Model = "gpt-4o" };
 
         var agentStep = new TemplateLlmStep<IStepResult, LlmStringStepResult>(
@@ -220,7 +221,7 @@ class Program
             role: role,
             templateProvider: null,
             tools: allTools.Where(t => t.Name != "write_to_file").Select(t => t.Name).ToList(),
-            promtTemplateString: "{{input}}", // CRITICAL: TinyTemplate uses lowercase for property access
+            promtTemplateString: "{{input}}", // Property access is case-insensitive (TinyTemplateRendered.SelectTokenIgnoreCase); lowercase here just matches its own naming convention
             systemTemplateString: """
                 Eres un experto asistente de archivos.
 
@@ -237,18 +238,17 @@ class Program
                 sea distinta del directorio principal.
                 
                 REGLAS CRÍTICAS:
-                1. Para crear o modificar archivos, DEBES usar el tag <write_file>.
-                2. FORMATO EXACTO DEL TAG: <write_file path="nombre_archivo.txt">Contenido</write_file>
-                   - Usa SIEMPRE comillas DOBLES (") para el path.
-                   - NO pongas espacios extra dentro de los corchetes del tag.
-                3. Para listar, leer o buscar, USA las herramientas (tools) disponibles.
-                4. Si el usuario te pide listar archivos, USA la herramienta 'list_dir'.
-                5. Responde siempre en español de forma concisa.
+                1. Para crear o sobrescribir un archivo escribe el tag <write_file> en tu respuesta,
+                   siguiendo al pie de la letra la sección "IN-TEXT ACTION TAGS" de este mismo prompt.
+                   No existe ninguna herramienta llamada write_file: no la invoques como tool.
+                2. Para listar, leer o buscar, USA las herramientas (tools) disponibles.
+                3. Si el usuario te pide listar archivos, USA la herramienta 'list_dir'.
+                4. Responde siempre en español de forma concisa.
                 """
         )
         {
             MaxToolIterations = 500,
-            StreamingHandlers = handlers
+            TagHandlers = handlers
         };
 
         // The system prompt is re-rendered on every request, so refreshing these variables is all
@@ -270,8 +270,8 @@ class Program
         Console.WriteLine("    AITaskAgent Interactive Demo (TRACE)");
         Console.WriteLine("========================================");
         Console.WriteLine($"Project: {projectDir}");
-        Console.WriteLine($"Model:   {role.Model}");
-        Console.WriteLine($"Logs:    {Path.Combine(logsDir, "trace.log")}");
+        Console.WriteLine($"Model:   {role.Model} ({role.Provider.Service.Name})");
+        Console.WriteLine($"Logs:    {logFile}");
         Console.WriteLine($"Tools:   {string.Join(", ", allTools.Select(t => t.Name))}");
         Console.WriteLine("----------------------------------------");
         Console.WriteLine("Comandos: /setMainPath <ruta>, /addFolder <ruta>, /folders, salir.\n");
@@ -372,8 +372,24 @@ class Program
                 Interlocked.Exchange(ref streamedChars[0], 0);
                 logger.LogTrace("Executing step with input: {Input}", input);
                 var stepInput = new LlmStringStepResult(agentStep) { Content = input };
-                var result = await ((IStep)agentStep).ExecuteAsync(stepInput, turnContext, 1, null, CancellationToken.None);
-                
+                var step = (IStep)agentStep;
+                IStepResult? result = null;
+                try
+                {
+                    result = await step.ExecuteAsync(stepInput, turnContext, 1, null, CancellationToken.None);
+                }
+                finally
+                {
+                    // Calling the step directly bypasses RetryMiddleware, which is what normally
+                    // finalizes it. Without this the conversation never compacts to its canonical
+                    // [user / assistant] pair: every tool call and result of every turn stays in the
+                    // history and the prompt grows without bound (100 K+ tokens after a few turns).
+                    await step.FinalizeAsync(
+                        result ?? ErrorStepResult.FromMessage(agentStep, "Step threw before producing a result"),
+                        turnContext,
+                        CancellationToken.None);
+                }
+
                 if (result.HasError)
                 {
                     Console.WriteLine($"\n[ERROR]: {result.Error?.Message}");

@@ -3,6 +3,7 @@
     <Project Path="Framework/AITaskAgent.csproj" />
     <Project Path="FileTools/FileTools.csproj" />
     <Project Path="McpIntegration/McpIntegration.csproj" />
+    <Project Path="OfficeTools/OfficeTools.csproj" />
   </Folder>
   <Folder Name="/Providers/">
     <Project Path="OpenAILLmService/OpenAILLmService.csproj" />
@@ -14,6 +15,9 @@
     <Project Path="OpenAILLmService.Tests/OpenAILLmService.Tests.csproj" />
     <Project Path="FileTools.Tests/FileTools.Tests.csproj" />
     <Project Path="McpIntegration.Tests/McpIntegration.Tests.csproj" />
+    <Project Path="OfficeTools.Tests/OfficeTools.Tests.csproj" />
+    <Project Path="Samples/CodebaseAnalysis.Core.Tests/CodebaseAnalysis.Core.Tests.csproj" />
+    <Project Path="Samples/CodebaseAnalysisWeb.Tests/CodebaseAnalysisWeb.Tests.csproj" />
   </Folder>
   <Folder Name="/Samples/">
     <Project Path="Samples/AdvancedLlmPipeline/Samples.AdvancedLlmPipeline.csproj" />
@@ -23,5 +27,8 @@
     <Project Path="Samples/PipelineVisualizer/PipelineVisualizer.csproj" />
     <Project Path="Samples/SimpleChatDemo/SimpleChatDemo.csproj" />
     <Project Path="Samples/YamlPipelineDemo/YamlPipelineDemo.csproj" />
+    <Project Path="Samples/CodebaseAnalysis.Core/CodebaseAnalysis.Core.csproj" />
+    <Project Path="Samples/CodebaseAnalysisPipeline/Samples.CodebaseAnalysisPipeline.csproj" />
+    <Project Path="Samples/CodebaseAnalysisWeb/CodebaseAnalysisWeb.csproj" />
   </Folder>
 </Solution>

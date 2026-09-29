@@ -180,10 +180,11 @@ internal class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmS
         ITemplateProvider templateProvider,
         string promptTemplateName,
         string? systemPromptTemplateName = null)
-        : base(name, role, templateProvider)
+        // Posicional a propósito: el parámetro base para el nombre de plantilla del prompt tiene
+        // un typo pendiente de corrección en otro archivo (Framework/LLM/Steps/TemplateLlmStep.cs);
+        // nombrar el argumento aquí acoplaría esta llamada a ese nombre concreto.
+        : base(name, role, templateProvider, null, promptTemplateName, systemPromptTemplateName)
     {
-        Prompt = promptTemplateName;
-        SystemPrompt = systemPromptTemplateName;
     }
 }
 

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Results;
 using Newtonsoft.Json;
@@ -27,6 +28,22 @@ public sealed record CriticData
     [JsonProperty("detailedCritique")]
     [Description("Comprehensive critique of both drafts covering narrative structure, character development, language, and emotional impact. Write as plain text paragraphs. Do NOT use nested JSON objects - this must be a single string value.")]
     public string DetailedCritique { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Draft text merged in by StatelessRewriterStep after the Critic LLM call returns - not
+    /// something the model itself produces. It lives here (not on CriticResult) so
+    /// rewriter_prompt.md can reach it as {{Input.Writer1}} - PromptTemplateResolver only exposes
+    /// input.Value to templates, not the wrapping step-result. Excluded from the LLM schema via
+    /// [ExcludeFromLlmSchema] rather than [JsonIgnore]: the latter would also hide it from
+    /// TinyTemplateRendered's own Newtonsoft-based serialization, making it unreachable from the
+    /// template that needs it.
+    /// </summary>
+    [ExcludeFromLlmSchema]
+    public string Writer1 { get; init; } = string.Empty;
+
+    /// <summary>Same as <see cref="Writer1"/>, for the second parallel draft.</summary>
+    [ExcludeFromLlmSchema]
+    public string Writer2 { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -36,13 +53,21 @@ public sealed record CriticData
 public sealed class CriticResult(IStep step) : LlmStepResult<CriticData>(step)
 {
     /// <summary>
-    /// Gets the name of the first writer associated with the item.
+    /// Gets or sets the first draft's text by rebuilding the immutable <see cref="CriticData"/>
+    /// <see cref="LlmStepResult{T}.Value"/> - templates reach it via {{Input.Writer1}}.
     /// </summary>
-    public string Writer1 { get; set; } = string.Empty;
-    /// <summary>
-    /// Gets the name of the second writer associated with the item.
-    /// </summary>
-    public string Writer2 { get; set; } = string.Empty;
+    public string Writer1
+    {
+        get => Value?.Writer1 ?? string.Empty;
+        set => Value = (Value ?? new CriticData()) with { Writer1 = value };
+    }
+
+    /// <summary>Same as <see cref="Writer1"/>, for the second parallel draft.</summary>
+    public string Writer2
+    {
+        get => Value?.Writer2 ?? string.Empty;
+        set => Value = (Value ?? new CriticData()) with { Writer2 = value };
+    }
 
     /// <summary>
     /// Validación estructural del resultado.

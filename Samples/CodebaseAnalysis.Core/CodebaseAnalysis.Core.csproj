@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Framework\AITaskAgent.csproj" />
+    <ProjectReference Include="..\..\OpenAILLmService\OpenAILLmService.csproj" />
+    <ProjectReference Include="..\..\OfficeTools\OfficeTools.csproj" />
+    <ProjectReference Include="..\..\FileTools\FileTools.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" Version="10.0.1" />
+    <!-- V2-C: extracción de los documentos subidos (plan v2 §7.2). OpenXml en la versión de OfficeTools. -->
+    <PackageReference Include="PdfPig" Version="0.1.16" />
+    <PackageReference Include="ReverseMarkdown" Version="6.2.1" />
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
+  </ItemGroup>
+
+  <!-- Configuración y plantillas viajan con la librería: un ejecutable que la referencia las
+       recibe en su carpeta de salida (CLI y, más adelante, la web). -->
+  <ItemGroup>
+    <None Update="appsettings.analysis.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="templates\**\*.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- El analizador Java se ejecuta como fuente con el source launcher del JDK (D13): viaja como contenido. -->
+    <None Update="Enrichment\Java\JavaAnalyzer.java">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodebaseAnalysis.Core.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);NU1903</NoWarn>
+    <RootNamespace>CodebaseAnalysis.Core</RootNamespace>
+  </PropertyGroup>
+
+</Project>

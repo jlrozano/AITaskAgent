@@ -1,1 +1,1 @@
-{{Value.OptimizedPrompt}}
+{{Input.DetailedPrompt}}

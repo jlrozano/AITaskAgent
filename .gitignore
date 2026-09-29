@@ -69,3 +69,9 @@ Samples/FileToolsTestApp/logs/events.jsonl
 
 # Worktrees
 .worktrees/
+
+# SPA compilada de CodebaseAnalysisWeb (npm run build en ClientApp/)
+Samples/CodebaseAnalysisWeb/wwwroot/
+
+# Salida de analizar este repositorio con CodebaseAnalysis (grafo, conocimiento, backups)
+.codebase/

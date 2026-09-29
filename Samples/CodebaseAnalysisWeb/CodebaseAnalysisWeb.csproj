@@ -1,0 +1,94 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);NU1903</NoWarn>
+    <RootNamespace>CodebaseAnalysisWeb</RootNamespace>
+    <!-- El mismo que la CLI: las dos leen la clave guardada con `dotnet user-secrets`. -->
+    <UserSecretsId>3e60cd17-5eb3-409f-b631-3ab8497c947d</UserSecretsId>
+
+    <ClientAppDir>ClientApp\</ClientAppDir>
+    <!-- Sin globbing dentro de ClientApp: node_modules tiene decenas de miles de ficheros y el SDK web
+         metería package.json, tsconfig.json y demás como Content. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(ClientAppDir)**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodebaseAnalysis.Core\CodebaseAnalysis.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.Map" Version="2.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+  </ItemGroup>
+
+  <!-- Exclusión explícita, por si algún glob del SDK no pasa por DefaultItemExcludes. -->
+  <ItemGroup>
+    <Compile Remove="$(ClientAppDir)**" />
+    <Content Remove="$(ClientAppDir)**" />
+    <None Remove="$(ClientAppDir)**" />
+    <EmbeddedResource Remove="$(ClientAppDir)**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodebaseAnalysisWeb.Tests" />
+  </ItemGroup>
+
+  <!--
+    SPA (plan §8 F3, tarea 4). Vite compila ClientApp/ en wwwroot/ (vite.config.ts: outDir '../wwwroot').
+    - `dotnet build` no depende de la SPA: wwwroot/ puede no existir y la API funciona igual.
+    - `dotnet publish` ejecuta `npm ci` + `npm run build` y publica wwwroot/.
+    - `dotnet build -p:BuildClientApp=true` hace lo mismo antes de compilar.
+    - `-p:SkipClientApp=true` lo desactiva en los dos casos (p. ej. para publicar con un wwwroot ya compilado).
+  -->
+  <Target Name="BuildClientApp"
+          Condition="'$(SkipClientApp)' != 'true' And Exists('$(ClientAppDir)package.json')">
+    <Exec Command="node --version" ContinueOnError="true" StandardOutputImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="NodeExitCode" />
+    </Exec>
+    <Error Condition="'$(NodeExitCode)' != '0'" Text="Node.js (&gt;= 22.22.2) es necesario para compilar ClientApp. Instálalo o usa -p:SkipClientApp=true." />
+    <Message Importance="high" Text="Compilando ClientApp (npm ci + npm run build)..." />
+    <Exec WorkingDirectory="$(ClientAppDir)" Command="npm ci" />
+    <Exec WorkingDirectory="$(ClientAppDir)" Command="npm run build" />
+  </Target>
+
+  <!-- Al publicar, la SPA se compila antes del build y no antes de ComputeFilesToPublish: si Vite cambia los hashes
+       de wwwroot/assets, los static web assets del build (evaluados con los ficheros viejos) apuntaban a ficheros
+       borrados y la compresión de la publicación fallaba (V2-E). Por eso se vuelve a leer wwwroot/ tras compilarla. -->
+  <Target Name="_RefreshWwwrootContent">
+    <!-- Dentro de un target, Remove con comodines solo casa con ficheros que existen: los borrados se quitan por ruta. -->
+    <ItemGroup>
+      <_StaleWwwrootContent Include="@(Content)" Condition="$([System.String]::Copy('%(Content.Identity)').StartsWith('wwwroot'))" />
+      <Content Remove="@(_StaleWwwrootContent)" />
+      <Content Include="wwwroot\**" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="BuildClientAppBeforeBuild" BeforeTargets="BeforeBuild"
+          Condition="'$(BuildClientApp)' == 'true' Or '$(_IsPublishing)' == 'true'"
+          DependsOnTargets="BuildClientApp;_RefreshWwwrootContent" />
+
+  <!-- `dotnet msbuild -t:Publish` no pone _IsPublishing: ahí se sigue compilando antes de ComputeFilesToPublish. -->
+  <Target Name="BuildClientAppBeforePublish" BeforeTargets="ComputeFilesToPublish"
+          Condition="'$(BuildClientApp)' != 'true' And '$(_IsPublishing)' != 'true'">
+    <CallTarget Targets="BuildClientApp" />
+  </Target>
+
+  <!-- Los ficheros de wwwroot/ que el build de la SPA acaba de crear no estaban en la evaluación del
+       proyecto: se añaden aquí a la publicación. -->
+  <Target Name="PublishClientApp" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <_SpaDistFiles Include="wwwroot\**" />
+      <ResolvedFileToPublish Include="@(_SpaDistFiles->'%(FullPath)')" Exclude="@(ResolvedFileToPublish)">
+        <RelativePath>%(_SpaDistFiles.Identity)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+</Project>

@@ -1,1 +1,1 @@
-{{Value.OptimizedPrompt ?? Create a story outline}}
+{{Input.DetailedPrompt ?? Create a story outline}}

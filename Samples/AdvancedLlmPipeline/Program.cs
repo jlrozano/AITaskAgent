@@ -68,16 +68,26 @@ IConfiguration configuration = configBuilder
 var services = new ServiceCollection();
 services.AddSingleton(configuration);
 
-// Limpiar archivos de log al iniciar (cada ejecución empieza limpia)
-var logDirectory = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "logs");
-if (Directory.Exists(logDirectory))
+// Limpiar archivos de log al iniciar (cada ejecución empieza limpia).
+// La base es AppContext.BaseDirectory (carpeta del binario), no el cwd: bajo `dotnet run` el
+// cwd es la carpeta del proyecto, así que una ruta relativa "..\..\..\logs" se sale del repo.
+var logDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
+Directory.CreateDirectory(logDirectory);
+foreach (var file in Directory.GetFiles(logDirectory))
 {
-    foreach (var file in Directory.GetFiles(logDirectory))
+    try
     {
-        try { File.Delete(file); } catch { }
+        File.Delete(file);
+    }
+    catch (IOException)
+    {
+        // Fichero bloqueado (p.ej. por otro proceso con el log abierto); se deja para la próxima limpieza.
+    }
+    catch (UnauthorizedAccessException)
+    {
+        // Sin permisos para borrar; no es un fallo fatal del arranque.
     }
 }
-Directory.CreateDirectory(logDirectory);
 
 // Configurar Serilog
 Log.Logger = new LoggerConfiguration()
@@ -99,9 +109,12 @@ services.AddLogging(loggingBuilder =>
 
 services.AddAITaskAgent();
 
-// Registro de Servicios LLM
+// Registro de Servicios LLM: ambos como ILlmService (implementaciones múltiples), igual que
+// SimpleChatDemo/McpIntegrationDemo. La resolución por proveedor la hace el framework
+// (ConfigureLlmEnvironmentOptions) emparejando el "ServiceType" de appsettings.json con
+// ILlmService.Name ("openai"/"gemini") — no hace falta hidratación manual.
 services.AddSingleton<ILlmService, OpenAILLmService.OpenAILlmService>();
-services.AddSingleton<GeminiLlmService.GeminiLlmService>();
+services.AddSingleton<ILlmService, GeminiLlmService.GeminiLlmService>();
 
 services.AddSingleton<IStepTracer, NullStepTracer>();
 services.AddSingleton<IConversationStorage>(new FileConversationStorage("conversations"));
@@ -110,60 +123,7 @@ var serviceProvider = services.BuildServiceProvider();
 serviceProvider.UseAITaskAgent();
 
 // --- LLM ENVIRONMENT & ENGINES ---
-// Manually populate LlmEnvironment to avoid binding errors with new object-based roles/providers
-var configSection = configuration.GetSection("AITaskAgent:LlmProviders");
-var rawEnv = new LlmEnvironment();
-// Note: We don't use BindEx here because it's what fails. We'll do it partially or manually.
-configuration.GetSection("AITaskAgent:LlmProviders").Bind(rawEnv); // Standard bind for simple properties
-
-var openAiService = serviceProvider.GetRequiredService<ILlmService>();
-var geminiService = serviceProvider.GetRequiredService<GeminiLlmService.GeminiLlmService>();
-
-// Manual Hydration of Providers
-foreach (var kvp in rawEnv.Providers)
-{
-    var provider = kvp.Value;
-    ILlmService service = (kvp.Key.Contains("Gemini", StringComparison.OrdinalIgnoreCase) || kvp.Key.Contains("Google", StringComparison.OrdinalIgnoreCase))
-        ? geminiService : openAiService;
-    typeof(LlmProvider).GetProperty("Service")?.SetValue(provider, service);
-}
-
-// Manual Hydration of Roles (Mapping provider names to objects)
-var rolesSection = configSection.GetSection("Roles");
-foreach (var roleKvp in rawEnv.Roles)
-{
-    var role = roleKvp.Value;
-    var roleName = roleKvp.Key;
-    var providerName = rolesSection.GetSection(roleName).GetValue<string>("Provider");
-    
-    if (!string.IsNullOrEmpty(providerName) && rawEnv.Providers.TryGetValue(providerName, out var provider))
-    {
-        typeof(LlmRole).GetProperty("Provider")?.SetValue(role, provider);
-    }
-    else if (rawEnv.Providers.Count > 0)
-    {
-        // Default to OpenRouterBase if available, otherwise first
-        var defaultProvider = rawEnv.Providers.ContainsKey("OpenRouterBase") 
-            ? rawEnv.Providers["OpenRouterBase"] 
-            : rawEnv.Providers.Values.First();
-        typeof(LlmRole).GetProperty("Provider")?.SetValue(role, defaultProvider);
-    }
-
-    if (string.IsNullOrEmpty(role.Model))
-         typeof(LlmRole).GetProperty("Model")?.SetValue(role, "gpt-4o");
-
-    var fallbacks = rawEnv.FallbackProviders
-        .Where(f => rawEnv.Providers.ContainsKey(f.Provider))
-        .Select(f => new LlmFallback(f.Model, rawEnv.Providers[f.Provider]))
-        .ToList();
-    typeof(LlmRole).GetProperty("Fallbacks")?.SetValue(role, fallbacks);
-}
-
-// Override the broken framework options
-services.AddSingleton<IOptions<LlmEnvironment>>(new OptionsWrapper<LlmEnvironment>(rawEnv));
-// Re-build SP to include the override
-serviceProvider = services.BuildServiceProvider();
-serviceProvider.UseAITaskAgent();
+var env = serviceProvider.GetRequiredService<IOptions<LlmEnvironment>>().Value;
 
 // --- EVENT LOGGING ---
 var eventChannel = serviceProvider.GetService<IEventChannel>() as EventChannel;
@@ -174,13 +134,13 @@ if (eventChannel != null)
     var reader = subscription.Reader;
     _ = Task.Run(async () =>
     {
-        var logDir = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "logs");
-        Directory.CreateDirectory(logDir);
-        var eventFile = Path.Combine(logDir, $"events-{DateTime.Now:yyyyMMdd}.jsonl");
+        var eventFile = Path.Combine(logDirectory, $"events-{DateTime.Now:yyyyMMdd}.jsonl");
 
         await foreach (var evt in reader.ReadAllAsync())
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(evt);
+            // Serializar por el tipo concreto (no por IProgressEvent): la interfaz no expone
+            // Content/TokensUsed/FinishReason/etc. de los eventos derivados.
+            var json = System.Text.Json.JsonSerializer.Serialize(evt, evt.GetType());
             await File.AppendAllTextAsync(eventFile, json + Environment.NewLine);
 
             if (evt is StepStartedEvent started)
@@ -213,7 +173,7 @@ if (eventChannel != null)
 }
 
 // Resolver Roles
-var roles = rawEnv.Roles;
+var roles = env.Roles;
 var intentionAnalyzerRole = roles["IntentionAnalyzer"];
 var outlinerRole = roles["Outliner"];
 var writersRole = roles["Writers"];
@@ -282,6 +242,7 @@ Console.WriteLine("=== MÁQUINA DE HISTORIAS DE IA CON MEMORIA ===");
 Console.WriteLine("Este sistema puede:");
 Console.WriteLine("1. 📝 Crear cuentos nuevos");
 Console.WriteLine("2. ✏️  Revisar y modificar el cuento anterior");
+Console.WriteLine("Comandos: /clear (nueva conversación), /exit (salir)");
 Console.WriteLine("--------------------------------------------------");
 
 var conversationStorage = serviceProvider.GetRequiredService<IConversationStorage>();
@@ -301,6 +262,24 @@ while (true)
     Console.Write("\n💬 Tú: ");
     var input = Console.ReadLine();
     if (string.IsNullOrWhiteSpace(input)) break;
+
+    var command = input.Trim().ToLowerInvariant();
+    if (command == "/exit")
+    {
+        Console.WriteLine("👋 ¡Hasta luego!");
+        break;
+    }
+
+    if (command == "/clear")
+    {
+        // Overwrite the persisted file too - otherwise the next launch reloads the same
+        // history this command was meant to drop.
+        conversation = new ConversationContext { ConversationId = USER_ID };
+        lastStory = null;
+        await conversationStorage.SaveConversationAsync(conversation);
+        Console.WriteLine("🧹 Conversación reiniciada.");
+        continue;
+    }
 
     try
     {
