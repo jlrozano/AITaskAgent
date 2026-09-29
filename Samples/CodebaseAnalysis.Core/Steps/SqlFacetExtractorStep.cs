@@ -838,12 +838,14 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
     }
 
     /// <summary>
-    /// Serialización de las facetas: indentada, como siempre, y sin escapar los caracteres no ASCII (tildes de nombres y de
-    /// los motivos), que van a un prompt y no a HTML.
+    /// Serialización de las facetas: compacta, porque la sangría no lleva información y en el grafo sintético de los tests
+    /// era el 21 % de los caracteres (<c>FacetExtractionTests.The_facets_are_compact_json</c>), y sin escapar los caracteres
+    /// no ASCII (tildes de nombres y de los motivos), que van a un prompt y no a HTML. La usa también
+    /// <see cref="HardcodedSecretScanner"/>.
     /// </summary>
-    private static readonly JsonSerializerOptions FacetJsonOptions = new()
+    internal static readonly JsonSerializerOptions FacetJsonOptions = new()
     {
-        WriteIndented = true,
+        WriteIndented = false,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 

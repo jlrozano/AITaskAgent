@@ -100,7 +100,7 @@ public static class HardcodedSecretScanner
 
         return findings.Count == 0
             ? "[]"
-            : JsonSerializer.Serialize(findings, new JsonSerializerOptions { WriteIndented = true });
+            : JsonSerializer.Serialize(findings, Steps.SqlFacetExtractorStep.FacetJsonOptions);
     }
 
     private static string? Resolve(string file, string repoPath)

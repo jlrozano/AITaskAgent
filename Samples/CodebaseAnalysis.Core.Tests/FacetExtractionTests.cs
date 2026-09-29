@@ -518,6 +518,53 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(withoutIndex, withIndex);
     }
 
+    /// <summary>
+    /// Las facetas van al prompt en JSON compacto y sin escapar las tildes: la sangría son tokens sin información. Mide el
+    /// ahorro frente a la misma salida sangrada sobre el grafo sintético con el plugin Struts/JSP y lo escribe en la salida
+    /// del test.
+    /// </summary>
+    [Fact]
+    public async Task The_facets_are_compact_json()
+    {
+        var (graph, repo) = await StrutsGraphAsync();
+        using var g = graph;
+        await g.NodeAsync("DiRegistration", "IRepo", "demo.di.IRepo", "src/Startup.cs", 5, 5, "{\"di_lifetime\":\"Scoped\",\"fan_in\":0}");
+        await g.NodeAsync("Flow", "Alta", "demo.Flow.Alta", "src/Svc.java", 1, 1, "{\"step_count\":3,\"entry_method\":\"demo.Svc.alta\"}");
+        await g.NodeAsync("Route", "/api", "__route__GET__/api", "src/Api.cs", 3, 3, "{\"route_path\":\"/api\",\"http_verb\":\"GET\",\"auth_required\":false}");
+        await g.NodeAsync("Class", "Vieja", "demo.Vieja", "src/Vieja.java", 1, 9, "{\"annotations\":[\"Deprecated\"],\"fan_in\":0}");
+        File.WriteAllText(Path.Combine(repo, "Secretos.cs"), "public const string ClientSecret = \"abcd1234efgh\"; // contraseña\n");
+        await g.NodeAsync("File", "Secretos.cs", "demo.Secretos", "Secretos.cs", 1, 1);
+
+        var facets = await FacetsAsync(g.DatabasePath, repo);
+
+        var indented = new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        var compact = new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        long compactChars = 0, indentedChars = 0;
+        var measured = new List<string>();
+        foreach (var property in typeof(ReportFacetInput).GetProperties().Where(p => p.PropertyType == typeof(string)))
+        {
+            var value = (string?)property.GetValue(facets);
+            if (string.IsNullOrEmpty(value) || value == "[]" || value[0] is not ('[' or '{'))
+                continue;
+            System.Text.Json.Nodes.JsonNode? node;
+            try { node = System.Text.Json.Nodes.JsonNode.Parse(value); }
+            catch (JsonException) { continue; }
+            Assert.Equal(node!.ToJsonString(compact), value);
+            compactChars += value.Length;
+            indentedChars += node.ToJsonString(indented).Length;
+            measured.Add(property.Name);
+        }
+
+        Assert.Contains(nameof(ReportFacetInput.StrutsActionsWithoutHandler), measured);
+        Assert.Contains(nameof(ReportFacetInput.UnresolvedForwards), measured);
+        Assert.Contains(nameof(ReportFacetInput.HardcodedSecrets), measured);
+        Assert.Contains("no está en el grafo", facets.StrutsActionsWithoutHandler);
+        Assert.Contains("contraseña", facets.HardcodedSecrets);
+        Assert.True(compactChars < indentedChars);
+        output.WriteLine($"{measured.Count} facetas no vacías: {compactChars} caracteres compactas, {indentedChars} sangradas, " +
+            $"ahorro {(indentedChars - compactChars) * 100.0 / indentedChars:F1} % ({string.Join(", ", measured)})");
+    }
+
     [Fact]
     public async Task Without_a_struts_pass_the_struts_facets_are_empty()
     {
