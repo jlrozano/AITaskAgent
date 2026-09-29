@@ -93,6 +93,36 @@ con un LLM real ni sobre el grafo de `delta/Online`.
 - (c) Medir en el análisis completo los tokens por auditor y cuánto código repiten entre ellos, antes de plantear
   exploración compartida, caché de prompts o tope de concurrencia.
 
+**Corregido tras la prueba M (2026-09-29, hecho).** Discrepancias que encontró la guía
+`docs/guides/codebase-analysis-flujo-y-politica-de-informes.md` (sección 2.13, donde quedan como corregidas):
+- Hecho: `graph_domain` da «❔ Desconocida» sin `auth_required`, en lugar de «🔓 No» (resto de H-2).
+- Hecho: `obsolete_elements` lee también `annotations`, así que el `@Deprecated` del analizador llega al 08.
+- Hecho: `graph_neighbors` etiqueta «ingesta Office» las `CALLS` de Office, reconocidas por el `origin` de su nodo de
+  origen, en lugar de «heurística cbm».
+- Hecho: `report_deuda_prompt.md` pide la matriz esfuerzo/impacto como `flowchart` con un `subgraph` por cuadrante, sin
+  `quadrantChart`.
+- Hecho: `_common_rules.md` va solo en la plantilla de prompt de cada auditor y de la síntesis.
+- Hecho: las plantillas ya no dicen «SQL o Sesión» en `suspicious_jsps`.
+- Hecho: erratas del README de la web (`view_code_item` y los 300 s de inactividad del chat).
+
+Además, en la misma tanda:
+- `json_valid` en `graph_domain`, `graph_health`, `graph_map` y `graph_flows`.
+- El aviso de deriva de cbm (H-9) separa los ficheros que cbm no indexó, con la pista del MAX_PATH, de los nombres que no
+  casan, y guarda los dos recuentos en `details.cbm_match`.
+- La consola de la CLI lleva hora y origen, paso o auditor, también en «Executing Tool».
+- El índice por label de `GraphSchema` tiene nombre propio: el de antes chocaba con el `idx_nodes_label (project, label)`
+  de cbm y no se creaba. Falta medir el efecto en las facetas sobre la BD real, que tardaron 51,5 s.
+
+**Incidencias abiertas tras la prueba M:**
+- Azure no tiene deployments en el recurso (`404 DeploymentNotFound` en los nueve auditores): bloquea todo lo de la
+  prueba que exige LLM, es decir, tiempos y tokens por auditor, lectura repetida entre auditores y calidad de los informes.
+- Hay que repetir la prueba con la copia en una ruta corta, `C:\Users\juan.rozano\m\Online` (decidido). En la ruta
+  temporal larga, cbm no indexó los ficheros que llegaban al MAX_PATH, y el analizador Java encontró 1364 ficheros más de
+  los que tenía cbm.
+- `LlmProvider.CalculateCost` devuelve null porque no hay precios configurados, así que `costUsd` no sirve para medir.
+
+Matiz para la propuesta (a): en Java, 06 y 09 comparten menos evidencia de la que se suponía.
+
 ## Pendiente (en orden)
 
 1. **Validadas por el usuario el 2026-09-29** las decisiones R1-R8 y C1-C7 de la regeneración y el Change Log de la spec
