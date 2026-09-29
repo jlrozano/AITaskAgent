@@ -724,3 +724,53 @@ del análisis agrupados por valor y con su origen (`[rol]`, `[proveedor]` o `[se
 escriben además en el fichero de log con una propiedad que las excluye de la consola (`Samples/CodebaseAnalysisPipeline/Program.cs:173`);
 el resto de mensajes del pipeline sigue sin llegar al fichero de la CLI, como antes. Tests: `EffectiveLimitsTests.cs` y
 `OfflinePipelineTests.cs`. No se ha unificado la configuración de tiempos en una sección (recomendación 16).
+
+**Auditores: `grep_search`, código muerto por patrón y `view_code_item` en Java (tanda C, mismo día).** Suites al terminar:
+Core 540 con JDK (529 antes), Web 113, FileTools 76 (68) y Vitest 204. Ninguna llamada real a un LLM. Es la propuesta (d),
+capas 2 y 3; la capa 1 en el analizador sigue aparcada y `JavaAnalyzer.java` no se ha tocado.
+
+**`grep_search` para los auditores, hecho.** Entra en `AnalysisPipelineFactory.AuditorToolNames`
+(`CORE/AnalysisPipelineFactory.cs:251-254`); `find_by_name` y `list_dir` no, porque `grep_search` con `Includes` ya localiza
+ficheros y cada tool más es esquema en cada llamada. Revisada para un repositorio grande: recorría también `.git`, la carpeta de
+la BD y la de informes (un sufijo buscado en la raíz encontraba el informe anterior) y los binarios, devolvía líneas enteras de
+ficheros minificados y no decía si había cortado. Ahora no entra en `.git`, `bin`, `obj` ni `node_modules`, ni en
+`FileToolsConfiguration.SearchExcludedDirectories`, que la app fija con la carpeta de la BD y la de informes
+(`CORE/Hosting/AnalysisToolRegistration.cs:44-51`); salta binarios y ficheros de más de 1 MB, recorre en orden ordinal, corta
+las líneas a 300 caracteres y, al llegar a las 50 coincidencias, añade un último elemento `Truncated` sin `Filename`, que
+`ClaimAuditor` ignora (`FileTools/Tools/GrepSearchTool.cs:37-50`, `:177`, `:233-241`). La decodificación de H-8 no cambia.
+Tests: `FileTools.Tests/ToolBehaviorTests.cs` y, sobre las ramas del pipeline, `AuditorToolsTests`.
+
+**Capa 2, candidatos agrupados por patrón, hecha.** `ZeroFaninClasses` y `UnreadFields` leen todos los candidatos y
+`DeadCodeGrouping` los agrupa con un algoritmo determinista (tokens CamelCase, prefijo o sufijo de tokens más frecuente desde
+10 candidatos, alargado mientras conserve el 80 %, y directorio para el resto). Los grupos van en `ZeroFaninGroups` y
+`UnreadFieldGroups` con patrón, recuento y tres ejemplos, y no se repiten en las listas (`CORE/Steps/SqlFacetExtractorStep.cs:209-251`,
+`:1002-1039`, `CORE/Support/DeadCodeGrouping.cs:81-120`). Tests: `DeadCodePatternTests.cs`.
+
+**Faceta de instanciación dinámica, hecha.** `DynamicInstantiationSites` recorre el `RepositoryScan` con expresiones regulares
+sobre el texto sin comentarios (Java: `Class.forName`, `newInstance`, `getDeclaredConstructor`, `ServiceLoader.load`; C#:
+`Activator.CreateInstance`, `GetType`, `Assembly.Load*`; siempre con argumento no literal) y los XML que no son de build
+(`class=`, `type=`, `<…-class>`), y el cruce marca `likely_dynamic` con su `evidence` (`CORE/Support/DynamicInstantiationScanner.cs:63-104`,
+`CORE/Support/DeadCodeGrouping.cs:218-298`). Sobre la copia del repositorio objetivo, sin grafo: 52 sitios y 2409 clases
+nombradas, 5,5 s con caché y 44 s en frío; entre los sitios, los `Class.forName` de la factoría de DAO
+(`UtilidadesDAO.java:206`, `:481`). Esa factoría compone el nombre con variables y un literal final `"Impl"` (`:202`), así
+que el sufijo del grupo no aparece entero: se añadió la regla de la pieza fija (un literal junto al sitio que es final de
+tokens del sufijo) al comprobarlo. No se ha podido comprobar el grupo que sale sobre el grafo enriquecido de ese repositorio,
+porque su proyecto de cbm se borró. Tests: `DeadCodePatternTests.cs` (Java, C# y XML sintéticos).
+
+**Capa 3, regla en las plantillas, hecha.** `_graph_rules.md` explica `grep_search` y dice que un grupo grande con patrón común
+es señal de uso dinámico (reglas 5 y 6); el 03 recibe los grupos y los sitios y la instrucción de buscar la factoría con
+`grep_search`, leerla y, si la instanciación es plausible, dar el grupo como «dudoso por instanciación dinámica» con la
+evidencia (`CORE/templates/report_codigomuerto_prompt.md:57`, `report_codigomuerto_system.md:10`); el 02 recibe los grupos de
+campos con la advertencia de reflexión y serialización. Test: `The_dead_code_prompts_carry_the_groups_the_dynamic_sites_and_the_rule_to_verify_them`.
+Sin LLM no se sabe si los auditores la siguen.
+
+**`view_code_item` para Java, hecho.** FileTools tiene un punto de extensión, `ICodeItemLocator`, sin dependencia de Core: la
+tool pregunta a los que recibe (por constructor o registrados en el contenedor) y al final a Roslyn, así que sin localizadores
+se comporta como antes (`FileTools/CodeItems/ICodeItemLocator.cs`, `FileTools/Tools/ViewCodeItemTool.cs:34`, `:116-122`).
+La app registra `GraphCodeItemLocator`, que toma el rango del nodo por `file_path` y QN (el de `javac` en Java, campos incluidos)
+y elige sobrecarga por `param_types`, y detrás `JavaCodeItemLocator`, que cuenta llaves sin comentarios ni cadenas; los `.cs`
+siguen con Roslyn (`CORE/Hosting/AnalysisToolRegistration.cs:41-42`). Cada declaración mostrada conserva la cabecera
+`=== … ===` / `Location:` que lee `ClaimAuditor` (H-5); una sobrecarga ambigua se lista sin código ni esa cabecera. Tests:
+`FileTools.Tests/CodeItemLocatorTests.cs` y `CodebaseAnalysis.Core.Tests/JavaCodeItemLocatorTests.cs`. Límites: el localizador
+por llaves no reconoce campos ni métodos de clases anónimas, y los genéricos se comparan por su nombre escrito (`T`) y no por
+el borrado que usa el grafo (`Object`).

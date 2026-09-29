@@ -227,7 +227,7 @@ blanca, nunca métricas (`CORE/Steps/SemanticEnrichmentStep.cs:36-47`). Sin fich
 ## 1.6 Facetas SQL (`SqlFacetExtractorStep`)
 
 El paso abre la copia, detecta el ecosistema por las extensiones de los ficheros del grafo y por algunas etiquetas
-(`CORE/Steps/SqlFacetExtractorStep.cs:989-1103`) y ejecuta unas cuarenta consultas, cada una con `LIMIT` y un `ORDER BY` determinista. El resultado es un
+(`CORE/Steps/SqlFacetExtractorStep.cs:1164-1279`) y ejecuta unas cuarenta consultas, cada una con `LIMIT` y un `ORDER BY` determinista. El resultado es un
 único `ReportFacetInput` que vive en memoria y en el contexto (`:581`) y que reciben todos los auditores; cada
 plantilla de prompt elige qué placeholders incluye, y esa elección es la que fija qué faceta va a qué informe (la
 matriz está en el apartado 2.1). Tres propiedades de diseño afectan a todos los informes:
@@ -235,7 +235,7 @@ matriz está en el apartado 2.1). Tres propiedades de diseño afectan a todos lo
 - **Lo desconocido no es cero:** `ZeroFaninClasses` solo lista tipos con `fan_in` conocido e igual a 0 (`:186-211`),
   `UnvalidatedRoutes` solo `auth_required = false` (`:298-306`) y las rutas sin dato dicen `desconocido`
   (`:93-102`, `:403-410`). Una consulta que falla llega como `[] /* Faceta no disponible por un error SQL …: no es un
-  conjunto vacío */` (`:851-852`).
+  conjunto vacío */` (`:875-876`).
 - **Métricas calculadas con procedencia:** si falta la propiedad, `fan_in`/`fan_out` salen de `CALLS` resueltas (con
   `enriched_by` distinto del fallback LLM y solo en nodos marcados por el mismo enriquecedor), `method_count` de
   `DEFINES_METHOD`, `cyclomatic_total` como suma si todos los métodos la tienen y la LOC del rango de líneas, en tablas
@@ -245,13 +245,32 @@ matriz está en el apartado 2.1). Tres propiedades de diseño afectan a todos lo
 - **Referencias Java en el código muerto:** con `USES_TYPE` en el grafo, `ZeroFaninClasses` ya no exige que el tipo
   declare constructor, porque el `new` con el implícito deja arista; sin ellas lo sigue exigiendo. Quedan fuera, además,
   los tipos que Struts instancia por reflexión: el `form_type` y el `action_type` de sus `Route`, comparados por FQN con
-  el `fqn` del tipo (`:186-211`). `UnreadFields` da hasta 30 campos `private` que no son `static final` y no tienen
-  ninguna `READS` entrante, con cuántos orígenes los escriben (`:213-229`).
+  el `fqn` del tipo (`:196-229`). `UnreadFields` da hasta 30 campos `private` que no son `static final` y no tienen
+  ninguna `READS` entrante, con cuántos orígenes los escriben (`:233-251`).
 - **Código adjunto:** `HighCyclomaticMethods`, `CriticalHotspotsExceptions` y `HotspotsRanking` adjuntan el fragmento
-  del disco de sus diez primeros elementos, con 70 líneas como máximo (`:132`, `:294`, `:431`, `:947-987`).
+  del disco de sus diez primeros elementos, con 70 líneas como máximo (`:132`, `:294`, `:431`, `:962-977`).
+- **Candidatos agrupados por patrón (tanda C):** las consultas de `ZeroFaninClasses` y `UnreadFields` leen todos los
+  candidatos, hasta 20 000 (`:209-231`, `:238-251`), y `GroupedFacetAsync` los agrupa (`:1002-1039`): tokens CamelCase del
+  nombre (en un campo, el del tipo que lo declara), el prefijo o sufijo de tokens con más miembros mientras llegue a 10,
+  alargado un token mientras conserve el 80 % (`CORE/Support/DeadCodeGrouping.cs:54-57`, `:81-120`) y, con los que quedan,
+  los directorios con 10 o más. Los grupos van en `ZeroFaninGroups` y `UnreadFieldGroups` con patrón, recuento, prefijo,
+  sufijo, directorio y paquete comunes y tres ejemplos; sus miembros ya no salen en las listas, que muestran los 20 y 30
+  primeros de los sueltos.
+- **Instanciación dinámica (tanda C):** `DynamicInstantiationSites` sale de recorrer en disco los `.java` y `.cs` del
+  `RepositoryScan` (sin raíces de test ni carpeta de informes, `:1094-1120`) con expresiones regulares sobre el texto sin
+  comentarios: `Class.forName`, `newInstance`, `getDeclaredConstructor` y `ServiceLoader.load` en Java y
+  `Activator.CreateInstance`, `GetType` y `Assembly.Load*` en C#, con argumento no literal y no sobre `X.class`
+  (`CORE/Support/DynamicInstantiationScanner.cs:63-104`, `:302-306`). Suma las clases de `class="…"`, `type="…"` y
+  `<…-class>` de los XML que no son de build (`:176-188`). El cruce marca `likely_dynamic` un grupo cuyo sufijo, prefijo
+  o paquete aparece en la línea de un sitio, en las cinco anteriores o en un literal del fichero del sitio, si un literal
+  junto al sitio es la pieza fija del nombre compuesto (un final de tokens del sufijo, como `+ "Impl"`), o si la
+  configuración nombra algún miembro (`DeadCodeGrouping.cs:218-298`); un candidato suelto nombrado lleva
+  `named_in_configuration`. Es una heurística, y las dos facetas lo dicen en su `note`. En la copia del repositorio
+  objetivo encuentra 52 sitios, entre ellos los `Class.forName` de la factoría de DAO
+  (`src/geo/DAO/utilidades/UtilidadesDAO.java:206`, `:481`), y 2409 clases nombradas, en 5,5 s con caché y 44 s en frío.
 
 Dos facetas no salen del SQL: `HardcodedSecrets` recorre en disco los ficheros que referencia el grafo y enmascara el
-valor (`:515-527`), y `ProvidedDocumentation` es el índice de hasta 30 documentos subidos con `useInAnalysis`
+valor (`:539-549`), y `ProvidedDocumentation` es el índice de hasta 30 documentos subidos con `useInAnalysis`
 (`CORE/Steps/ProvidedDocumentationFacet.cs:19-21`). El paso tiene 5 minutos fijos (`SqlFacetExtractorStep.cs:25`).
 
 En la prueba M tardó 51,5 s sobre una copia de 1 676 672 KB (el tamaño que da el log al copiarla de cbm). Una causa se ha comprobado en el esquema: cbm trae su propio
@@ -275,13 +294,14 @@ plantillas `report_<prefijo>_system.md` y `_prompt.md`, un límite de `AuditorMi
 tools de 12, o 16 para `FlowsAuditor` (`CORE/AnalysisPipelineFactory.cs:175-203`, `:245-268`,
 `CORE/appsettings.analysis.json:19-21`). Todos van en `TolerantReportsParallelStep`, con `ReportsMinutes` (60) para el
 conjunto y `CodebaseAnalysis:Reports:MaxParallelAuditors` como tope de concurrencia; con 0, el valor por defecto, corre
-una rama por procesador (`Framework/Core/Steps/ParallelStep.cs:60`). Las seis tools son las mismas para los nueve
-(`CORE/AnalysisPipelineFactory.cs:240-243`):
+una rama por procesador (`Framework/Core/Steps/ParallelStep.cs:60`). Las siete tools son las mismas para los nueve
+(`CORE/AnalysisPipelineFactory.cs:251-254`):
 
 | Tool | Qué da | Qué no da |
 |---|---|---|
 | `view_file` | hasta 800 líneas del fichero, decodificadas con la regla del repositorio (`FileTools/Tools/ViewFileTool.cs:19`, `:90`) | nada del grafo |
-| `view_code_item` | nodos por nombre con su `Location` | solo entiende C#: parsea con Roslyn (`FileTools/Tools/ViewCodeItemTool.cs:93-94`), así que en Java no sirve |
+| `view_code_item` | el código de un tipo, método o campo por su nombre, con su `Location`; en C# con Roslyn y fuera de C# con los `ICodeItemLocator` que registra la app: el rango del nodo del grafo y, sin grafo o sin nodo, las llaves del `.java` (`FileTools/Tools/ViewCodeItemTool.cs:34`, `:116-122`, `CORE/Hosting/AnalysisToolRegistration.cs:41-42`) | una sobrecarga ambigua: la lista con la ruta que elige cada una (`Clase.metodo(int,String)`), sin código (`ViewCodeItemTool.cs:154-158`); en Java no ve campos sin grafo ni métodos de clases anónimas |
+| `grep_search` | hasta 50 líneas con fichero y número, por orden ordinal de ruta, con un último elemento `Truncated` si llega al tope; sin `.git`, `bin`, `obj`, `node_modules`, la carpeta de la BD ni la de informes, binarios ni ficheros de más de 1 MB, y líneas cortadas a 300 caracteres (`FileTools/Tools/GrepSearchTool.cs:37-50`, `:177`, `:233-241`) | estructura: es texto |
 | `graph_search` | nodos por etiqueta, nombre o QN con sus propiedades útiles y, con `include_code`, su código leído del disco (`CORE/Tools/GraphSearchTool.cs:20-21`, `:305`) | vecinos |
 | `graph_neighbors` | vecinos por `CALLS`, `INHERITS`, `IMPLEMENTS`, `DEFINES_METHOD`, `HANDLES`, las aristas Struts/JSP y, en Java, `USES_TYPE`, `READS` y `WRITES`, con la procedencia de cada arista y un filtro `line` que deja las aristas con esa línea (`CORE/Tools/GraphNeighborsTool.cs:34-38`, `:249-251`, `:405-446`) | código |
 | `graph_domain` | rutas con su clase (`HANDLES`), registros DI y atributos (`CORE/Tools/GraphDomainTool.cs:86-146`); sin `auth_required`, la autenticación sale «❔ Desconocida» (`:115-121`) | anotaciones Java: `attributes` es de C# |
@@ -377,8 +397,8 @@ depende de la ejecución en memoria y no permite rehacer un informe correcto.
 
 ## 1.12 El chat
 
-Un turno es un paso LLM con prompt literal y dieciséis tools: las seis del auditor más `list_dir`, `find_by_name`,
-`grep_search`, `list_reports`, `read_report`, `create_report`, `update_report`, `list_documents`, `describe_image` y
+Un turno es un paso LLM con prompt literal y dieciséis tools: las siete del auditor más `list_dir`, `find_by_name`,
+`list_reports`, `read_report`, `create_report`, `update_report`, `list_documents`, `describe_image` y
 `semantic_search` (`CORE/Chat/ChatAgent.cs:91-97`). Consulta la misma copia del grafo y los mismos informes que el
 análisis, y la web impide que convivan un turno y un análisis, porque este sobrescribe la BD y mueve los informes. El
 límite del turno es `CodebaseAnalysis:Chat:TurnTimeoutMinutes` (5), aplicado con su propio token (`:217`).
@@ -392,7 +412,8 @@ Para «dónde se usa esta clase o este campo» la plantilla manda a las `USES_TY
 Al cerrar el turno `ClaimAuditor` recorre las marcas y las contrasta con la evidencia que dejaron los resultados de las
 tools (`CORE/Chat/ClaimAuditor.cs:390-446`):
 
-- `view_file` aporta el tramo que enseñó; `view_code_item`, solo el tramo `Location` de cada nodo devuelto;
+- `view_file` aporta el tramo que enseñó; `view_code_item`, solo el tramo `Location` de cada nodo devuelto, y nada
+  de una lista de sobrecargas, que no enseña código;
   `grep_search`, las líneas con coincidencia; `graph_search`, solo los tramos de `include_code`.
 - `read_report` y `read_document` aportan el informe o documento leído, que es lo que respalda un `[D]`.
 - `graph_neighbors`, `graph_domain` y la tabla de `graph_search` no aportan evidencia aunque citen `ruta:línea`.
@@ -514,8 +535,10 @@ es un CLI externo que no se ha leído, y el esquema de propiedades de cbm sale d
 | `unused_di_registrations` | `:166-173` | 03 | vacía: sin `DiRegistration` |
 | `orphan_routes` / `orphan_routes_list` | `:175-184`, `:419` | 03, 07 | acciones Struts sin `HANDLES`, 20 |
 | `struts_actions_without_handler` | `:233-248` | 03, 07 | 30, con el motivo |
-| `zero_fanin_classes` | `:186-211` | 03 | 20 de 817 en el repositorio objetivo, con `fan_in` calculado de `CALLS` y `USES_TYPE`, sin los que Struts instancia por reflexión |
-| `unread_fields` | `:213-229` | 02, 03 | 30 de 154 campos privados sin `READS` en el repositorio objetivo |
+| `zero_fanin_classes` | `:196-231` | 03 | 20 de 817 en el repositorio objetivo (los 20 primeros sin grupo desde la tanda C), con `fan_in` calculado de `CALLS` y `USES_TYPE`, sin los que Struts instancia por reflexión |
+| `unread_fields` | `:233-251` | 02, 03 | 30 de 154 campos privados sin `READS` en el repositorio objetivo (los 30 primeros sin grupo desde la tanda C) |
+| `zero_fanin_groups`, `unread_field_groups` | `:209`, `:238`, `DeadCodeGrouping` | 03; 02 solo la de campos | grupos de candidatos con patrón común, con `likely_dynamic` y su evidencia; sin medir sobre el grafo del repositorio objetivo |
+| `dynamic_instantiation_sites` | `:204-207`, `DynamicInstantiationScanner` | 03 | escaneo de disco: 52 sitios y 2409 clases nombradas en la copia del repositorio objetivo |
 | `route_handlers_mapping` | `:263-269` | 04 | 50 `HANDLES` del plugin |
 | `unresolved_forwards` | `:271`, `:806-838` | 04, 05 | 30 de `enrichment_runs.details` |
 | `di_resolutions` | `:273-279` | 04 | `IMPLEMENTS` resueltas, 50 |
@@ -523,7 +546,7 @@ es un CLI externo que no se ha leído, y el esquema de propiedades de cbm sale d
 | `unvalidated_routes` | `:298-306` | 05 | vacía: el plugin no escribe `auth_required` |
 | `suspicious_jsps` | `:311-325` | 05, 06, 08 | 25 de las JSP sospechosas |
 | `suspect_patterns` | `:327-337` | 05 | vacía: propiedades de Office |
-| `hardcoded_secrets` | `:515-527` | 05, 07 | escaneo de disco |
+| `hardcoded_secrets` | `:539-549` | 05, 07 | escaneo de disco |
 | `project_components` | `:340-347` | 06 | sin verificar: depende de si cbm crea `Package` o `Module` |
 | `martin_instability_metrics`, `dependency_cycles`, `layer_violations` | `:349-375` | 06 | vacías: nadie en el repositorio escribe `instability`, `in_cycle` ni `layer_violation` |
 | `architectural_communities` | `:392-399` | 06 | sin verificar: `community_id` no lo escribe nadie en el repositorio |
@@ -545,7 +568,7 @@ modelo decida leer, porque sus facetas de defectos y de DI son de Office o de .N
 | Aspecto | Contenido |
 |---|---|
 | Facetas | `metrics_summary`, `routes_summary`, `flows_summary`, `domain_entities_summary`, `workflow_steps_catalog`, `prompt_templates_catalog` |
-| Tools | las seis del auditor; el prompt pide `graph_domain` (`view: routes`) y `graph_neighbors` sobre la ruta y su clase (`report_funcional_prompt.md:42`) |
+| Tools | las siete del auditor; el prompt pide `graph_domain` (`view: routes`) y `graph_neighbors` sobre la ruta y su clase (`report_funcional_prompt.md:42`) |
 | Sistema | reconstruir el negocio a partir de nombres de tablas, campos, consultas y módulos, agrupar capacidades y dibujar uno o dos Mermaid (mapa de capacidades, ER o flujo de datos) |
 | Prompt | misión funcional, casos de uso y procesos, qué hace cada componente y a quién sirve |
 | Fuente por conclusión | dominio y capacidades: nombres del grafo estructural (cbm) y documentos (D), es decir, inferencia; puntos de entrada: rutas del plugin (R); casos de uso concretos: `graph_neighbors` sobre `HANDLES` y `FORWARDS_TO` (R) y lectura de código (C) si el modelo la hace |
@@ -556,32 +579,32 @@ modelo decida leer, porque sus facetas de defectos y de DI son de Office o de .N
 
 | Aspecto | Contenido |
 |---|---|
-| Facetas | `high_cyclomatic_methods` (con código), `bloated_classes`, `coupling_metrics`, `unread_fields` |
-| Tools | las seis; el prompt no nombra `graph_neighbors` |
+| Facetas | `high_cyclomatic_methods` (con código), `bloated_classes`, `coupling_metrics`, `unread_fields`, `unread_field_groups` |
+| Tools | las siete; el prompt no nombra `graph_neighbors` |
 | Sistema | criterio anti-dogma: tamaño no es mala calidad, distinguir motor cohesivo de God Class real y complejidad esencial de accidental, prohibido proponer micro-interfaces 1:1, matriz de riesgo operativo, evolutivo y ROI, soluciones en tres niveles |
 | Prompt | juzgar cada componente pre-extraído leyendo su código, agrupar en «motores especializados» y «smells confirmados», radar Mermaid y plan de remediación priorizado |
 | Fuente por conclusión | dónde mirar: métricas de `javac` y cálculos sobre aristas resueltas (F, R); veredicto de smell, cohesión o esencialidad: código (C), del `code_snippet` o de `view_file` |
-| Regla de fiabilidad | el veredicto exige leer el código y citar las líneas (`_graph_rules.md:5`) |
+| Regla de fiabilidad | el veredicto exige leer el código y citar las líneas (`_graph_rules.md:5`); un grupo grande de campos sin leer suele ser de campos escritos o leídos por reflexión o serialización y hay que comprobarlo antes de tratarlo como estado inútil (`report_codesmells_prompt.md:27`) |
 | Puntos ciegos | solo ve los 30 métodos más complejos, 25 clases más grandes y 30 más acopladas; smells sin métrica asociada (duplicación, `catch` vacío, SQL concatenado) dependen de lo que lea; el fragmento corta a 70 líneas; la LOC por rango de líneas cuenta comentarios y blancos; el `fan_in` no cuenta las llamadas desde JSP, y el de un método tampoco sus usos por referencia de tipo, que solo suman en el de su clase |
 
 ## 2.4 03 Código muerto (`DeadCodeAuditor`, `report_codigomuerto`)
 
 | Aspecto | Contenido |
 |---|---|
-| Facetas | `dead_code_candidates`, `unused_di_registrations`, `orphan_routes`, `struts_actions_without_handler`, `zero_fanin_classes`, `unread_fields` |
-| Tools | las seis; el prompt exige `graph_neighbors` con `direction: in`, comprobar `HANDLES`, los `page_imports` de las JSP y la configuración antes de declarar muerto un candidato (`report_codigomuerto_prompt.md:38`) |
+| Facetas | `dead_code_candidates`, `unused_di_registrations`, `orphan_routes`, `struts_actions_without_handler`, `zero_fanin_classes`, `unread_fields`, `zero_fanin_groups`, `unread_field_groups`, `dynamic_instantiation_sites` |
+| Tools | las siete; el prompt exige `graph_neighbors` con `direction: in`, comprobar `HANDLES`, los `page_imports` de las JSP y la configuración antes de declarar muerto un candidato (`report_codigomuerto_prompt.md:38`) |
 | Sistema | huérfanos, residuales (`_tmp`, `_bak`, `_old`…) y duplicados, por nivel de confianza |
-| Prompt | clasificar por confianza; lo que no se pueda descartar queda como candidato sin confirmar |
+| Prompt | clasificar por confianza; lo que no se pueda descartar queda como candidato sin confirmar; un grupo con patrón común se verifica buscando la factoría con `grep_search` por su sufijo, prefijo o paquete y leyéndola, y si la instanciación dinámica es plausible va como «dudoso por instanciación dinámica», con la evidencia, y no como código muerto; un candidato con `named_in_configuration` no está muerto (`report_codigomuerto_prompt.md:57`, `report_codigomuerto_system.md:10`) |
 | Fuente por conclusión | candidato: `fan_in` calculado de `CALLS` y `USES_TYPE` resueltas (F sobre R), acciones sin `HANDLES` (R) y campos privados sin `READS` (F sobre R); descarte: `graph_neighbors` entrante (R), `graph_search` sobre `Jsp` (R) y lectura de configuración (C) |
-| Regla de fiabilidad | «nadie lo llama» no prueba nada sin cruzar con `HANDLES`, JSP y configuración (`_graph_rules.md:6`) |
-| Puntos ciegos | reflexión (`Class.forName`, factorías por configuración), XML de Struts más allá del atributo `type`, llamadas desde scriptlets (fuera del grafo, D9), DWR, EJB y `web.xml`; una clase usada solo a través de su interfaz no recibe `CALLS` en sus métodos, porque la llamada apunta al método de la interfaz, y solo su `new` (con constructor escrito o implícito) o su uso como tipo le dan `fan_in`. En el repositorio objetivo eso deja 400 de los 817 tipos con `fan_in` 0 en DAO `*Oracle*Impl` que una factoría instancia por `Class.forName` con el nombre compuesto (`src/geo/DAO/utilidades/UtilidadesDAO.java:202-206` de la copia): son falsos positivos. Un campo que un framework, la serialización o la reflexión leen por nombre no tiene `READS`; `dead_code_candidates` y `unused_di_registrations` están vacías en Java |
+| Regla de fiabilidad | «nadie lo llama» no prueba nada sin cruzar con `HANDLES`, JSP y configuración (`_graph_rules.md:6`), y un grupo grande con patrón común es señal de uso dinámico que hay que verificar (`_graph_rules.md:8`) |
+| Puntos ciegos | reflexión (`Class.forName`, factorías por configuración), XML de Struts más allá del atributo `type`, llamadas desde scriptlets (fuera del grafo, D9), DWR, EJB y `web.xml`; una clase usada solo a través de su interfaz no recibe `CALLS` en sus métodos, porque la llamada apunta al método de la interfaz, y solo su `new` (con constructor escrito o implícito) o su uso como tipo le dan `fan_in`. En el repositorio objetivo eso deja 400 de los 817 tipos con `fan_in` 0 en DAO `*Oracle*Impl` que una factoría instancia por `Class.forName` con el nombre compuesto (`src/geo/DAO/utilidades/UtilidadesDAO.java:202-206` de la copia): son falsos positivos. Desde la tanda C la faceta los resume en un grupo por su patrón y `dynamic_instantiation_sites` encuentra los `Class.forName` de esa factoría, que compone el nombre como `nombrePaquete + "." + nombreModulo + nombreClases + "Impl"` (`:202`, `:481`): el sufijo entero del grupo no aparece, y lo que lo marca `likely_dynamic` es la regla de la pieza fija, porque `"Impl"` es el final de tokens de su sufijo. No se ha comprobado sobre el grafo enriquecido del repositorio objetivo qué grupo sale exactamente, ni, sin LLM, si el auditor verifica la factoría como pide la regla. Un campo que un framework, la serialización o la reflexión leen por nombre no tiene `READS`; `dead_code_candidates` y `unused_di_registrations` están vacías en Java |
 
 ## 2.5 04 Flujos end-to-end (`FlowsAuditor`, `report_flujos`)
 
 | Aspecto | Contenido |
 |---|---|
 | Facetas | `flows_catalog`, `flow_steps_graph`, `route_handlers_mapping`, `unresolved_forwards`, `di_resolutions`, `workflow_steps_catalog`, `documentation_and_prompts` |
-| Tools | las seis, con tope de 16 iteraciones; el prompt da el recorrido: `SUBMITS_TO` desde la pantalla, `HANDLES` a la clase, `FORWARDS_TO` a las pantallas y `CALLS` desde el método de entrada, usando las resueltas como camino y confirmando las heurísticas en el código (`report_flujos_prompt.md:49`) |
+| Tools | las siete, con tope de 16 iteraciones; el prompt da el recorrido: `SUBMITS_TO` desde la pantalla, `HANDLES` a la clase, `FORWARDS_TO` a las pantallas y `CALLS` desde el método de entrada, usando las resueltas como camino y confirmando las heurísticas en el código (`report_flujos_prompt.md:49`) |
 | Sistema | mapear flujos desde el punto de entrada hasta la persistencia o la salida |
 | Prompt | camino crítico, datos en cada paso y decisiones, `sequenceDiagram` y `flowchart` |
 | Fuente por conclusión | camino: grafo resuelto (R); qué hace cada paso y qué datos viajan: código (C); forwards rotos: `enrichment_runs` (F) |
@@ -593,7 +616,7 @@ modelo decida leer, porque sus facetas de defectos y de DI son de Office o de .N
 | Aspecto | Contenido |
 |---|---|
 | Facetas | `critical_hotspots_exceptions` (con código), `unvalidated_routes`, `suspicious_jsps`, `unresolved_forwards`, `suspect_patterns`, `hardcoded_secrets` |
-| Tools | las seis; el prompt no nombra `graph_neighbors` |
+| Tools | las siete; el prompt no nombra `graph_neighbors` |
 | Sistema | defectos lógicos, de seguridad y de estabilidad con criticidad P0-P3 |
 | Prompt | riesgos por lenguaje (en Java: asincronía, carreras, `catch` genéricos, fugas de conexiones), evaluar cada secreto leyendo la línea, rúbrica P0-P3 literal, matriz `ID \| Severidad \| Tipo \| Evidencia` y `critical=<n>` que el pipeline recalcula |
 | Fuente por conclusión | localización: facetas (F) y JSP sospechosas (R, plugin); defecto y severidad: código (C); secreto: escaneo de disco (F) confirmado leyendo la línea (C) |
@@ -605,7 +628,7 @@ modelo decida leer, porque sus facetas de defectos y de DI son de Office o de .N
 | Aspecto | Contenido |
 |---|---|
 | Facetas | `project_components`, `martin_instability_metrics`, `dependency_cycles`, `layer_violations`, `architectural_communities`, `type_hierarchy`, `suspicious_jsps` |
-| Tools | las seis; el prompt pide reconstruir las capas con la jerarquía y `graph_neighbors` sobre clases base, puntos de entrada y pantallas, y dice que una JSP sospechosa es violación de capas solo si su código lo confirma (`report_arquitectura_prompt.md:50`) |
+| Tools | las siete; el prompt pide reconstruir las capas con la jerarquía y `graph_neighbors` sobre clases base, puntos de entrada y pantallas, y dice que una JSP sospechosa es violación de capas solo si su código lo confirma (`report_arquitectura_prompt.md:50`) |
 | Sistema | fronteras modulares, núcleo desacoplado de la infraestructura, métricas de Martin, ciclos y violaciones, soluciones en tres niveles |
 | Prompt | topología actual y recomendada en Mermaid, hoja de ruta en tres niveles |
 | Fuente por conclusión | jerarquía: grafo resuelto (R), con su recuento de heurísticas; dependencias entre capas: `graph_neighbors` (R); violación de capas: código (C); Martin, ciclos y comunidades: facetas (F), vacías en Java |
@@ -617,7 +640,7 @@ modelo decida leer, porque sus facetas de defectos y de DI son de Office o de .N
 | Aspecto | Contenido |
 |---|---|
 | Facetas | `routes_catalog`, `routes_security_matrix`, `routes_contracts`, `orphan_routes_list`, `struts_actions_without_handler`, `hardcoded_secrets` |
-| Tools | las seis; el prompt pide comprobar una autenticación `desconocido` en la clase que atiende la ruta o en la configuración del framework y, si no se puede, declararla no evaluable (`report_apis_prompt.md:46`) |
+| Tools | las siete; el prompt pide comprobar una autenticación `desconocido` en la clase que atiende la ruta o en la configuración del framework y, si no se puede, declararla no evaluable (`report_apis_prompt.md:46`) |
 | Sistema | inventario de la superficie expuesta, riesgos de transporte y acceso a datos, contratos futuros bajo Zero Trust |
 | Prompt | adaptar la superficie al tipo de aplicación, secretos reales a la matriz de seguridad, Mermaid de superficie |
 | Fuente por conclusión | superficie: rutas del plugin (R); autenticación y autorización: código y configuración (C); secretos: escaneo (F) y línea (C) |
@@ -629,7 +652,7 @@ modelo decida leer, porque sus facetas de defectos y de DI son de Office o de .N
 | Aspecto | Contenido |
 |---|---|
 | Facetas | `hotspots_ranking` (con código), `doc_coverage_metrics`, `obsolete_elements`, `complex_classes`, `suspicious_jsps` |
-| Tools | las seis; el prompt pide medir el radio de impacto de cada hotspot con `graph_neighbors` antes de estimar esfuerzo (`report_deuda_prompt.md:42`) |
+| Tools | las siete; el prompt pide medir el radio de impacto de cada hotspot con `graph_neighbors` antes de estimar esfuerzo (`report_deuda_prompt.md:42`) |
 | Sistema | índice de salud, deuda esencial frente a accidental, ponderación pragmática de hotspots (`hotspot = CC * fan_in`), tres niveles y matriz esfuerzo/impacto en días-hombre |
 | Prompt | clasificar cada hotspot como núcleo cohesivo o deuda accidental, plan por sprints, dos Mermaid `flowchart` (matriz esfuerzo/impacto con un `subgraph` por cuadrante y hoja de ruta por sprints) |
 | Fuente por conclusión | concentración: métricas agregadas (F sobre R); radio de impacto: `graph_neighbors` (R); naturaleza de la deuda: código (C); esfuerzo en d/h: juicio del modelo sin dato de soporte |
@@ -641,7 +664,7 @@ modelo decida leer, porque sus facetas de defectos y de DI son de Office o de .N
 | Aspecto | Contenido |
 |---|---|
 | Facetas | `di_registrations_catalog`, `di_lifetimes_mapping`, `extension_points_catalog`, `config_adapters_mapping`, `creational_candidates` |
-| Tools | las seis; el prompt no nombra `graph_neighbors` |
+| Tools | las siete; el prompt no nombra `graph_neighbors` |
 | Sistema | con contenedor formal, registros, ciclos de vida y dependencias cautivas; sin él, factorías, gestión de conexiones, acoplamiento en la UI y liberación de recursos, sin penalizar la ausencia de contenedor |
 | Prompt | ajuste al lenguaje, tabla semáforo y plan de acción |
 | Fuente por conclusión | candidatos: coincidencia por nombre (F); veredicto sobre el patrón creacional o el ciclo de vida: código (C) |
@@ -732,4 +755,4 @@ auditores que deben usar el grafo para la estructura y leer el código para cada
 el tamaño de los prompts); los auditores no llegaron a correr porque Azure no tenía deployments, y la fusión 02+08 y
 06+09, los detectores deterministas y la medición de tokens siguen esperando tu OK y esa repetición. Desde las
 referencias de tipos y campos, el grafo Java dice también dónde se usa cada clase y cada campo, y eso llega al chat, a
-los auditores y a las facetas de código muerto; su falso positivo más grande son los DAO que se instancian por reflexión.
+los auditores y a las facetas de código muerto; su falso positivo más grande son los DAO que se instancian por reflexión, que desde la tanda C llegan al 03 agrupados, cruzados con los sitios de instanciación dinámica y con la regla de verificar la factoría con `grep_search` antes de darlos por muertos.

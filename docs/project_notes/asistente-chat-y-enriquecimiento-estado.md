@@ -95,8 +95,8 @@ con un LLM real ni sobre el grafo de `delta/Online`.
 - (d) **Requisito del usuario (2026-09-29): el propio workflow tiene que hacer este tipo de razonamiento**, es decir,
   detectar que un grupo de candidatos sigue un patrón de uso dinámico y verificarlo antes de afirmarlo. Propuesta en tres
   capas genéricas: faceta de puntos de instanciación dinámica y de clases nombradas en XML; candidatos agrupados por
-  patrón de paquete o sufijo; y una regla en la plantilla del auditor, que además recibe `grep_search`. Pendiente del OK
-  para planificarlo. Caso que lo motivó, instanciación por reflexión: en `delta/Online`, unos 400 de los 817 `ZeroFaninClasses` son DAO creados con
+  patrón de paquete o sufijo; y una regla en la plantilla del auditor, que además recibe `grep_search`. **Capas 2 y 3 y la faceta de instanciación, hechas en la tanda C (2026-09-29)**; la capa 1 en el
+  analizador sigue aparcada. Caso que lo motivó, instanciación por reflexión: en `delta/Online`, unos 400 de los 817 `ZeroFaninClasses` son DAO creados con
   `Class.forName` a partir de un nombre compuesto (`UtilidadesDAO.java:202-206` de la copia). La propuesta genérica es
   que el analizador detecte `Class.forName` y `newInstance` con argumento no literal y que la faceta marque como dudosos
   los tipos de los paquetes afectados. Filtrar la factoría concreta haría la app específica de un repo.
@@ -132,7 +132,8 @@ Además, en la misma tanda:
 - La copia `C:\Users\juan.rozano\m\Online` se conserva para repetir la prueba con LLM; el proyecto de cbm se borró al
   cerrar la tarea 4 y hay que reindexar antes.
 - Falsos positivos de `ZeroFaninClasses` en el repo objetivo: 400 de 817 son DAO que `UtilidadesDAO` instancia por
-  nombre compuesto. Descartarlos exige saber de esa factoría, que es del proyecto y no genérica; sin decidir.
+  nombre compuesto. Desde la tanda C se tratan de forma genérica (grupos, faceta de instanciación y regla del 03), sin
+  medir aún sobre el grafo enriquecido ni con LLM.
 
 Matiz para la propuesta (a): en Java, 06 y 09 comparten menos evidencia de la que se suponía.
 
@@ -179,7 +180,19 @@ Mientras tanto se sigue con el código que no depende del LLM, por tandas:
   - procedencia en `analysis-meta` (modelo, servicio, SHA de plantillas, huella del grafo, filas de `enrichment_runs`,
     fecha y versión);
   - volcado de los límites de tiempo efectivos al arrancar el análisis y la web.
-- **C. Auditores:** `grep_search` y las capas 2-3 de (d), y `view_code_item` para Java.
+- **C. Auditores — hecha el 2026-09-29** (detalle y tests en «Seguimiento» de la auditoría; Core 540 con JDK, Web 113,
+  FileTools 76, Vitest 204). Sin LLM y sin tocar `JavaAnalyzer.java`:
+  - `grep_search` en las tools de los auditores, sin `.git`/`bin`/`obj`/`node_modules`, la carpeta de la BD ni la de informes,
+    sin binarios, con orden ordinal y aviso `Truncated` al llegar a 50;
+  - (d) capa 2: `ZeroFaninGroups` y `UnreadFieldGroups`, candidatos agrupados por prefijo o sufijo CamelCase o directorio
+    (desde 10), fuera de las listas;
+  - (d) faceta genérica `DynamicInstantiationSites` (regex sobre `.java`/`.cs` y clases nombradas en XML) y cruce
+    `likely_dynamic` con evidencia, también por la pieza fija de un nombre compuesto (`+ "Impl"`);
+  - (d) capa 3: reglas 5 y 6 de `_graph_rules.md`, y el 03 da como «dudoso por instanciación dinámica» el grupo cuya factoría
+    verifica con `grep_search`; el 02 recibe los grupos de campos;
+  - `view_code_item` en Java: punto de extensión `ICodeItemLocator` en FileTools, localizador por grafo y, sin grafo, por llaves.
+  Sobre la copia del repositorio objetivo, el recorrido encuentra los `Class.forName` de la factoría de DAO; falta ver qué
+  grupo sale sobre su grafo enriquecido (hay que reindexar) y, con LLM, si el auditor sigue la regla.
 - **D. Streaming:** buffers perdidos sin `finish_reason` y `hasYieldedText` por choice.
 - **E. Evaluación:** validador determinista de informes.
 
