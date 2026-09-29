@@ -114,14 +114,12 @@ public class OpenAILlmService : ILlmService, IDisposable
                 request.ApiKey?[..Math.Min(4, request.ApiKey?.Length ?? 0)]);
         }
 
-        var handler = new SocketsHttpHandler
+        // No client-wide timeout: the limits are per request (RequestTimeoutOf, StreamingInactivityTimeoutOf), because
+        // they depend on the provider's or the role's settings and one client serves every role of a base URL and key.
+        // The old fixed 30 minutes meant a hung call cost half an hour and failed with an opaque cancellation.
+        var client = new HttpClient(CreateHttpMessageHandler())
         {
-            PooledConnectionLifetime = TimeSpan.FromMinutes(10)
-        };
-
-        var client = new HttpClient(handler)
-        {
-            Timeout = TimeSpan.FromMinutes(30)
+            Timeout = Timeout.InfiniteTimeSpan
         };
 
         ConfigureAuthentication(client, request);
@@ -130,6 +128,49 @@ public class OpenAILlmService : ILlmService, IDisposable
         _clients.TryAdd(cacheKey, client);
         return client;
     }
+
+    /// <summary>
+    /// The handler under each cached <see cref="HttpClient"/>. A subclass can supply its own (a proxy, a test double);
+    /// the client disposes it with itself.
+    /// </summary>
+    protected internal virtual HttpMessageHandler CreateHttpMessageHandler() => new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(10)
+    };
+
+    /// <summary>
+    /// Per-attempt limit of a non-streaming call when neither the provider nor the role sets
+    /// <see cref="AITaskAgent.LLM.Configuration.LlmInferenceSettings.RequestTimeoutSeconds"/>.
+    /// </summary>
+    public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Longest wait for the next line of a stream when neither the provider nor the role sets
+    /// <see cref="AITaskAgent.LLM.Configuration.LlmInferenceSettings.StreamingInactivityTimeoutSeconds"/>.
+    /// </summary>
+    public static readonly TimeSpan DefaultStreamingInactivityTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>Largest limit <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/> accepts, in seconds; above it there is none.</summary>
+    private const int MaxTimeoutSeconds = (int)((uint.MaxValue - 1L) / 1000);
+
+    /// <summary>The request's per-attempt limit, or null when it is disabled (0 or less).</summary>
+    internal static TimeSpan? RequestTimeoutOf(LlmRequest request) =>
+        ToLimit(request.RequestTimeoutSeconds, DefaultRequestTimeout);
+
+    /// <summary>The request's streaming inactivity limit, or null when it is disabled (0 or less).</summary>
+    internal static TimeSpan? StreamingInactivityTimeoutOf(LlmRequest request) =>
+        ToLimit(request.StreamingInactivityTimeoutSeconds, DefaultStreamingInactivityTimeout);
+
+    private static TimeSpan? ToLimit(int? seconds, TimeSpan fallback) => seconds switch
+    {
+        null => fallback,
+        <= 0 => null,
+        > MaxTimeoutSeconds => null,
+        { } s => TimeSpan.FromSeconds(s)
+    };
+
+    private static string FormatSeconds(TimeSpan limit) =>
+        limit.TotalSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Sets the client's auth header. The OpenAI chat-completions protocol authenticates with a
@@ -160,7 +201,7 @@ public class OpenAILlmService : ILlmService, IDisposable
     private static readonly HashSet<string> FrameworkFacadeOptionKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "Temperature", "TopP", "MaxTokens", "UseStreaming", "JsonSupport", "ToolSupport", "Stop",
-        "UseMaxCompletionTokens"
+        "UseMaxCompletionTokens", "RequestTimeoutSeconds", "StreamingInactivityTimeoutSeconds"
     };
 
     /// <summary>
@@ -198,7 +239,15 @@ public class OpenAILlmService : ILlmService, IDisposable
 
         if (request.Temperature.HasValue) body["temperature"] = request.Temperature.Value;
         if (request.MaxTokens.HasValue)
-            body[request.UseMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"] = request.MaxTokens.Value;
+        {
+            var useMaxCompletion = request.UseMaxCompletionTokens
+                || (!string.IsNullOrEmpty(request.Model) && (
+                    request.Model.Contains("gpt-5", StringComparison.OrdinalIgnoreCase) ||
+                    request.Model.StartsWith("o1", StringComparison.OrdinalIgnoreCase) ||
+                    request.Model.StartsWith("o3", StringComparison.OrdinalIgnoreCase)));
+
+            body[useMaxCompletion ? "max_completion_tokens" : "max_tokens"] = request.MaxTokens.Value;
+        }
         if (request.TopP.HasValue)        body["top_p"]       = request.TopP.Value;
         if (request.User != null)         body["user"]        = request.User;
 
@@ -259,17 +308,22 @@ public class OpenAILlmService : ILlmService, IDisposable
     /// The retry lives here because this service converts transport failures into a failed
     /// <see cref="LlmResult"/> instead of letting them surface as exceptions, so an
     /// exception-driven policy would never see them.
+    /// Each attempt has its own deadline (<see cref="RequestTimeoutOf"/>), linked to the caller's token: an attempt
+    /// that outlives it is a retriable <see cref="TimeoutException"/> naming the setting, while a cancellation by the
+    /// caller still propagates as an <see cref="OperationCanceledException"/>.
     /// </remarks>
     public async Task<LlmResult> InvokeAsync(
         LlmRequest request,
         CancellationToken cancellationToken = default)
     {
         var delay = _retryInitialDelay;
+        var requestTimeout = RequestTimeoutOf(request);
         LlmResult result;
 
         for (var attempt = 1; ; attempt++)
         {
-            result = await InvokeOnceAsync(request, cancellationToken);
+            var info = new AttemptInfo();
+            result = await InvokeAttemptAsync(request, info, requestTimeout, cancellationToken);
 
             if (result.IsSuccess || !result.IsRetriable || attempt >= _retryMaxAttempts)
             {
@@ -283,28 +337,111 @@ public class OpenAILlmService : ILlmService, IDisposable
                 return result;
             }
 
+            var wait = NextRetryDelay(delay, info.RetryAfter, _retryMaxDelay);
             _logger.LogWarning(
-                "Attempt {Attempt}/{MaxAttempts} failed for model {Model}, retrying in {Delay}ms. Reason: {Reason}",
-                attempt, _retryMaxAttempts, request.Model, delay.TotalMilliseconds,
+                "Attempt {Attempt}/{MaxAttempts} failed for model {Model}, retrying in {Delay}ms{RetryAfter}. Reason: {Reason}",
+                attempt, _retryMaxAttempts, request.Model, wait.TotalMilliseconds,
+                info.RetryAfter is { } hinted ? $" (Retry-After {hinted.TotalMilliseconds}ms)" : string.Empty,
                 result.Error?.Message);
 
-            await Task.Delay(delay, cancellationToken);
+            await Task.Delay(wait, cancellationToken);
             delay = TimeSpan.FromMilliseconds(
                 Math.Min(delay.TotalMilliseconds * 2, _retryMaxDelay.TotalMilliseconds));
         }
     }
 
+    /// <summary>
+    /// One attempt under its own deadline. Its token is the caller's plus the deadline, so the deadline expiring is told
+    /// apart from the caller cancelling by which token fired, whatever exception (or swallowed failure) the transport
+    /// turned the cancellation into. A success that raced the deadline is kept.
+    /// </summary>
+    private async Task<LlmResult> InvokeAttemptAsync(
+        LlmRequest request, AttemptInfo info, TimeSpan? timeout, CancellationToken cancellationToken)
+    {
+        if (timeout is not { } limit)
+            return await InvokeOnceAsync(request, info, cancellationToken);
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(limit);
+        bool Expired() => deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
+
+        LlmResult? result;
+        try
+        {
+            result = await InvokeOnceAsync(request, info, deadline.Token);
+        }
+        catch (Exception) when (Expired())
+        {
+            result = null;
+        }
+
+        if (result is { IsSuccess: true } || !Expired())
+            return result!;
+
+        var ex = new TimeoutException(
+            $"The request to model '{request.Model}' got no response within the per-attempt limit of {FormatSeconds(limit)} s " +
+            "(RequestTimeoutSeconds); raise it or set 0 to remove it.");
+        _logger.LogError(ex, "LLM attempt timed out for model {Model}", request.Model);
+        return LlmResult.Failure(ex, isRetriable: true);
+    }
+
+    /// <summary>What a single attempt learned beyond its result: the provider's retry hint, if any.</summary>
+    private sealed class AttemptInfo
+    {
+        public TimeSpan? RetryAfter { get; set; }
+    }
+
+    /// <summary>
+    /// Wait before the next attempt: the provider's <c>Retry-After</c> when it sends one (a 429 or 503 usually does),
+    /// capped at <paramref name="maxDelay"/>, or the exponential <paramref name="backoff"/> otherwise. Retrying a
+    /// rate-limited request before the window the provider asked for only burns another attempt on a second 429.
+    /// </summary>
+    internal static TimeSpan NextRetryDelay(TimeSpan backoff, TimeSpan? retryAfter, TimeSpan maxDelay) =>
+        retryAfter is { } wait && wait > TimeSpan.Zero ? (wait < maxDelay ? wait : maxDelay) : backoff;
+
+    /// <summary>
+    /// The response's retry hint: <c>retry-after-ms</c> (Azure OpenAI), else <c>Retry-After</c> in seconds or as an HTTP
+    /// date relative to <paramref name="now"/>. Null when there is none or it cannot be read.
+    /// </summary>
+    internal static TimeSpan? RetryAfterOf(HttpResponseMessage response, DateTimeOffset now)
+    {
+        if (response.Headers.TryGetValues("retry-after-ms", out var values)
+            && double.TryParse(values.FirstOrDefault(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var ms) && ms >= 0)
+            return TimeSpan.FromMilliseconds(ms);
+
+        var header = response.Headers.RetryAfter;
+        if (header?.Delta is { } delta)
+            return delta;
+        if (header?.Date is { } date)
+            return date > now ? date - now : TimeSpan.Zero;
+        return null;
+    }
+
     private async Task<LlmResult> InvokeOnceAsync(
         LlmRequest request,
+        AttemptInfo info,
         CancellationToken cancellationToken)
     {
         var client   = GetOrCreateClient(request);
         var endpoint = GetEndpoint(request);
         var body     = BuildRequestBody(request);
 
-        if (_logger.IsEnabled(LogLevel.Information))
-            _logger.LogInformation("Invoking {Model} ({Provider}) to {Endpoint} with body: {Body}",
+        if (_logger.IsEnabled(LogLevel.Trace))
+        {
+            _logger.LogTrace("Invoking {Model} ({Provider}) to {Endpoint} with body: {Body}",
                 request.Model, Name, endpoint, body.ToString(Formatting.Indented));
+        }
+        else if (_logger.IsEnabled(LogLevel.Debug))
+        {
+            _logger.LogDebug("Invoking {Model} ({Provider}) to {Endpoint} with body: {Body}",
+                request.Model, Name, endpoint, body.ToString(Formatting.Indented));
+        }
+        else if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Invoking {Model} ({Provider}) to {Endpoint}",
+                request.Model, Name, endpoint);
+        }
 
         string rawJson;
         try
@@ -318,12 +455,15 @@ public class OpenAILlmService : ILlmService, IDisposable
             if (!httpResponse.IsSuccessStatusCode)
             {
                 var statusCode = (int)httpResponse.StatusCode;
+                info.RetryAfter = RetryAfterOf(httpResponse, DateTimeOffset.UtcNow);
                 var ex = new HttpRequestException($"HTTP {statusCode}: {rawJson}");
                 _logger.LogError(ex, "API error. Retriable: {Retriable}", IsRetriable(statusCode));
                 return LlmResult.Failure(ex, IsRetriable(statusCode));
             }
         }
-        catch (Exception ex) when (ex is not TaskCanceledException)
+        // Any cancellation propagates, not only a TaskCanceledException: whether it was the caller or the attempt's
+        // deadline is decided by InvokeAttemptAsync from the tokens.
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "HTTP request failed");
             return LlmResult.Failure(ex, isRetriable: true);
@@ -446,16 +586,42 @@ public class OpenAILlmService : ILlmService, IDisposable
             body.ToString(Formatting.None), Encoding.UTF8, "application/json")
     };
 
+    // Inactivity limit: armed while waiting for the response and for each line, disarmed while the caller processes
+    // what was yielded, so only the provider's silence counts. The token is the caller's plus the limit; which one
+    // fired tells a stalled stream (TimeoutException, retriable upstream) from a cancellation by the caller.
+    var inactivityLimit = StreamingInactivityTimeoutOf(request);
+    using var activity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    void Arm() { if (inactivityLimit is { } limit) activity.CancelAfter(limit); }
+    void Disarm() { if (inactivityLimit != null) activity.CancelAfter(Timeout.InfiniteTimeSpan); }
+    bool Stalled() => activity.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
+    TimeoutException StalledError(string phase)
+    {
+        var ex = new TimeoutException(
+            $"The stream from model '{request.Model}' sent nothing for {FormatSeconds(inactivityLimit!.Value)} s {phase} " +
+            "(StreamingInactivityTimeoutSeconds); raise it or set 0 to remove it.");
+        _logger.LogError(ex, "Streaming call stalled for model {Model}", request.Model);
+        return ex;
+    }
+
     HttpResponseMessage httpResponse;
+    Arm();
     try
     {
         httpResponse = await client.SendAsync(
-            httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            httpRequest, HttpCompletionOption.ResponseHeadersRead, activity.Token);
     }
-    catch (Exception ex) when (ex is not TaskCanceledException)
+    catch (Exception) when (Stalled())
+    {
+        throw StalledError("before the response headers arrived");
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
     {
         _logger.LogError(ex, "Streaming HTTP request failed");
         throw;
+    }
+    finally
+    {
+        Disarm();
     }
 
     if (!httpResponse.IsSuccessStatusCode)
@@ -492,8 +658,42 @@ public class OpenAILlmService : ILlmService, IDisposable
     // Buffer para tool calls embebidas en content (JSON-in-content, p.ej. Nemotron)
     var embeddedToolCallBuffers = new Dictionary<int, StringBuilder>();
 
+    // Prefijo aún indeterminado por choice: un '[' (más blancos) que puede abrir un array de
+    // tool calls o ser texto normal ("[V] ...", "[link](...)"). Se decide con el siguiente chunk.
+    var undecidedPrefixBuffers = new Dictionary<int, string>();
+
     bool hasYieldedText      = false;
     bool hasYieldedToolCalls = false;
+
+    // Decide el destino del content ya limpio de <think>: devuelve el texto a emitir ahora
+    // (incluido el prefijo retenido, en orden) o null si queda retenido. Con endOfStream,
+    // un prefijo indeterminado se resuelve como texto para no perder contenido.
+    string? RouteContent(int idx, string content, bool endOfStream)
+    {
+        if (embeddedToolCallBuffers.TryGetValue(idx, out var tcBuf))
+        {
+            // Ya estamos en modo buffer para este choice — seguimos acumulando
+            tcBuf.Append(content);
+            return null;
+        }
+
+        if (hasYieldedText && !undecidedPrefixBuffers.ContainsKey(idx))
+            return content;
+
+        // Se decide por el prefijo acumulado, no por el chunk suelto (RF-111)
+        var candidate = undecidedPrefixBuffers.Remove(idx, out var pending) ? pending + content : content;
+        switch (ClassifyContentPrefix(candidate))
+        {
+            case ContentPrefixKind.ToolCall:
+                embeddedToolCallBuffers[idx] = new StringBuilder(candidate);
+                return null;
+            case ContentPrefixKind.Undecided when !endOfStream:
+                undecidedPrefixBuffers[idx] = candidate;
+                return null;
+            default:
+                return candidate;
+        }
+    }
 
     // Acumulador de tokens del stream. El bloque `usage` puede llegar en el chunk del
     // finish_reason o, en proveedores como Ollama, en un chunk separado y final con
@@ -514,15 +714,25 @@ public class OpenAILlmService : ILlmService, IDisposable
     while (!cancellationToken.IsCancellationRequested)
     {
         string? line;
+        // Any line counts as activity, blank keep-alives and SSE comments included.
+        Arm();
         try
         {
-            line = await reader.ReadLineAsync(cancellationToken);
+            line = await reader.ReadLineAsync(activity.Token);
             if (line == null) break;
         }
-        catch (Exception ex) when (ex is not TaskCanceledException)
+        catch (Exception) when (Stalled())
+        {
+            throw StalledError("while waiting for the next chunk");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Error reading SSE stream");
             break;
+        }
+        finally
+        {
+            Disarm();
         }
 
         // SSE parsing robusto: acepta "data:" con o sin espacio tras los dos puntos
@@ -586,12 +796,16 @@ public class OpenAILlmService : ILlmService, IDisposable
             {
                 if (hasNativeReasoning)
                 {
-                    // El proveedor ya separó el reasoning — emitir content limpio
+                    // El proveedor ya separó el reasoning — emitir content limpio, precedido
+                    // del prefijo indeterminado si lo hubiera para no perderlo ni desordenarlo
+                    var nativeText = undecidedPrefixBuffers.Remove(choiceIndex, out var pendingPrefix)
+                        ? pendingPrefix + textDelta
+                        : textDelta;
                     hasYieldedText    = true;
                     yield return new LlmStreamChunk
                     {
                         ChoiceIndex = choiceIndex,
-                        Delta       = textDelta,
+                        Delta       = nativeText,
                         IsThinking  = false
                     };
                 }
@@ -615,24 +829,14 @@ public class OpenAILlmService : ILlmService, IDisposable
                         // Si aún no hemos emitido texto y el contenido parece un JSON de
                         // tool call (Nemotron, Llama, etc.), lo bufferizamos en lugar de
                         // emitirlo — se resolverá al recibir finish_reason (RF-111).
-                        if (!hasYieldedText && LooksLikeEmbeddedToolCall(result.Content))
-                        {
-                            if (!embeddedToolCallBuffers.TryGetValue(choiceIndex, out var tcBuf))
-                                embeddedToolCallBuffers[choiceIndex] = tcBuf = new StringBuilder();
-                            tcBuf.Append(result.Content);
-                        }
-                        else if (embeddedToolCallBuffers.ContainsKey(choiceIndex))
-                        {
-                            // Ya estamos en modo buffer para este choice — seguimos acumulando
-                            embeddedToolCallBuffers[choiceIndex].Append(result.Content);
-                        }
-                        else
+                        var text = RouteContent(choiceIndex, result.Content, endOfStream: false);
+                        if (text != null)
                         {
                             hasYieldedText = true;
                             yield return new LlmStreamChunk
                             {
                                 ChoiceIndex = choiceIndex,
-                                Delta       = result.Content,
+                                Delta       = text,
                                 IsThinking  = false
                             };
                         }
@@ -669,17 +873,17 @@ public class OpenAILlmService : ILlmService, IDisposable
                     };
                 }
 
-                if (flushed.HasContent)
+                // Un prefijo indeterminado se resuelve aquí aunque el flush venga vacío
+                if (flushed.HasContent || undecidedPrefixBuffers.ContainsKey(choiceIndex))
                 {
-                    if (embeddedToolCallBuffers.ContainsKey(choiceIndex))
-                        embeddedToolCallBuffers[choiceIndex].Append(flushed.Content);
-                    else
+                    var text = RouteContent(choiceIndex, flushed.Content, endOfStream: true);
+                    if (!string.IsNullOrEmpty(text))
                     {
                         hasYieldedText = true;
                         yield return new LlmStreamChunk
                         {
                             ChoiceIndex = choiceIndex,
-                            Delta       = flushed.Content,
+                            Delta       = text,
                             IsThinking  = false
                         };
                     }
@@ -743,6 +947,20 @@ public class OpenAILlmService : ILlmService, IDisposable
         }
     }
 
+    // Stream cerrado ([DONE] o EOF) sin finish_reason para algún choice con prefijo aún
+    // indeterminado: se emite como texto — no perder contenido en ningún camino.
+    foreach (var (idx, pending) in undecidedPrefixBuffers)
+    {
+        hasYieldedText = true;
+        yield return new LlmStreamChunk
+        {
+            ChoiceIndex = idx,
+            Delta       = pending,
+            IsThinking  = false
+        };
+    }
+    undecidedPrefixBuffers.Clear();
+
     // Ollama (y otros) envían el bloque `usage` en un chunk final con `choices: []`,
     // posterior al chunk del finish_reason. En ese caso los tokens no se reportaron
     // todavía: se emite un chunk de cierre que solo transporta el contador.
@@ -780,17 +998,26 @@ public class OpenAILlmService : ILlmService, IDisposable
     // Helpers
     // -------------------------------------------------------------------------
 
+    internal enum ContentPrefixKind { Text, ToolCall, Undecided }
+
     /// <summary>
-    /// Heurística: el contenido comienza con un patrón que sugiere un JSON de tool call
-    /// embebido en content (no en tool_calls). Se usa para decidir si bufferiazar (RF-111).
+    /// Heurística sobre el prefijo acumulado del content de un choice: si sugiere un JSON de
+    /// tool call embebido en content (no en tool_calls) se bufferiza (RF-111). Un '[' solo
+    /// abre un array de tool calls si lo siguiente no blanco es '{'; "[V] ..." o "[link](...)"
+    /// son texto. '[' seguido solo de blancos queda indeterminado hasta el siguiente chunk.
+    /// Los '&lt;' distintos de &lt;tool_call los gestiona StreamingTagParser: aquí son texto.
     /// </summary>
-    private static bool LooksLikeEmbeddedToolCall(string content)
+    internal static ContentPrefixKind ClassifyContentPrefix(string content)
     {
-        var t = content.TrimStart();
-        return t.Length > 0 && (
-            t[0] == '{' ||
-            t[0] == '[' ||
-            t.StartsWith("<tool_call", StringComparison.OrdinalIgnoreCase));
+        var t = content.AsSpan().TrimStart();
+        if (t.Length == 0) return ContentPrefixKind.Text;
+        if (t[0] == '{' || t.StartsWith("<tool_call", StringComparison.OrdinalIgnoreCase))
+            return ContentPrefixKind.ToolCall;
+        if (t[0] != '[') return ContentPrefixKind.Text;
+
+        var rest = t[1..].TrimStart();
+        if (rest.Length == 0) return ContentPrefixKind.Undecided;
+        return rest[0] == '{' ? ContentPrefixKind.ToolCall : ContentPrefixKind.Text;
     }
 
     private (FinishReason Reason, string? Raw) ParseFinishReasonSafe(string rawFinish)

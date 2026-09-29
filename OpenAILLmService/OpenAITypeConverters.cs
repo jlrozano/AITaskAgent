@@ -58,39 +58,6 @@ internal static class OpenAITypeConverters
 
     #endregion
 
-    #region JToken → Message (historial de respuesta)
-
-    /// <summary>
-    /// Convierte el "message" de una choice del JSON de respuesta a Message del framework.
-    /// Guarda el JObject como native para poder reutilizarlo en la siguiente llamada.
-    /// </summary>
-    public static Message ToFrameworkMessage(this JToken messageToken)
-    {
-        var role      = messageToken["role"]?.Value<string>() ?? "assistant";
-        var content   = messageToken["content"]?.Value<string>() ?? string.Empty;
-        var toolCallId = messageToken["tool_call_id"]?.Value<string>();
-
-        List<ToolCall>? toolCalls = null;
-        if (messageToken["tool_calls"] is JArray tcArray && tcArray.Count > 0)
-            toolCalls = [.. tcArray.Select(t => t.ToFrameworkToolCall())];
-
-        return new Message
-        {
-            Role       = role,
-            Content    = content,
-            ToolCallId = toolCallId,
-            ToolCalls  = toolCalls,
-            Native     = new NativeObject
-            {
-                Provider = ProviderName,
-                Value    = messageToken,          // JToken como native: round-trip sin re-parse
-                TypeName = typeof(JToken).AssemblyQualifiedName!
-            }
-        };
-    }
-
-    #endregion
-
     #region Tool definitions
 
     public static JObject ToJObject(this ToolDefinition tool)

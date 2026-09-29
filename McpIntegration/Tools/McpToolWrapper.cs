@@ -83,6 +83,20 @@ public sealed class McpToolWrapper(
                 },
                 cancellationToken: cancellationToken);
 
+            if (result.IsError == true)
+            {
+                // The MCP server reported a tool-level failure via CallToolResult.IsError.
+                // Throw so the catch block below emits ToolCompletedEvent with Success = false
+                // and the error detail - mirrors LlmTool's exception-based failure contract -
+                // instead of silently reporting success with the error text as the "result".
+                var errorDetail = ExtractTextResult(result);
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(errorDetail)
+                        ? $"MCP tool '{Name}' from server '{_serverName}' reported an error " +
+                          "(IsError=true) with no error detail."
+                        : errorDetail);
+            }
+
             // Extract and return text content
             var textResult = ExtractTextResult(result);
 
@@ -211,7 +225,11 @@ public sealed class McpToolWrapper(
     {
         if (result.Content is null || result.Content.Count == 0)
         {
-            return string.Empty;
+            // MCP servers are expected to mirror StructuredContent as text in Content for
+            // backward compatibility, but not all of them do. Fall back to the structured
+            // payload so a well-formed, structured-only result (or error) isn't silently
+            // reported as empty.
+            return result.StructuredContent?.ToJsonString() ?? string.Empty;
         }
 
         // Collect all text content blocks

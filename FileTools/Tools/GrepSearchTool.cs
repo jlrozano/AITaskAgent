@@ -12,6 +12,10 @@ namespace AITaskAgent.FileTools.Tools;
 /// Tool to search for text patterns within files (grep-like).
 /// Replaces external 'ripgrep' with .NET Regex.
 /// </summary>
+/// <remarks>
+/// Each file is decoded with <see cref="TextFileEncoding"/> before matching, so the pattern runs on the same text
+/// view_file shows: an accented query also matches in an ISO-8859-1 file.
+/// </remarks>
 public sealed class GrepSearchTool : BaseFileTool
 {
     public override string Name => "grep_search";
@@ -20,6 +24,9 @@ public sealed class GrepSearchTool : BaseFileTool
     public override bool IsReadOnly => true;
     public override string Description => "Use this tool to find exact pattern matches within files or directories. Results returned in JSON format including Filename, LineNumber, and LineContent. Total results capped at 50.";
     public override string? UsageGuidelines => "Use to find text patterns or code references across files. Supports regex.";
+
+    /// <summary>Upper bound on a single regex match, to defend against catastrophic backtracking.</summary>
+    private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(3);
 
     public override ToolDefinition GetDefinition()
     {
@@ -91,7 +98,11 @@ public sealed class GrepSearchTool : BaseFileTool
             if (args.CaseInsensitive) options |= RegexOptions.IgnoreCase;
 
             string pattern = args.IsRegex ? args.Query : Regex.Escape(args.Query);
-            regex = new Regex(pattern, options);
+
+            // The pattern can come straight from the LLM, so it is untrusted input: a match
+            // timeout bounds the cost of a catastrophic-backtracking pattern (ReDoS) instead of
+            // hanging the request indefinitely and uncancellably.
+            regex = new Regex(pattern, options, MatchTimeout);
         }
         catch (Exception ex)
         {
@@ -122,11 +133,20 @@ public sealed class GrepSearchTool : BaseFileTool
                         matcher.AddInclude(include);
 
                     var matchResult = matcher.Execute(new DirectoryInfoWrapper(new DirectoryInfo(resolvedSearchPath)));
-                    files.AddRange(matchResult.Files.Select(f => Path.GetFullPath(Path.Combine(resolvedSearchPath, f.Path))));
+                    files.AddRange(matchResult.Files
+                        .Select(f => Path.GetFullPath(Path.Combine(resolvedSearchPath, f.Path)))
+                        .Where(FileToolsConfiguration.IsAllowed));
                 }
                 else
                 {
-                    files.AddRange(Directory.EnumerateFiles(resolvedSearchPath, "*", SearchOption.AllDirectories));
+                    // EnumerateFiles(..., AllDirectories) walks through symlinks/junctions with no
+                    // control of its own, so a link anywhere under the search path could lead
+                    // outside the sandbox. FileToolsConfiguration.IsAllowed resolves reparse
+                    // points before checking containment - reuse it here instead of trusting the
+                    // enumerated path's text.
+                    files.AddRange(Directory
+                        .EnumerateFiles(resolvedSearchPath, "*", SearchOption.AllDirectories)
+                        .Where(FileToolsConfiguration.IsAllowed));
                 }
             }
             catch { }
@@ -146,7 +166,8 @@ public sealed class GrepSearchTool : BaseFileTool
 
             try
             {
-                var lines = await File.ReadAllLinesAsync(file, cancellationToken);
+                // Same decoding rule as view_file, so an accented query also matches in a Latin-1 file.
+                var lines = await TextFileEncoding.ReadAllLinesAsync(file, cancellationToken);
                 for (int i = 0; i < lines.Length; i++)
                 {
                     if (matchCount >= MaxMatches) break;
@@ -167,6 +188,14 @@ public sealed class GrepSearchTool : BaseFileTool
                         matchCount++;
                     }
                 }
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                // Surface as a normal tool error instead of an unhandled exception: the pattern is
+                // untrusted LLM input, and a timeout on one file means it will time out on every
+                // other one too, so abort the search rather than silently skip results.
+                return $"Error: The regex pattern timed out while matching '{args.Query}' against " +
+                       $"'{file}'. Simplify the pattern (it may be triggering catastrophic backtracking).";
             }
             catch { }
         }

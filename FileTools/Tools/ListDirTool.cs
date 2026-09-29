@@ -1,6 +1,7 @@
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 
 namespace AITaskAgent.FileTools.Tools;
 
@@ -84,11 +85,22 @@ public sealed class ListDirTool : BaseFileTool
                     // Basic recursion check or skip count for speed
                     int childCount = 0;
                     try { childCount = subDir.EnumerateFileSystemInfos().Count(); } catch { }
-                    sb.AppendLine($"{{\"name\":\"{subDir.Name}\", \"isDir\":true, \"numChildren\":{childCount}}}");
+                    // A file/directory name containing '"' used to inject arbitrary structure into
+                    // this hand-built JSON; JsonSerializer.Serialize escapes it correctly.
+                    sb.AppendLine(JsonSerializer.Serialize(new
+                    {
+                        name = subDir.Name,
+                        isDir = true,
+                        numChildren = childCount
+                    }));
                 }
                 else if (fsInfo is FileInfo file)
                 {
-                    sb.AppendLine($"{{\"name\":\"{file.Name}\", \"sizeBytes\":\"{file.Length}\"}}");
+                    sb.AppendLine(JsonSerializer.Serialize(new
+                    {
+                        name = file.Name,
+                        sizeBytes = file.Length.ToString()
+                    }));
                 }
             }
 

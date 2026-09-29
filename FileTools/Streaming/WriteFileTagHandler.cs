@@ -4,118 +4,69 @@ using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Streaming;
 using AITaskAgent.Observability.Events;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
 using System.IO;
 using System.Text;
 
 /// <summary>
-/// Tag handler for writing files (supports both streaming and non-streaming modes).
-/// Inherits from StreamingTagHandlerBase for automatic event emission.
+/// Tag handler that creates or overwrites a file with the tag body. The framework hands it the
+/// complete tag whichever transport (streaming or not) and channel (content or reasoning) carried it.
 /// </summary>
-public sealed class WriteFileTagHandler(string baseDirectory, ILogger<WriteFileTagHandler> logger) : StreamingTagHandlerBase
+/// <remarks>
+/// Sandboxing is delegated entirely to <see cref="FileToolsConfiguration"/> - the same source of
+/// truth the tools use - instead of keeping a private base directory captured at construction
+/// time, which used to go stale after a runtime sandbox change (<c>SetRootDirectory</c>,
+/// <c>AddAllowedDirectory</c>) and let the tag write where the tools would no longer allow, or
+/// reject a path a runtime grant had just authorized.
+/// </remarks>
+public sealed class WriteFileTagHandler(ILogger<WriteFileTagHandler> logger) : TagHandlerBase
 {
     public override string TagName => "write_file";
 
     protected override ILogger Logger => logger;
 
+    // Concrete on purpose: the model reads this once in the system prompt and again as a tool
+    // result whenever it calls the tag as a tool. Abstract wording ("use this tag to write files")
+    // did not stop reasoning models from reaching for tool_call; an exact right/wrong pair and a
+    // full worked example is what it has to imitate.
     public override string GetInstructions()
     {
-        return @"### Tag: write_file
-Use this tag to create or overwrite files with streaming content.
-This uses DIRECT XML COMMANDS within your text response. DO NOT invoke this as a tool.
+        return """
+            ### Tag: write_file
+            Creates or overwrites ONE file with the exact text you put between the opening and closing tag.
 
-**Usage:**
-```xml
-<write_file path=""path/to/file"" summary=""Action summary"">
-Content...
-</write_file>
-```
+            It is NOT a function/tool. There is no `write_file` entry in your tools list, so a tool_call
+            named `write_file` always fails. You use it by TYPING the tag literally in your reply text:
 
-**Parameters:**
-- `path`: Relative path to the file.
-- `summary`: Short description of the action (shown to user as placeholder).
+            WRONG (fails):   tool_call { "name": "write_file", "arguments": { "path": "notes.md", ... } }
+            RIGHT (works):   <write_file path="notes.md" summary="Meeting notes">...file text...</write_file>
 
-**IMPORTANT:** The file content inside the tag is NOT visible to the user.
-After using this tag, ALWAYS explain what you created, e.g.:
-'He creado el archivo `script.py` que contiene [breve descripción].'
+            **Syntax** (attributes in double quotes, body on its own lines):
+            <write_file path="relative/path/to/file.ext" summary="what this file is, in a few words">
+            the complete file content, verbatim
+            </write_file>
 
-**Example:**
-<write_file path=""script.py"" summary=""Creating python script"">
-print('hello')
-</write_file>
-He creado el archivo `script.py` con un simple script que imprime 'hello'.";
+            **Rules:**
+            - `path` (required): relative to the working directory. Use forward slashes.
+            - `summary` (optional): shown to the user in place of the file content. Do not put double quotes inside it.
+            - The body is written byte for byte, so do NOT wrap it in ``` fences and do not escape anything.
+            - The body must not contain the literal text `</write_file>`.
+            - One tag per file. To write two files, write two tags.
+            - Write the tag in your final answer, not while thinking, and close it always.
+
+            **Complete example** - user asked for a Python script that prints the primes below 20:
+            <write_file path="primes.py" summary="Prints the primes below 20">
+            for n in range(2, 20):
+                if all(n % d for d in range(2, int(n ** 0.5) + 1)):
+                    print(n)
+            </write_file>
+            He creado `primes.py`, que recorre los números del 2 al 19 e imprime los que no tienen divisores.
+
+            The user never sees the file content, only a short reference like
+            `[write_file: primes.py (98 bytes) — Prints the primes below 20]`, so after the tag ALWAYS
+            add one or two sentences saying what you created, as in the example.
+            """;
     }
-
-    // ============ STREAMING MODE ============
-
-    protected override Task<ITagContext?> InternalOnTagStartAsync(
-        Dictionary<string, string> attributes,
-        PipelineContext context,
-        CancellationToken cancellationToken)
-    {
-        if (!attributes.TryGetValue("path", out var relativePath))
-        {
-            throw new InvalidOperationException("write_file tag requires 'path' attribute");
-        }
-
-        var fullPath = Path.GetFullPath(Path.Combine(baseDirectory, relativePath));
-        var safeBaseDirectory = Path.GetFullPath(baseDirectory);
-        if (!safeBaseDirectory.EndsWith(Path.DirectorySeparatorChar))
-        {
-            safeBaseDirectory += Path.DirectorySeparatorChar;
-        }
-
-        if (!fullPath.StartsWith(safeBaseDirectory, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException($"Invalid path traversal attempt: {relativePath}");
-        }
-
-        var directory = Path.GetDirectoryName(fullPath);
-
-        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        logger.LogInformation("[STREAMING] Starting file write: {Path}", fullPath);
-
-        var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
-        var writer = new StreamWriter(fileStream, Encoding.UTF8);
-
-        return Task.FromResult<ITagContext?>(new WriteFileContext(TagName, attributes, fullPath, writer, logger, context));
-    }
-
-    protected override async Task InternalOnContentAsync(
-        ITagContext tagContext,
-        string content,
-        CancellationToken cancellationToken)
-    {
-        if (tagContext is WriteFileContext writeContext)
-        {
-            await writeContext.Writer.WriteAsync(content);
-            writeContext.BytesWritten += Encoding.UTF8.GetByteCount(content);
-        }
-    }
-
-    protected override async Task<string?> InternalOnTagEndAsync(
-        ITagContext tagContext,
-        CancellationToken cancellationToken)
-    {
-        if (tagContext is WriteFileContext writeContext)
-        {
-            await writeContext.Writer.FlushAsync(cancellationToken);
-
-            logger.LogInformation(
-                "[STREAMING] Completed file write: {Path} ({Bytes} bytes)",
-                writeContext.FilePath,
-                writeContext.BytesWritten);
-
-            return GeneratePlaceholder(writeContext.Attributes, writeContext.BytesWritten);
-        }
-
-        return null;
-    }
-
-    // ============ NON-STREAMING MODE ============
 
     protected override async Task<string?> InternalOnCompleteTagAsync(
         Dictionary<string, string> attributes,
@@ -128,14 +79,9 @@ He creado el archivo `script.py` con un simple script que imprime 'hello'.";
             throw new InvalidOperationException("write_file tag requires 'path' attribute");
         }
 
-        var fullPath = Path.GetFullPath(Path.Combine(baseDirectory, relativePath));
-        var safeBaseDirectory = Path.GetFullPath(baseDirectory);
-        if (!safeBaseDirectory.EndsWith(Path.DirectorySeparatorChar))
-        {
-            safeBaseDirectory += Path.DirectorySeparatorChar;
-        }
+        var fullPath = Path.GetFullPath(Path.Combine(FileToolsConfiguration.RootDirectory, relativePath));
 
-        if (!fullPath.StartsWith(safeBaseDirectory, StringComparison.OrdinalIgnoreCase))
+        if (!FileToolsConfiguration.IsAllowed(fullPath))
         {
             throw new UnauthorizedAccessException($"Invalid path traversal attempt: {relativePath}");
         }
@@ -147,99 +93,73 @@ He creado el archivo `script.py` con un simple script que imprime 'hello'.";
             Directory.CreateDirectory(directory);
         }
 
-        logger.LogInformation("[BATCH] Writing file: {Path}", fullPath);
+        logger.LogInformation("Writing file: {Path}", fullPath);
 
-        // Write entire content at once (more efficient for non-streaming)
-        await File.WriteAllTextAsync(fullPath, content, Encoding.UTF8, cancellationToken);
+        // No BOM: a plain Encoding.UTF8 emits one, which breaks shebangs and strict JSON/YAML
+        // parsers, and the byte count below would then disagree with what got written.
+        var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        await File.WriteAllTextAsync(fullPath, content, utf8NoBom, cancellationToken);
 
-        var bytesWritten = Encoding.UTF8.GetByteCount(content);
+        var bytesWritten = utf8NoBom.GetByteCount(content);
 
-        logger.LogInformation(
-            "[BATCH] Completed file write: {Path} ({Bytes} bytes)",
-            fullPath,
-            bytesWritten);
+        logger.LogInformation("Completed file write: {Path} ({Bytes} bytes)", fullPath, bytesWritten);
 
         return GeneratePlaceholder(attributes, bytesWritten);
     }
 
-    // ============ ENRICHMENT HOOKS ============
-
-    protected override TagStartedEvent EnrichStartedEvent(
-        TagStartedEvent baseEvent,
-        Dictionary<string, string> attributes,
-        PipelineContext context)
-    {
-        attributes.TryGetValue("path", out var path);
-        return baseEvent with
-        {
-            AdditionalData = new Dictionary<string, object>
-            {
-                ["path"] = path ?? "unknown"
-            }
-        };
-    }
-
     protected override TagCompletedEvent EnrichCompletedEvent(
         TagCompletedEvent baseEvent,
-        string? placeholder,
-        ITagContext? tagContext)
+        Dictionary<string, string> attributes,
+        string content,
+        string? placeholder)
     {
-        if (tagContext is WriteFileContext writeContext)
+        attributes.TryGetValue("path", out var path);
+
+        Dictionary<string, object> data = new()
         {
-            return baseEvent with
-            {
-                AdditionalData = new Dictionary<string, object>
-                {
-                    ["path"] = writeContext.FilePath,
-                    ["bytesWritten"] = writeContext.BytesWritten
-                }
-            };
+            ["path"] = path ?? "unknown"
+        };
+
+        if (placeholder != null)
+        {
+            data["bytesWritten"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetByteCount(content);
         }
-        return baseEvent;
+
+        return baseEvent with { AdditionalData = data };
     }
 
     // ============ HELPERS ============
 
+    /// <summary>
+    /// Builds the text that replaces the tag - both on screen and in the conversation history.
+    ///
+    /// The path and size are always stated, even when the model supplied a summary: this text is
+    /// the only record left of the write once the tag body is stripped, and a bare summary
+    /// ("Analysis of the project") does not say that a file was written, so a model reading its own
+    /// history cannot tell the action completed and calls it again.
+    /// </summary>
     private static string GeneratePlaceholder(Dictionary<string, string> attributes, long bytesWritten)
     {
-        // Use LLM-provided summary if available, otherwise default placeholder
+        attributes.TryGetValue("path", out var path);
+        var reference = $"{TagNameConstant}: {path ?? "unknown"} ({FormatBytes(bytesWritten)})";
+
         if (attributes.TryGetValue("summary", out var summary) && !string.IsNullOrWhiteSpace(summary))
         {
-            return summary;
+            return $"[{reference} — {summary.Trim()}]";
         }
 
-        return $"[File: {attributes["path"]} ({bytesWritten} bytes written)]";
+        return $"[{reference}]";
     }
-}
 
-/// <summary>
-/// Context for an active file write operation in streaming mode.
-/// </summary>
-internal sealed class WriteFileContext(
-    string tagName,
-    Dictionary<string, string> attributes,
-    string filePath,
-    StreamWriter writer,
-    ILogger logger,
-    PipelineContext context) : StreamingTagContextBase
-{
-    public override string TagName { get; } = tagName;
-    public override Dictionary<string, string> Attributes { get; } = attributes;
-    public string FilePath { get; } = filePath;
-    public StreamWriter Writer { get; } = writer;
-    public long BytesWritten { get; set; }
+    private const string TagNameConstant = "write_file";
 
-    public new PipelineContext PipelineContext { get; } = context;
-
-    public override async ValueTask DisposeAsync()
+    // Invariant on purpose: this string is part of the text the model reads back from its own
+    // conversation history, so it must not change shape with the machine's locale ("10.1 KB"
+    // becoming "10,1 KB" depending on who runs it).
+    private static string FormatBytes(long bytes) => bytes switch
     {
-        try
-        {
-            await Writer.DisposeAsync();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error disposing file writer for {Path}", FilePath);
-        }
-    }
+        < 1024        => string.Create(CultureInfo.InvariantCulture, $"{bytes} bytes"),
+        < 1024 * 1024 => string.Create(CultureInfo.InvariantCulture, $"{bytes / 1024.0:0.#} KB"),
+        _             => string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.#} MB")
+    };
 }

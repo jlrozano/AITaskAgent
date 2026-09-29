@@ -27,16 +27,15 @@ public sealed class GeminiLlmService : ILlmService
     private readonly RateLimiter? _rateLimiter;
     private readonly RetryPolicy _retryPolicy;
 
-    /// <summary>
-    /// HTTP status codes that indicate transient errors and should be retried.
-    /// </summary>
-    private static readonly HashSet<int> TransientHttpStatusCodes = [429, 500, 502, 503, 504];
+    // Keyed the same way as _clients ("BaseUrl|ApiKey"), so two different Gemini API keys each get
+    // their own manager instead of every credential silently sharing whichever client was created
+    // first.
+    private readonly ConcurrentDictionary<string, GeminiCacheManager> _cacheManagers = new();
+    private readonly ConcurrentDictionary<string, GeminiFileManager> _fileManagers = new();
+    private string? _lastCacheKey;
 
-    private GeminiCacheManager? _cacheManager;
-    private GeminiFileManager? _fileManager;
-
     /// <summary>
-    /// Manager for Context Caching operations.
+    /// Manager for Context Caching operations, for the credentials used by the most recent request.
     /// </summary>
     /// <remarks>
     /// Both managers need a <c>Client</c>, and the client is built from the credentials carried by
@@ -44,13 +43,19 @@ public sealed class GeminiLlmService : ILlmService
     /// this before that used to throw a bare NullReferenceException; it now says what is wrong.
     /// </remarks>
     /// <exception cref="InvalidOperationException">The service has not been invoked yet.</exception>
-    public GeminiCacheManager CacheManager => _cacheManager ?? throw NotReady(nameof(CacheManager));
+    public GeminiCacheManager CacheManager =>
+        _lastCacheKey != null && _cacheManagers.TryGetValue(_lastCacheKey, out var manager)
+            ? manager
+            : throw NotReady(nameof(CacheManager));
 
     /// <summary>
     /// Manager for Files API operations. Same lifecycle as <see cref="CacheManager"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">The service has not been invoked yet.</exception>
-    public GeminiFileManager FileManager => _fileManager ?? throw NotReady(nameof(FileManager));
+    public GeminiFileManager FileManager =>
+        _lastCacheKey != null && _fileManagers.TryGetValue(_lastCacheKey, out var manager)
+            ? manager
+            : throw NotReady(nameof(FileManager));
 
     private static InvalidOperationException NotReady(string member) => new(
         $"{member} is not available yet. It is created from the credentials of the first request, " +
@@ -92,6 +97,7 @@ public sealed class GeminiLlmService : ILlmService
         if (_clients.TryGetValue(cacheKey, out var cachedClient))
         {
             _logger.LogDebug("Using cached client for {Model}", model);
+            _lastCacheKey = cacheKey;
             return (cachedClient, model);
         }
 
@@ -112,9 +118,13 @@ public sealed class GeminiLlmService : ILlmService
 
         _clients.TryAdd(cacheKey, newClient);
 
-        // Initialize managers with the first client
-        _cacheManager ??= new GeminiCacheManager(newClient, _logger);
-        _fileManager ??= new GeminiFileManager(newClient, _logger);
+        // Initialize managers for this client's own credentials, not a single global instance -
+        // otherwise a second API key would silently operate the cache/file manager against the
+        // first key's account.
+        _cacheManagers.GetOrAdd(cacheKey, _ => new GeminiCacheManager(newClient, _logger));
+        _fileManagers.GetOrAdd(cacheKey, _ => new GeminiFileManager(newClient, _logger));
+
+        _lastCacheKey = cacheKey;
 
         return (newClient, model);
     }
@@ -123,6 +133,15 @@ public sealed class GeminiLlmService : ILlmService
     public string Name => "gemini";
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Provider-level failures (a bad API response, a transport error, a timeout) are always
+    /// reported as <see cref="LlmResult.Failure(Exception, bool)"/>, never thrown - matching
+    /// <c>OpenAILlmService</c>. Only genuine programming errors (null arguments, etc.) still throw.
+    /// Retrying is done here with a manual loop rather than <see cref="_retryPolicy"/>'s
+    /// exception-driven <c>ExecuteAsync</c>, for the same reason <c>OpenAILlmService</c> does its
+    /// own retry loop: an API error no longer throws, so an exception-catching retry would never
+    /// see it.
+    /// </remarks>
     public async Task<LlmResult> InvokeAsync(
         LlmRequest request,
         CancellationToken cancellationToken = default)
@@ -140,51 +159,89 @@ public sealed class GeminiLlmService : ILlmService
         var contents = BuildContents(request);
         var config = BuildGenerateContentConfig(request);
 
-        return await _retryPolicy.ExecuteAsync(async _ =>
+        var delay = _retryPolicy.InitialDelay;
+        LlmResult result;
+
+        for (var attempt = 1; ; attempt++)
         {
-            try
+            result = await InvokeOnceAsync(client, model, contents, config, cancellationToken);
+
+            if (result.IsSuccess || !result.IsRetriable || attempt >= _retryPolicy.MaxAttempts)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var response = await client.Models.GenerateContentAsync(
-                    model: model,
-                    contents: contents,
-                    config: config);
-
-                var usageMetadata = response.UsageMetadata;
-
-                // Every Gemini candidate becomes an LlmResponse; LlmResult wraps the set along
-                // with the usage that applies to the call as a whole.
-                var candidates = response.Candidates?.Select(c => new LlmResponse
+                if (!result.IsSuccess && result.IsRetriable && attempt >= _retryPolicy.MaxAttempts)
                 {
-                    Index = c.Index ?? 0,
-                    Content = ExtractTextContent(c),
-                    Reasoning = ExtractReasoningContent(c),
-                    ToolCalls = ExtractToolCalls(c),
-                    FinishReason = MapFinishReason(c.FinishReason),
-                    RawFinishReason = c.FinishReason?.ToString()
-                }).ToList() ?? [];
+                    _logger.LogError(
+                        "Giving up after {Attempts} attempts for Gemini model {Model}.",
+                        attempt, model);
+                }
 
-                var llmResult = LlmResult.Success(
-                    candidates,
-                    tokensUsed: usageMetadata?.TotalTokenCount,
-                    promptTokens: usageMetadata?.PromptTokenCount,
-                    completionTokens: usageMetadata?.CandidatesTokenCount,
-                    model: model,
-                    nativeResponse: response);
-
-                _logger.LogInformation(
-                    "Gemini response: {Tokens} tokens, candidates: {CandidateCount}, finish: {Reason}",
-                    llmResult.TokensUsed, candidates.Count, llmResult.FinishReason);
-
-                return llmResult;
+                return result;
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+
+            _logger.LogWarning(
+                "Gemini attempt {Attempt}/{MaxAttempts} failed for model {Model}, retrying in {Delay}ms. Reason: {Reason}",
+                attempt, _retryPolicy.MaxAttempts, model, delay.TotalMilliseconds,
+                result.Error?.Message);
+
+            await Task.Delay(delay, cancellationToken);
+            delay = TimeSpan.FromMilliseconds(
+                Math.Min(delay.TotalMilliseconds * _retryPolicy.BackoffMultiplier, _retryPolicy.MaxDelay.TotalMilliseconds));
+        }
+    }
+
+    private async Task<LlmResult> InvokeOnceAsync(
+        Client client,
+        string model,
+        List<Content> contents,
+        GenerateContentConfig config,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var response = await client.Models.GenerateContentAsync(
+                model: model,
+                contents: contents,
+                config: config);
+
+            var usageMetadata = response.UsageMetadata;
+
+            // Every Gemini candidate becomes an LlmResponse; LlmResult wraps the set along
+            // with the usage that applies to the call as a whole.
+            var candidates = response.Candidates?.Select(c => new LlmResponse
             {
-                _logger.LogError(ex, "Gemini API error: {Message}", ex.Message);
-                throw new InvalidOperationException($"Failed to call Gemini API: {ex.Message}", ex);
-            }
-        }, _logger, cancellationToken);
+                Index = c.Index ?? 0,
+                Content = ExtractTextContent(c),
+                Reasoning = ExtractReasoningContent(c),
+                ToolCalls = ExtractToolCalls(c),
+                FinishReason = MapFinishReason(c.FinishReason),
+                RawFinishReason = c.FinishReason?.ToString()
+            }).ToList() ?? [];
+
+            var llmResult = LlmResult.Success(
+                candidates,
+                tokensUsed: usageMetadata?.TotalTokenCount,
+                promptTokens: usageMetadata?.PromptTokenCount,
+                completionTokens: usageMetadata?.CandidatesTokenCount,
+                model: model,
+                nativeResponse: response);
+
+            _logger.LogInformation(
+                "Gemini response: {Tokens} tokens, candidates: {CandidateCount}, finish: {Reason}",
+                llmResult.TokensUsed, candidates.Count, llmResult.FinishReason);
+
+            return llmResult;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
+            or Google.GenAI.ClientError or Google.GenAI.ServerError)
+        {
+            var isRetriable = IsTransientError(ex);
+            _logger.LogError(ex, "Gemini API error. Retriable: {Retriable}", isRetriable);
+            return LlmResult.Failure(
+                new InvalidOperationException($"Failed to call Gemini API: {ex.Message}", ex),
+                isRetriable);
+        }
     }
 
     /// <inheritdoc/>
@@ -208,6 +265,7 @@ public sealed class GeminiLlmService : ILlmService
         // Retry logic for stream initialization
         (enumerator, firstChunk) = await _retryPolicy.ExecuteAsync(async _ =>
         {
+            IAsyncEnumerator<GenerateContentResponse>? enumeratorResult = null;
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -217,7 +275,7 @@ public sealed class GeminiLlmService : ILlmService
                     contents: contents,
                     config: config);
 
-                var enumeratorResult = stream.GetAsyncEnumerator(cancellationToken);
+                enumeratorResult = stream.GetAsyncEnumerator(cancellationToken);
 
                 if (await enumeratorResult.MoveNextAsync())
                 {
@@ -228,6 +286,14 @@ public sealed class GeminiLlmService : ILlmService
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
+                // MoveNextAsync can fail after the enumerator (and its underlying HTTP stream)
+                // was already created - without disposing it here, each failed attempt (up to
+                // MaxAttempts) leaked a stream/connection instead of just the one from the last try.
+                if (enumeratorResult != null)
+                {
+                    await enumeratorResult.DisposeAsync();
+                }
+
                 _logger.LogError(ex, "Gemini Streaming API error: {Message}", ex.Message);
                 throw new InvalidOperationException($"Failed to start Gemini stream: {ex.Message}", ex);
             }
@@ -706,16 +772,22 @@ public sealed class GeminiLlmService : ILlmService
             if (candidate.Content?.Parts == null) continue;
 
             var isComplete = candidate.FinishReason.HasValue;
-            var toolCallUpdates = ExtractToolCallUpdates(candidate);
             var choiceIndex = candidate.Index ?? 0;
             var emittedAnyPart = false;
+
+            // Built once per candidate, in the same Part order iterated below, so each entry can
+            // be matched to the single Part it describes instead of being attached to every text
+            // chunk of the candidate (which used to make the caller's argument accumulator
+            // concatenate the same tool-call JSON once per text chunk).
+            var toolCallUpdates = ExtractToolCallUpdates(candidate);
+            var toolCallUpdateIndex = 0;
 
             // Process parts individually to separate Thinking from Text
             foreach (var part in candidate.Content.Parts)
             {
-                // Debug: Log thinking status 
-                // Note: we might want to check for 'thought' property explicitly if the SDK exposes it differently
-                _logger.LogInformation("Gemini Part: IsThinking={IsThinking}, HasThoughtProp={HasProperty}, Snippet={Snippet}...",
+                // Thinking status, useful when diagnosing a candidate that mixes thinking, text,
+                // and function calls.
+                _logger.LogDebug("Gemini Part: IsThinking={IsThinking}, HasThoughtProp={HasProperty}, Snippet={Snippet}...",
                    part.Thought ?? false,
                    part.Thought.HasValue,
                    part.Text?.Substring(0, Math.Min(part.Text?.Length ?? 0, 40)).Replace("\n", "\\n"));
@@ -730,16 +802,37 @@ public sealed class GeminiLlmService : ILlmService
                         FinishReason = MapFinishReason(candidate.FinishReason),
                         RawFinishReason = candidate.FinishReason?.ToString(),
                         TokensUsed = usageMetadata?.TotalTokenCount,
-                        ToolCallUpdates = toolCallUpdates,
+                        PromptTokens = usageMetadata?.PromptTokenCount,
+                        CompletionTokens = usageMetadata?.CandidatesTokenCount,
                         ChoiceIndex = choiceIndex,
                         NativeChunk = response
                     };
                     emittedAnyPart = true;
                 }
+                else if (part.FunctionCall != null && toolCallUpdates != null && toolCallUpdateIndex < toolCallUpdates.Count)
+                {
+                    yield return new LlmStreamChunk
+                    {
+                        Delta = string.Empty,
+                        IsThinking = false,
+                        IsComplete = isComplete,
+                        FinishReason = MapFinishReason(candidate.FinishReason),
+                        RawFinishReason = candidate.FinishReason?.ToString(),
+                        TokensUsed = usageMetadata?.TotalTokenCount,
+                        PromptTokens = usageMetadata?.PromptTokenCount,
+                        CompletionTokens = usageMetadata?.CandidatesTokenCount,
+                        ToolCallUpdates = [toolCallUpdates[toolCallUpdateIndex]],
+                        ChoiceIndex = choiceIndex,
+                        NativeChunk = response
+                    };
+                    toolCallUpdateIndex++;
+                    emittedAnyPart = true;
+                }
             }
 
-            // A candidate can consist solely of functionCall parts (Text == null). Without this
-            // the whole chunk is dropped and the tool calls never reach the caller.
+            // Defensive fallback: should not trigger in practice, since every FunctionCall part is
+            // now handled above, but avoids silently dropping tool calls if a future SDK shape ever
+            // has Parts that ExtractToolCallUpdates counts but the loop above didn't emit.
             if (!emittedAnyPart && toolCallUpdates is { Count: > 0 })
             {
                 yield return new LlmStreamChunk
@@ -750,6 +843,8 @@ public sealed class GeminiLlmService : ILlmService
                     FinishReason = MapFinishReason(candidate.FinishReason),
                     RawFinishReason = candidate.FinishReason?.ToString(),
                     TokensUsed = usageMetadata?.TotalTokenCount,
+                    PromptTokens = usageMetadata?.PromptTokenCount,
+                    CompletionTokens = usageMetadata?.CandidatesTokenCount,
                     ToolCallUpdates = toolCallUpdates,
                     ChoiceIndex = choiceIndex,
                     NativeChunk = response

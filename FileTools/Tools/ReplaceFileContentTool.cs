@@ -118,14 +118,21 @@ public sealed class ReplaceFileContentTool : BaseFileTool
             return $"Error: File {resolvedTargetFile} does not exist.";
         }
 
-        string content = await File.ReadAllTextAsync(resolvedTargetFile, cancellationToken);
+        if (args.TargetContent is null || args.ReplacementContent is null)
+        {
+            return "Error: TargetContent and ReplacementContent are required.";
+        }
 
-        // Normalise line endings once; all operations stay in \n-space.
-        content = content.Replace("\r\n", "\n");
+        // Reflection-based argument parsing bypasses `required`, so a null here would otherwise
+        // reach FileToolsHelper.ApplyChunk's .Replace(...) call and throw a NullReferenceException.
+
+        var (content, encoding) = await FileToolsHelper.ReadWithEncodingAsync(resolvedTargetFile, cancellationToken);
+        var lineEnding = FileToolsHelper.DetectLineEnding(content);
 
         string? result;
         try
         {
+            // ApplyChunk normalises \r\n → \n internally and returns \n-only content.
             result = FileToolsHelper.ApplyChunk(
                 content,
                 args.TargetContent,
@@ -142,7 +149,12 @@ public sealed class ReplaceFileContentTool : BaseFileTool
         if (result is null)
             return $"Error: TargetContent was not found within the line range [{args.StartLine}, {args.EndLine}] in the file.";
 
-        await File.WriteAllTextAsync(resolvedTargetFile, result, cancellationToken);
+        if (lineEnding != "\n")
+        {
+            result = result.Replace("\n", lineEnding);
+        }
+
+        await FileToolsHelper.WriteAtomicAsync(resolvedTargetFile, result, encoding, cancellationToken);
 
         return $"Successfully replaced content in {resolvedTargetFile}.";
     }

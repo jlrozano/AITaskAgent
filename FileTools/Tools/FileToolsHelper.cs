@@ -1,44 +1,76 @@
+using System.Text;
+
 namespace AITaskAgent.FileTools.Tools;
 
 /// <summary>
 /// Shared helper utilities for file tools.
-/// Provides path validation, normalized file reading, and line-range-aware content replacement.
+/// Provides encoding-preserving reads/writes and line-range-aware content replacement.
 /// </summary>
 internal static class FileToolsHelper
 {
     /// <summary>
-    /// Resolves a relative path against <paramref name="rootDirectory"/> and validates that
-    /// the result stays within that root (prevents path traversal attacks).
+    /// Reads the file at <paramref name="path"/> and reports the exact encoding (including
+    /// whether it had a byte-order mark) it was read with, so a caller that rewrites the file can
+    /// round-trip it instead of always falling back to UTF-8.
     /// </summary>
-    /// <param name="rootDirectory">The allowed base directory.</param>
-    /// <param name="relativePath">The relative (or absolute) path to resolve.</param>
-    /// <returns>The fully-resolved, validated absolute path.</returns>
-    /// <exception cref="UnauthorizedAccessException">
-    /// Thrown when the resolved path escapes <paramref name="rootDirectory"/>.
-    /// </exception>
-    public static string ResolveSafePath(string rootDirectory, string relativePath)
+    /// <remarks>
+    /// Decoded by <see cref="TextFileEncoding"/>: the BOM, else UTF-8 when the bytes are valid
+    /// UTF-8, else <see cref="FileToolsConfiguration.DefaultEncoding"/>. The last case used to read
+    /// as UTF-8 too, so editing an ISO-8859-1 file wrote U+FFFD in place of every accent.
+    /// </remarks>
+    public static Task<(string Content, Encoding Encoding)> ReadWithEncodingAsync(
+        string path, CancellationToken ct) =>
+        TextFileEncoding.ReadAllTextAsync(path, ct);
+
+    /// <summary>
+    /// Returns the line-ending style found in <paramref name="content"/> - <c>"\r\n"</c>,
+    /// <c>"\n"</c> or <c>"\r"</c> - based on the first line break encountered, so a caller that
+    /// edits the file in \n-space can convert back before writing instead of silently switching
+    /// the whole file to LF. Defaults to <c>"\n"</c> when the content has no line breaks at all.
+    /// </summary>
+    public static string DetectLineEnding(string content)
     {
-        var full = Path.GetFullPath(Path.Combine(rootDirectory, relativePath));
-        var safeRoot = Path.GetFullPath(rootDirectory);
+        for (var i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\r')
+            {
+                return i + 1 < content.Length && content[i + 1] == '\n' ? "\r\n" : "\r";
+            }
 
-        // Ensure the safe root ends with a separator so "root2" doesn't match "root"
-        if (!safeRoot.EndsWith(Path.DirectorySeparatorChar))
-            safeRoot += Path.DirectorySeparatorChar;
+            if (content[i] == '\n')
+            {
+                return "\n";
+            }
+        }
 
-        if (!full.StartsWith(safeRoot, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException(
-                $"Path '{relativePath}' resolves outside the allowed root directory '{rootDirectory}'.");
-
-        return full;
+        return "\n";
     }
 
     /// <summary>
-    /// Reads the file at <paramref name="path"/> and normalises all line endings to <c>\n</c>.
+    /// Writes <paramref name="content"/> to <paramref name="path"/> atomically: the new content
+    /// lands in a temp file next to the target first, then <see cref="File.Move(string, string, bool)"/>
+    /// replaces the target in one filesystem operation. A crash or cancellation mid-write leaves
+    /// either the old file untouched or the new one fully in place - never a truncated/corrupt
+    /// target, which a direct <c>File.WriteAllTextAsync</c> to the destination could leave behind.
     /// </summary>
-    public static async Task<string> ReadNormalizedAsync(string path, CancellationToken ct)
+    public static async Task WriteAtomicAsync(
+        string path, string content, Encoding encoding, CancellationToken ct)
     {
-        var content = await File.ReadAllTextAsync(path, ct);
-        return content.Replace("\r\n", "\n");
+        var directory = Path.GetDirectoryName(path);
+        var tempPath = Path.Combine(
+            string.IsNullOrEmpty(directory) ? "." : directory,
+            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, encoding, ct);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* best effort cleanup */ }
+            throw;
+        }
     }
 
     /// <summary>

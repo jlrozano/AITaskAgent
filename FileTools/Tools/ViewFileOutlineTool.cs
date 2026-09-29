@@ -86,7 +86,7 @@ public sealed class ViewFileOutlineTool : BaseFileTool
                 """;
         }
 
-        string source = await File.ReadAllTextAsync(resolvedPath, cancellationToken);
+        var (source, _) = await TextFileEncoding.ReadAllTextAsync(resolvedPath, cancellationToken);
         var ext = Path.GetExtension(resolvedPath).ToLowerInvariant();
 
         if (ext == ".cs")

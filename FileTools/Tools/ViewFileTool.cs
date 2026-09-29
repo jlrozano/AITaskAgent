@@ -86,7 +86,8 @@ public sealed class ViewFileTool : BaseFileTool
             return "Binary file content not displayed.";
         }
 
-        var lines = await File.ReadAllLinesAsync(resolvedPath, cancellationToken);
+        // UTF-8 if the bytes are valid UTF-8, else FileToolsConfiguration.DefaultEncoding (Latin-1 by default).
+        var lines = await TextFileEncoding.ReadAllLinesAsync(resolvedPath, cancellationToken);
         int totalLines = lines.Length;
 
         // Default or specific range

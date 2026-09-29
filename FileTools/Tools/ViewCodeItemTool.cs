@@ -90,7 +90,7 @@ public sealed class ViewCodeItemTool : BaseFileTool
         }
 
         // Read and parse the file
-        var sourceCode = File.ReadAllText(resolvedFile);
+        var (sourceCode, _) = await TextFileEncoding.ReadAllTextAsync(resolvedFile, cancellationToken);
         var syntaxTree = CSharpSyntaxTree.ParseText(sourceCode);
         var root = syntaxTree.GetRoot();
 

@@ -154,10 +154,28 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
             return $"Error: File {resolvedTargetFile} does not exist.";
         }
 
-        string originalContent = await File.ReadAllTextAsync(resolvedTargetFile, cancellationToken);
+        // Reflection-based argument parsing bypasses `required`/non-nullability, so a null list
+        // or a null TargetContent/ReplacementContent inside a chunk would otherwise reach
+        // FileToolsHelper.ApplyChunk's .Replace(...) call and throw a NullReferenceException.
+        if (args.ReplacementChunks is null || args.ReplacementChunks.Count == 0)
+        {
+            return "Error: ReplacementChunks is required and must contain at least one chunk.";
+        }
 
-        // Normalise line endings once up-front; all operations stay in \n-space.
-        string currentContent = originalContent.Replace("\r\n", "\n");
+        foreach (var invalidChunk in args.ReplacementChunks)
+        {
+            if (invalidChunk.TargetContent is null || invalidChunk.ReplacementContent is null)
+            {
+                return $"Error: TargetContent and ReplacementContent are required for the chunk " +
+                       $"at lines {invalidChunk.StartLine}-{invalidChunk.EndLine}.";
+            }
+        }
+
+        var (originalContent, encoding) = await FileToolsHelper.ReadWithEncodingAsync(resolvedTargetFile, cancellationToken);
+        var lineEnding = FileToolsHelper.DetectLineEnding(originalContent);
+
+        // ApplyChunk normalises \r\n → \n internally and returns \n-only content each time.
+        string currentContent = originalContent;
 
         // Sort chunks by StartLine descending so earlier replacements don't shift
         // the line numbers of subsequent chunks.
@@ -187,7 +205,12 @@ public sealed class MultiReplaceFileContentTool : BaseFileTool
             currentContent = result;
         }
 
-        await File.WriteAllTextAsync(resolvedTargetFile, currentContent, cancellationToken);
+        if (lineEnding != "\n")
+        {
+            currentContent = currentContent.Replace("\n", lineEnding);
+        }
+
+        await FileToolsHelper.WriteAtomicAsync(resolvedTargetFile, currentContent, encoding, cancellationToken);
         return $"Successfully replaced {args.ReplacementChunks.Count} chunks in {resolvedTargetFile}.";
     }
 
