@@ -34,6 +34,22 @@ public class ReportFacetInput : StepResult
     /// </summary>
     public string UnreadFields { get; set; } = "[]";
 
+    /// <summary>
+    /// Candidatos de <see cref="ZeroFaninClasses"/> con un patrón común (prefijo o sufijo del nombre, o directorio) resumidos
+    /// en grupos, con <c>likely_dynamic</c> y su evidencia (<c>Support.DeadCodeGrouping</c>). Los miembros de un grupo no se
+    /// repiten en <see cref="ZeroFaninClasses"/>. <c>[]</c> sin candidatos.
+    /// </summary>
+    public string ZeroFaninGroups { get; set; } = "[]";
+
+    /// <summary>Lo mismo para <see cref="UnreadFields"/>, agrupando por el tipo que declara cada campo. Va también al 02.</summary>
+    public string UnreadFieldGroups { get; set; } = "[]";
+
+    /// <summary>
+    /// Puntos de instanciación por nombre con argumento no literal y clases nombradas en XML de configuración
+    /// (<c>Support.DynamicInstantiationScanner</c>), con el aviso de que es una heurística. <c>[]</c> sin nada que mostrar.
+    /// </summary>
+    public string DynamicInstantiationSites { get; set; } = "[]";
+
     /// <summary>Acciones Struts (<c>Route</c> con <c>framework = struts</c>) sin <c>HANDLES</c> entrante, con el motivo.</summary>
     public string StrutsActionsWithoutHandler { get; set; } = "[]";
 

@@ -33,6 +33,13 @@ public sealed record RepositoryScanResult
     /// <summary>Carpetas que contienen <c>WEB-INF</c>: contra ellas se resuelven las rutas de contexto (<c>/pages/x.jsp</c>).</summary>
     public IReadOnlyList<string> WebRoots { get; init; } = [];
 
+    /// <summary>
+    /// XML de configuración (<c>.xml</c> y <c>.config</c>, sin los ficheros de build como <c>pom.xml</c> o <c>build.xml</c>):
+    /// donde Spring, EJB, <c>web.xml</c>, Struts o .NET nombran clases que instancian por reflexión. Incluye los de Struts
+    /// y Tiles.
+    /// </summary>
+    public IReadOnlyList<string> ConfigurationXmlFiles { get; init; } = [];
+
     public DetectedLanguages Languages { get; init; }
 
     public string FullPath(string relativePath) =>
@@ -86,6 +93,7 @@ public static class RepositoryScan
         var tiles = new List<string>();
         var jsps = new List<string>();
         var webRoots = new List<string>();
+        var configurationXml = new List<string>();
 
         var pending = new Stack<string>();
         pending.Push(root);
@@ -144,10 +152,15 @@ public static class RepositoryScan
                         jsps.Add(relative);
                         break;
                     case ".xml":
+                        if (!BuildFiles.Contains(name))
+                            configurationXml.Add(relative);
                         if (name.StartsWith("struts-config", StringComparison.OrdinalIgnoreCase))
                             struts.Add(relative);
                         else if (IsTilesDefinitions(file))
                             tiles.Add(relative);
+                        break;
+                    case ".config":
+                        configurationXml.Add(relative);
                         break;
                 }
             }
@@ -170,6 +183,7 @@ public static class RepositoryScan
             TilesDefinitions = Sorted(tiles),
             JspFiles = Sorted(jsps),
             WebRoots = Sorted(webRoots),
+            ConfigurationXmlFiles = Sorted(configurationXml),
             Languages = languages
         };
     }

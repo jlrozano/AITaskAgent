@@ -199,12 +199,20 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
         // calculado y sin USES_TYPE en el grafo, además, solo los que declaran constructor: instanciar con el constructor
         // implícito no deja arista CALLS (no hay nodo al que llegar), así que en los demás un cero no prueba nada. Con
         // USES_TYPE ese new deja una arista (contexto new_implicit) y el requisito sobra. Los más grandes primero.
-        facetResult.ZeroFaninClasses = await QueryToJsonAsync(conn, $@"
+        // Se leen todos (hasta MaxDeadCodeCandidates) para agruparlos por patrón (capa 2 de (d)): los grupos grandes van
+        // resumidos en ZeroFaninGroups y la lista muestra los 20 primeros de los que no están en ningún grupo.
+        var dynamicScan = ScanDynamicInstantiation(context, repoPath, config.OutputReportsPath, cancellationToken, out var dynamicError);
+        facetResult.DynamicInstantiationSites = dynamicScan != null
+            ? DynamicInstantiationScanner.ToFacetJson(dynamicScan, FacetJsonOptions)
+            : dynamicError ?? "[]";
+
+        (facetResult.ZeroFaninClasses, facetResult.ZeroFaninGroups) = await GroupedFacetAsync(conn, $@"
             SELECT n.name, n.qualified_name, n.file, n.label,
                    {StartLineExpr} AS start_line,
                    {EndLineExpr} AS end_line,
                    {FanInExpr} AS fan_in, {FanInSourceExpr} AS fan_in_source,
-                   {LocExpr} AS loc_total
+                   {LocExpr} AS loc_total,
+                   json_extract({SafeJson("n.properties")}, '$.fqn') AS {HiddenColumnPrefix}fqn
             {MetricsJoin}
             WHERE n.label IN ('Class', 'Module', 'Form') AND {FanInExpr} = 0
               AND NOT EXISTS (SELECT 1 FROM edges h WHERE h.source_id = n.id AND h.type = 'HANDLES')
@@ -218,14 +226,16 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
                    OR @type_uses = 1
                    OR EXISTS (SELECT 1 FROM temp.facet_members m JOIN nodes c ON c.id = m.method_id
                               WHERE m.type_id = n.id AND (c.label = 'Constructor' OR json_extract(c.properties, '$.is_constructor') = 1)))
-            ORDER BY loc_total DESC, n.qualified_name LIMIT 20;", cancellationToken, parameters: metricParameters);
+            ORDER BY loc_total DESC, n.qualified_name LIMIT {MaxDeadCodeCandidates};",
+            ZeroFaninCandidate, row => Example(row, "name", "qualified_name", "file", "start_line", "loc_total"),
+            individualLimit: 20, individualFacet: "zero_fanin_classes", dynamicScan, cancellationToken, metricParameters);
 
         // Campos privados que nada lee (sin READS entrante), de los que el analizador Java casó o creó (llevan field_name; pueden
         // ser Field o, en las constantes de enum, Variable). Quedan fuera las static final: una constante sin leer no guarda
         // estado. writes cuenta los métodos (o tipos, en inicializadores) que lo escriben. Punto ciego: la reflexión, la
         // serialización y los frameworks que leen o escriben campos por nombre (ActionForm de Struts, beans) no dejan READS.
-        // Por fichero y línea.
-        facetResult.UnreadFields = await QueryToJsonAsync(conn, $@"
+        // Por fichero y línea. Como en ZeroFaninClasses, se agrupan por el tipo que los declara y los grupos van aparte.
+        (facetResult.UnreadFields, facetResult.UnreadFieldGroups) = await GroupedFacetAsync(conn, $@"
             SELECT json_extract(n.properties, '$.field_name') AS field_name, n.qualified_name, n.label, n.file,
                    {StartLineExpr} AS start_line,
                    {EndLineExpr} AS end_line,
@@ -236,7 +246,9 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
               AND json_extract(n.properties, '$.accessibility') = 'private'
               AND NOT (coalesce(json_extract(n.properties, '$.is_static'), 0) = 1 AND coalesce(json_extract(n.properties, '$.is_final'), 0) = 1)
               AND NOT EXISTS (SELECT 1 FROM edges r WHERE r.target_id = n.id AND r.type = 'READS')
-            ORDER BY n.file, start_line, n.qualified_name LIMIT 30;", cancellationToken);
+            ORDER BY n.file, start_line, n.qualified_name LIMIT {MaxDeadCodeCandidates};",
+            UnreadFieldCandidate, row => Example(row, "field_name", "qualified_name", "file", "start_line"),
+            individualLimit: 30, individualFacet: "unread_fields", dynamicScan, cancellationToken);
 
         // Acciones Struts que ninguna clase del grafo atiende (sin HANDLES entrante), con el motivo que da el propio nodo.
         // Primero las que declaran una clase que no está en el grafo; después, por fichero y línea.
@@ -875,6 +887,29 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
     {
         try
         {
+            var list = await QueryRowsAsync(conn, query, ct, repositoryPath, attachSnippets, maxSnippetLines, maxSnippetItems, parameters);
+            return list.Count > 0
+                ? JsonSerializer.Serialize(list, FacetJsonOptions)
+                : "[]";
+        }
+        catch (Exception ex)
+        {
+            return FacetErrorNote(ex);
+        }
+    }
+
+    /// <summary>Las filas de <paramref name="query"/>, con las líneas normalizadas y, si se pide, el fragmento de código; lanza si falla.</summary>
+    private static async Task<List<Dictionary<string, object?>>> QueryRowsAsync(
+        SqliteConnection conn,
+        string query,
+        CancellationToken ct,
+        string? repositoryPath = null,
+        bool attachSnippets = false,
+        int maxSnippetLines = 60,
+        int maxSnippetItems = 10,
+        IReadOnlyDictionary<string, object>? parameters = null)
+    {
+        {
             using var cmd = conn.CreateCommand();
             cmd.CommandText = query;
             foreach (var (name, value) in parameters ?? new Dictionary<string, object>())
@@ -946,13 +981,141 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
                 list.Add(dict);
             }
 
-            return list.Count > 0 
-                ? JsonSerializer.Serialize(list, FacetJsonOptions) 
-                : "[]";
+            return list;
+        }
+    }
+
+    // ------------------------------------------------------------ código muerto agrupado e instanciación dinámica (tanda C)
+
+    /// <summary>Tope de candidatos que se leen para agruparlos (<c>ZeroFaninClasses</c>, <c>UnreadFields</c>).</summary>
+    internal const int MaxDeadCodeCandidates = 20000;
+
+    /// <summary>Columnas que la consulta devuelve para la agrupación y no salen en la faceta.</summary>
+    private const string HiddenColumnPrefix = "_group_";
+
+    /// <summary>
+    /// Las filas de <paramref name="query"/> agrupadas por patrón (<see cref="DeadCodeGrouping"/>) y cruzadas con la
+    /// instanciación dinámica: la lista con los <paramref name="individualLimit"/> primeros que no están en ningún grupo, cada
+    /// uno con <c>named_in_configuration</c> si la configuración o un literal lo nombra, y la faceta de grupos. Si la consulta
+    /// falla, las dos llevan la nota de error.
+    /// </summary>
+    private static async Task<(string Individual, string Groups)> GroupedFacetAsync(
+        SqliteConnection conn,
+        string query,
+        Func<Dictionary<string, object?>, GroupCandidate> candidateOf,
+        Func<GroupCandidate, System.Text.Json.Nodes.JsonObject> exampleOf,
+        int individualLimit,
+        string individualFacet,
+        DynamicInstantiationScan? dynamicScan,
+        CancellationToken ct,
+        IReadOnlyDictionary<string, object>? parameters = null)
+    {
+        List<Dictionary<string, object?>> rows;
+        try
+        {
+            rows = await QueryRowsAsync(conn, query, ct, parameters: parameters);
         }
         catch (Exception ex)
         {
-            return FacetErrorNote(ex);
+            return (FacetErrorNote(ex), FacetErrorNote(ex));
+        }
+
+        var candidates = rows.Select(candidateOf).ToList();
+        var groups = DeadCodeGrouping.Group(candidates, out var ungrouped);
+        DeadCodeGrouping.CrossWith(groups, dynamicScan);
+
+        var named = DeadCodeGrouping.NamedLookup(dynamicScan);
+        var shown = ungrouped.Take(individualLimit).Select(c =>
+        {
+            var row = c.Row.Where(p => !p.Key.StartsWith(HiddenColumnPrefix, StringComparison.Ordinal))
+                .ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+            if (DeadCodeGrouping.FirstNamed(c, named) is { } n)
+                row["named_in_configuration"] = $"{n.Name} en {n.File}:{n.Line}{(n.Source == DynamicInstantiationScan.SourceLiteral ? " (literal en el código)" : "")}";
+            return row;
+        }).ToList();
+
+        var individual = shown.Count > 0 ? JsonSerializer.Serialize(shown, FacetJsonOptions) : "[]";
+        return (individual, DeadCodeGrouping.ToFacetJson(groups, candidates.Count, individualFacet, shown.Count, exampleOf, FacetJsonOptions));
+    }
+
+    private static string? Text(IReadOnlyDictionary<string, object?> row, string key) =>
+        row.TryGetValue(key, out var value) && value != null ? Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) : null;
+
+    /// <summary>Paquete a partir del <c>fqn</c> (sin el nombre simple); null sin él.</summary>
+    private static string? PackageOf(string? fqn, string simpleName)
+    {
+        if (string.IsNullOrEmpty(fqn))
+            return null;
+        var normalized = fqn.Replace('$', '.');
+        return normalized.EndsWith("." + simpleName, StringComparison.Ordinal) ? normalized[..^(simpleName.Length + 1)] : null;
+    }
+
+    /// <summary>Un tipo sin uso: se agrupa por su nombre; la configuración lo nombra por su <c>fqn</c> o por el final de su QN.</summary>
+    private static GroupCandidate ZeroFaninCandidate(Dictionary<string, object?> row)
+    {
+        var name = Text(row, "name") ?? "";
+        var fqn = Text(row, HiddenColumnPrefix + "fqn");
+        return new GroupCandidate(row, name, (Text(row, "file") ?? "").Replace('\\', '/'), PackageOf(fqn, name),
+            [.. new[] { fqn, Text(row, "qualified_name") }.Where(n => !string.IsNullOrEmpty(n)).Select(n => n!)]);
+    }
+
+    /// <summary>
+    /// Un campo sin leer: se agrupa por el tipo que lo declara (el nombre del fichero, que en Java es el del tipo de primer
+    /// nivel); la configuración nombra ese tipo, el QN sin el campo ni su inicializador.
+    /// </summary>
+    private static GroupCandidate UnreadFieldCandidate(Dictionary<string, object?> row)
+    {
+        var file = (Text(row, "file") ?? "").Replace('\\', '/');
+        var qn = Text(row, "qualified_name") ?? "";
+        var cut = qn.IndexOfAny([' ', '=', '\t']);
+        var bare = cut > 0 ? qn[..cut] : qn;
+        var owner = bare.Contains('.') ? bare[..bare.LastIndexOf('.')] : "";
+        return new GroupCandidate(row, Path.GetFileNameWithoutExtension(file), file, null, owner.Length > 0 ? [owner] : []);
+    }
+
+    /// <summary>Un ejemplo de grupo con solo las columnas que se piden.</summary>
+    private static System.Text.Json.Nodes.JsonObject Example(GroupCandidate candidate, params string[] columns)
+    {
+        var node = new System.Text.Json.Nodes.JsonObject();
+        foreach (var column in columns)
+        {
+            if (candidate.Row.TryGetValue(column, out var value) && value != null)
+                node[column] = System.Text.Json.Nodes.JsonValue.Create(value is long or int ? Convert.ToInt64(value) : (object?)Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)) ;
+        }
+        return node;
+    }
+
+    /// <summary>
+    /// Recorre el repositorio en busca de instanciación dinámica (<see cref="DynamicInstantiationScanner"/>) con el mismo
+    /// recorrido que el enriquecimiento (<see cref="Enrichment.RepositoryScan"/>: sin raíces de test, carpetas de herramientas
+    /// ni salidas de build, ni la carpeta de informes). Sin repositorio devuelve null y sin error; si falla, null y la nota
+    /// de faceta no disponible en <paramref name="error"/>.
+    /// </summary>
+    private static DynamicInstantiationScan? ScanDynamicInstantiation(
+        PipelineContext context, string repoPath, string? reportsPath, CancellationToken ct, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(repoPath) || !Directory.Exists(repoPath))
+            return null;
+        try
+        {
+            var configuration = context.ServiceProvider.GetService(typeof(Microsoft.Extensions.Configuration.IConfiguration)) as Microsoft.Extensions.Configuration.IConfiguration;
+            var javaOptions = configuration != null ? Enrichment.JavaAnalyzerOptions.FromConfiguration(configuration) : new Enrichment.JavaAnalyzerOptions();
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            var scan = Enrichment.RepositoryScan.Scan(repoPath, Enrichment.TestRoots.Resolve(repoPath, javaOptions.TestRoots),
+                string.IsNullOrWhiteSpace(reportsPath) ? null : reportsPath);
+            var result = DynamicInstantiationScanner.Scan(scan, ct);
+            context.Report(StepName, AnalysisLogLevel.Info,
+                $"🔎 Instanciación dinámica: {result.Sites.Count} sitios en {result.SourceFilesScanned} ficheros de código y " +
+                $"{result.NamedClasses.Count} clases nombradas en {result.ConfigurationFilesScanned} XML de configuración " +
+                $"({started.Elapsed.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} s).");
+            return result;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            context.Report(StepName, AnalysisLogLevel.Warning, $"⚠️ No se pudo buscar la instanciación dinámica: {ex.Message}. Los grupos de código muerto van sin ese cruce.");
+            error = $"[] /* Faceta no disponible por un error al recorrer el repositorio ({ex.Message}): no es un conjunto vacío, es un dato desconocido */";
+            return null;
         }
     }
 
