@@ -233,13 +233,13 @@ public abstract class StepBase(string name, Type inputType, Type outputType) : I
     /// </summary>
     protected virtual Task RestoreStateAsync(object? state, object? hitlResponse) => Task.CompletedTask;
 
-    protected virtual bool SwitchToNextFallback(IStepResult error, int attempt)
+    protected virtual bool SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)
     {
         return false;
     }
 
-    bool IFallbackable.SwitchToNextFallback(IStepResult error, int attempt)
+    bool IFallbackable.SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)
     {
-        return SwitchToNextFallback(error, attempt);
+        return SwitchToNextFallback(error, context, attempt);
     }
 }

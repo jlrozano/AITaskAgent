@@ -54,7 +54,7 @@ internal sealed class RetryMiddleware(ILogger<RetryMiddleware> logger) : IPipeli
 
                 ErrorStepResult errResult = ErrorStepResult.FromException(step, ex);
 
-                if (step is IFallbackable fallbackable && fallbackable.SwitchToNextFallback(errResult, attempt))
+                if (step is IFallbackable fallbackable && fallbackable.SwitchToNextFallback(errResult, context, attempt))
                 {
                     attempt = 1;
                     result = null;
@@ -71,7 +71,7 @@ internal sealed class RetryMiddleware(ILogger<RetryMiddleware> logger) : IPipeli
                 // CRITICAL: If error contains an exception, it's likely a system failure / bug. DO NOT RETRY.
                 if (result.Error?.OriginalException != null)
                 {
-                    if (step is IFallbackable fallbackable && fallbackable.SwitchToNextFallback(result, attempt))
+                    if (step is IFallbackable fallbackable && fallbackable.SwitchToNextFallback(result, context, attempt))
                     {
                         attempt = 1;
                         result = null;

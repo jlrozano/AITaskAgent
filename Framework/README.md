@@ -1049,7 +1049,7 @@ El pipeline debe mantener **type safety** en todo el flujo. Cada step:
 │                                                                      │
 │  IntentionInfo<TEnum> contiene:                                      │
 │   ├── Option (TEnum) - La opción seleccionada del enum               │
-│   ├── OptimizedPrompt - Prompt reformulado para la opción elegida    │
+│   ├── DetailedPrompt - Prompt reformulado para la opción elegida     │
 │   ├── RagKeys - Claves para búsqueda en sistemas RAG                 │
 │   ├── RagTags - Tags de filtrado para RAG                            │
 │   ├── Confidence (0.0-1.0) - Nivel de confianza                      │
@@ -1107,7 +1107,7 @@ El pipeline debe mantener **type safety** en todo el flujo. Cada step:
 3. **Primer Step de Cada Ruta**
    - **Entrada**: `LlmStepResult<IntentionInfo<TEnum>>`
    - **Puede ser cualquier tipo de step**, no necesariamente LLM:
-     - **LLM Step**: Usa `input.Value.OptimizedPrompt` para el prompt
+     - **LLM Step**: Usa `input.Value.DetailedPrompt` para el prompt
      - **RAG Step**: Usa `input.Value.RagKeys` para buscar, enriquece contexto
      - **Action Step**: Usa `input.Value.Option` para decidir acción
      - **Conversion Step**: Formatea `input.Value.Reasoning` para respuesta
@@ -1127,7 +1127,7 @@ public class StoryWriterStep : BaseLlmStep<LlmStepResult<IntentionInfo<StoryOpti
         
         return Task.FromResult($"""
             Write a story based on:
-            {intention?.OptimizedPrompt}
+            {intention?.DetailedPrompt}
             
             Style: {intention?.AdditionalData?.GetValueOrDefault("style")}
             """);

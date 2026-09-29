@@ -57,6 +57,19 @@ public class IntentionAnalyzerStep<TIn> : TemplateLlmStep<TIn, LlmIntentionResul
 
     IList<string> IRouterOptions.Options => [.. _options.Select(o => o.Id)];
 
+    /// <summary>
+    /// The system prompt built in the constructor is always literal composed text -
+    /// <c>role.SystemPrompt</c> + the caller's text (or <see cref="DefaultSystemTemplate"/>) +
+    /// <see cref="OptionsTemplate"/> - never a bare file name, even when a <c>templateProvider</c>
+    /// is supplied for the user prompt. Resolving it through the provider would look up a file that
+    /// can't exist (its "name" is a multi-paragraph string) and, on a miss, either throw
+    /// (<c>validateTemplates: true</c>) or return null and fall back to the raw, unrendered text -
+    /// leaving the model with a literal <c>{{ context.options }}</c> placeholder instead of the
+    /// interpolated option catalogue. Forcing this to null makes <c>TemplateLlmStep</c> render the
+    /// composed text directly via the template engine instead.
+    /// </summary>
+    protected override ITemplateProvider? SystemTemplateProvider => null;
+
 
     protected override async Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {

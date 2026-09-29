@@ -78,12 +78,15 @@ public sealed class FileTemplateProvider(
 
     private string? LoadTemplateFromFile(string name)
     {
-        var targetPath = Path.GetFullPath(Path.Combine(folderPath, name));
+        var targetPath = Path.GetFullPath(Path.Combine(folderPath, $"{name}.md"));
         var safeBasePath = Path.GetFullPath(folderPath) + Path.DirectorySeparatorChar;
 
+        // Null on a miss (missing file or a path-traversal attempt) is the contract GetTemplate
+        // and ITemplateProvider both document - returning the raw name here made a missing
+        // template silently render as its own filename instead of failing loud.
         return targetPath.StartsWith(safeBasePath, StringComparison.OrdinalIgnoreCase) && File.Exists(targetPath)
             ? File.ReadAllText(targetPath, Encoding.UTF8)
-            : name;
+            : null;
     }
 
     private void AddToCache(string name, string content)
@@ -130,12 +133,27 @@ public sealed class FileTemplateProvider(
         }
     }
 
+    /// <summary>
+    /// Renders template <paramref name="name"/> against <paramref name="model"/>. Returns null
+    /// (matching <see cref="GetTemplate"/>'s contract) when the template file is missing, unless
+    /// <c>validateTemplates</c> is set, in which case a miss throws
+    /// <see cref="FileNotFoundException"/> instead of silently propagating null downstream. Either
+    /// way, a missing template never renders as its own name - that was the bug: callers received
+    /// the literal template name back as if it were valid content, with no signal anything failed.
+    /// </summary>
     public string? Render(string name, object model)
     {
         var template = GetTemplate(name);
-        return string.IsNullOrWhiteSpace(template)
-            ? (validateTemplates && template is null ? throw new FileNotFoundException(name) : name)
-            : (_templateEngine == null) ? TinyTemplateRendered.Render(template, model, false, folderPath) : _templateEngine.Render(template, model);
+        if (template is null)
+        {
+            return validateTemplates
+                ? throw new FileNotFoundException($"Template '{name}' was not found under '{folderPath}'.", name)
+                : null;
+        }
+
+        return _templateEngine == null
+            ? TinyTemplateRendered.Render(template, model, false, folderPath)
+            : _templateEngine.Render(template, model);
     }
 
     private sealed record CachedTemplate(

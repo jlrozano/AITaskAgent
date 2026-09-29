@@ -209,10 +209,15 @@ internal static class StepResultFactory
         {
             var schema = new JsonSchema()
             {
-                Type = JsonObjectType.Object
+                Type = JsonObjectType.Object,
+                // Providers with strict JSON-schema mode (Groq, OpenAI) reject the schema
+                // outright unless every object node sets this explicitly - it is not inferred
+                // from the property list alone.
+                AllowAdditionalProperties = false
             };
 
-            AddPropertiesFromType(actualType, schema.Properties, schema.RequiredProperties);
+            var visitedTypes = new HashSet<Type> { actualType };
+            AddPropertiesFromType(actualType, schema.Properties, schema.RequiredProperties, visitedTypes);
             return schema;
         }
         catch
@@ -221,20 +226,21 @@ internal static class StepResultFactory
         }
     }
 
-    private static void AddPropertiesFromType(Type type, IDictionary<string, JsonSchemaProperty> properties, ICollection<string> requiredProperties)
+    private static void AddPropertiesFromType(Type type, IDictionary<string, JsonSchemaProperty> properties, ICollection<string> requiredProperties, HashSet<Type> visitedTypes)
     {
         var nullabilityContext = new NullabilityInfoContext();
 
         foreach (PropertyInfo? prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanWrite &&
-                       !Attribute.IsDefined(p, typeof(JsonIgnoreAttribute))))
+                       !Attribute.IsDefined(p, typeof(JsonIgnoreAttribute)) &&
+                       !Attribute.IsDefined(p, typeof(ExcludeFromLlmSchemaAttribute))))
         {
             // Nombre de propiedad en camelCase
             JsonPropertyAttribute? jsonPropertyAttr = prop.GetCustomAttribute<JsonPropertyAttribute>();
             string propertyName = jsonPropertyAttr?.PropertyName
                 ?? (char.ToLowerInvariant(prop.Name[0]) + prop.Name[1..]);
 
-            JsonSchemaProperty propSchema = CreateSchemaForType(prop.PropertyType);
+            JsonSchemaProperty propSchema = CreateSchemaForType(prop.PropertyType, visitedTypes);
             ApplyValidationAttributes(prop, propSchema);
 
             // Aplicar [Description] si existe
@@ -273,7 +279,7 @@ internal static class StepResultFactory
         }
     }
 
-    private static JsonSchemaProperty CreateSchemaForType(Type propertyType)
+    private static JsonSchemaProperty CreateSchemaForType(Type propertyType, HashSet<Type> visitedTypes)
     {
         var propSchema = new JsonSchemaProperty();
         Type underlyingType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
@@ -329,12 +335,12 @@ internal static class StepResultFactory
         else if (TryGetStringKeyDictionaryValueType(underlyingType, out Type? dictionaryValueType))
         {
             propSchema.Type = JsonObjectType.Object;
-            propSchema.AdditionalPropertiesSchema = CreateAdditionalPropertiesSchema(dictionaryValueType);
+            propSchema.AdditionalPropertiesSchema = CreateAdditionalPropertiesSchema(dictionaryValueType, visitedTypes);
         }
         else if (underlyingType.IsArray && underlyingType.GetElementType() is Type elementType)
         {
             propSchema.Type = JsonObjectType.Array;
-            propSchema.Item = CreateSchemaForType(elementType);
+            propSchema.Item = CreateSchemaForType(elementType, visitedTypes);
         }
         else if (underlyingType.IsGenericType &&
                  (underlyingType.GetGenericTypeDefinition() == typeof(List<>) ||
@@ -343,14 +349,27 @@ internal static class StepResultFactory
         {
             propSchema.Type = JsonObjectType.Array;
             Type genericElementType = underlyingType.GetGenericArguments()[0];
-            JsonSchemaProperty itemSchema = CreateSchemaForType(genericElementType);
+            JsonSchemaProperty itemSchema = CreateSchemaForType(genericElementType, visitedTypes);
             propSchema.Item = itemSchema;
         }
         else if (underlyingType.IsClass)
         {
-            // Complex type - recursion
+            // Complex type - recursion, guarded against reference cycles
             propSchema.Type = JsonObjectType.Object;
-            AddPropertiesFromType(underlyingType, propSchema.Properties, propSchema.RequiredProperties);
+            propSchema.AllowAdditionalProperties = false;
+
+            if (visitedTypes.Add(underlyingType))
+            {
+                try
+                {
+                    AddPropertiesFromType(underlyingType, propSchema.Properties, propSchema.RequiredProperties, visitedTypes);
+                }
+                finally
+                {
+                    visitedTypes.Remove(underlyingType);
+                }
+            }
+            // Cycle detected: leave as Object with no expanded properties.
         }
 
         return propSchema;
@@ -394,7 +413,7 @@ internal static class StepResultFactory
         return true;
     }
 
-    private static JsonSchema CreateAdditionalPropertiesSchema(Type valueType)
+    private static JsonSchema CreateAdditionalPropertiesSchema(Type valueType, HashSet<Type> visitedTypes)
     {
         var schema = new JsonSchema();
         Type underlyingType = Nullable.GetUnderlyingType(valueType) ?? valueType;
@@ -443,14 +462,14 @@ internal static class StepResultFactory
         if (TryGetStringKeyDictionaryValueType(underlyingType, out Type? innerValueType))
         {
             schema.Type = JsonObjectType.Object;
-            schema.AdditionalPropertiesSchema = CreateAdditionalPropertiesSchema(innerValueType);
+            schema.AdditionalPropertiesSchema = CreateAdditionalPropertiesSchema(innerValueType, visitedTypes);
             return schema;
         }
 
         if (underlyingType.IsArray && underlyingType.GetElementType() is Type elementType)
         {
             schema.Type = JsonObjectType.Array;
-            schema.Item = CreateAdditionalPropertiesSchema(elementType);
+            schema.Item = CreateAdditionalPropertiesSchema(elementType, visitedTypes);
             return schema;
         }
 
@@ -460,14 +479,28 @@ internal static class StepResultFactory
              underlyingType.GetGenericTypeDefinition() == typeof(ICollection<>)))
         {
             schema.Type = JsonObjectType.Array;
-            schema.Item = CreateAdditionalPropertiesSchema(underlyingType.GetGenericArguments()[0]);
+            schema.Item = CreateAdditionalPropertiesSchema(underlyingType.GetGenericArguments()[0], visitedTypes);
             return schema;
         }
 
         if (underlyingType.IsClass)
         {
             schema.Type = JsonObjectType.Object;
-            AddPropertiesFromType(underlyingType, schema.Properties, schema.RequiredProperties);
+            schema.AllowAdditionalProperties = false;
+
+            if (visitedTypes.Add(underlyingType))
+            {
+                try
+                {
+                    AddPropertiesFromType(underlyingType, schema.Properties, schema.RequiredProperties, visitedTypes);
+                }
+                finally
+                {
+                    visitedTypes.Remove(underlyingType);
+                }
+            }
+            // Cycle detected: leave as Object with no expanded properties.
+
             return schema;
         }
 

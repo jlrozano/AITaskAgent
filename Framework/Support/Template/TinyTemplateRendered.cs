@@ -27,7 +27,8 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
         ContractResolver = new DefaultContractResolver
         {
             NamingStrategy = new LowercaseNamingStrategy()
-        }
+        },
+        ReferenceLoopHandling = ReferenceLoopHandling.Ignore
     });
 
     public static string Render(string template, object obj, bool strictMode = false, string? baseDirectory = null)

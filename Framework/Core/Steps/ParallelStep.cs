@@ -41,6 +41,25 @@ public class ParallelStep : StepBase
         init => _branches = value ?? [];
     }
 
+    /// <summary>
+    /// Most branches running at once. 0 or less (the default) sets no limit of its own and keeps what
+    /// <see cref="Parallel.ForEachAsync{TSource}(IEnumerable{TSource}, CancellationToken, Func{TSource, CancellationToken, ValueTask})"/>
+    /// has always done here: <see cref="Environment.ProcessorCount"/> branches at a time. A lower value caps, for
+    /// instance, how many LLM calls a fan-out sends to the same provider at once.
+    /// </summary>
+    public int MaxDegreeOfParallelism { get; init; }
+
+    /// <summary>
+    /// The options of the <c>CancellationToken</c> overload the step used before <see cref="MaxDegreeOfParallelism"/>
+    /// existed (default scheduler, one branch per processor), with the limit applied when there is one.
+    /// </summary>
+    private ParallelOptions CreateParallelOptions(CancellationToken cancellationToken) => new()
+    {
+        CancellationToken = cancellationToken,
+        TaskScheduler = TaskScheduler.Default,
+        MaxDegreeOfParallelism = MaxDegreeOfParallelism > 0 ? MaxDegreeOfParallelism : Environment.ProcessorCount
+    };
+
     /// <inheritdoc/>
     protected override async Task<IStepResult> ExecuteAsync(
         IStepResult input, PipelineContext context, int attempt,
@@ -49,7 +68,7 @@ public class ParallelStep : StepBase
         ParallelResult result = new(this);
         ConcurrentBag<string> errorMessages = [];
 
-        await Parallel.ForEachAsync(_branches, cancellationToken, async (step, ct) =>
+        await Parallel.ForEachAsync(_branches, CreateParallelOptions(cancellationToken), async (step, ct) =>
         {
             PipelineContext branchContext = context.CloneForBranch();
             var branchId = Guid.NewGuid().ToString();

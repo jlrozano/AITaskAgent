@@ -1,3 +1,4 @@
+using AITaskAgent.Configuration;
 using AITaskAgent.Core;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Base;
@@ -14,6 +15,7 @@ using AITaskAgent.LLM.Support;
 using AITaskAgent.LLM.Tools.Abstractions;
 using AITaskAgent.Support.JSON;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Text;
@@ -42,8 +44,6 @@ public abstract partial class BaseLlmStep(
     string? systemPrompt = null
     ) : StepBase(name, inputType, outputType), IFallbackable
 {
-    private int _currentIndex = 0;
-
     /// <summary>
     /// Active role. Held in a field rather than read from the constructor parameter so that
     /// steps built before their role is known - YAML steps, deserialized by
@@ -53,15 +53,14 @@ public abstract partial class BaseLlmStep(
     private LlmRole _role = role;
 
     /// <summary>
-    /// Replaces the role after construction and rewinds the fallback chain. Intended for
-    /// deferred resolution; steps constructed with a real role never need it.
-    /// Refreshes <see cref="Tools"/> and <see cref="SystemPrompt"/> only when they are still
-    /// unset, so anything configured explicitly survives.
+    /// Replaces the role after construction. Intended for deferred resolution; steps constructed
+    /// with a real role never need it. Refreshes <see cref="Tools"/> and
+    /// <see cref="SystemPrompt"/> only when they are still unset, so anything configured
+    /// explicitly survives.
     /// </summary>
     protected internal void SetRole(LlmRole newRole)
     {
         _role = newRole ?? throw new ArgumentNullException(nameof(newRole));
-        _currentIndex = 0;
 
         if (Tools.Count == 0 && newRole.Tools is { Count: > 0 })
         {
@@ -74,55 +73,139 @@ public abstract partial class BaseLlmStep(
         }
     }
 
-    protected ILlmService LlmService => (_currentIndex == 0 ? _role.Provider.Service :
-        _role.Fallbacks?[_currentIndex - 1].Provider.Service) ?? new NullLlmService();
-    protected string Model => _currentIndex == 0 ? _role.Model :
-        _role.Fallbacks?[_currentIndex - 1].Model
-        ?? throw new InvalidOperationException("Model not set");
-    protected LlmProvider Provider => _currentIndex == 0 ? _role.Provider :
-        _role.Fallbacks?[_currentIndex - 1].Provider
-        ?? throw new InvalidOperationException("Provider not set");
-    protected LlmInferenceSettings Inference =>
-        (_currentIndex == 0 ? _role.Inference : _role.Fallbacks?[_currentIndex - 1].Inference)
-        ?? Provider.Inference ?? new();
+    protected ILlmService GetLlmService(PipelineContext context)
+    {
+        var idx = GetState(context).FallbackIndex;
+        return (idx == 0 ? _role.Provider.Service :
+            _role.Fallbacks?[idx - 1].Provider.Service) ?? new NullLlmService();
+    }
+
+    protected string GetModel(PipelineContext context)
+    {
+        var idx = GetState(context).FallbackIndex;
+        return idx == 0 ? _role.Model :
+            _role.Fallbacks?[idx - 1].Model
+            ?? throw new InvalidOperationException("Model not set");
+    }
+
+    protected LlmProvider GetProvider(PipelineContext context)
+    {
+        var idx = GetState(context).FallbackIndex;
+        return idx == 0 ? _role.Provider :
+            _role.Fallbacks?[idx - 1].Provider
+            ?? throw new InvalidOperationException("Provider not set");
+    }
+
+    protected LlmInferenceSettings GetInference(PipelineContext context)
+    {
+        var idx = GetState(context).FallbackIndex;
+        return (idx == 0 ? _role.Inference : _role.Fallbacks?[idx - 1].Inference)
+            ?? GetProvider(context).Inference ?? new();
+    }
 
     public int MaxToolIterations { get; init; } = 5;
 
     public IList<ITool> Tools { get; set; } = role.Tools ?? [];
-    public List<IStreamingTagHandler> StreamingHandlers { get; init; } = [];
 
-    // Per-invocation state (reset in FinalizeAsync)
-    protected ConversationContext? _conversation = null;
-    protected string? _initialBookmark = null;
-    protected string _message = "";
-    protected LlmRequest? _request = null;
+    /// <summary>
+    /// Handlers for in-text action tags (e.g. <c>&lt;write_file&gt;</c>). Their instructions are
+    /// injected into the system prompt and every response - streamed or not, reasoning or content -
+    /// is scanned for their tags.
+    /// </summary>
+    public List<ITagHandler> TagHandlers { get; init; } = [];
+
+    /// <summary>
+    /// Everything one invocation of this step needs to remember between <see cref="ExecuteAsync"/>
+    /// attempts and <see cref="FinalizeAsync"/>. Lives in <see cref="PipelineContext.StepState"/>,
+    /// never in an instance field: this same step object is registered once and reused for every
+    /// run, and two concurrent runs (or two branches of the same <c>ParallelStep</c>) each get
+    /// their own <see cref="PipelineContext"/>, so this is what actually keeps them from
+    /// overwriting each other's conversation, bookmark and fallback index mid-flight.
+    /// </summary>
+    private sealed class InvocationState
+    {
+        public int FallbackIndex;
+        public ConversationContext? Conversation;
+        public string? InitialBookmark;
+        public string Message = "";
+        public LlmRequest? Request;
+    }
+
+    /// <summary>
+    /// Identifies this step's slot in <see cref="PipelineContext.StepState"/>. The path already
+    /// distinguishes concurrent branches and repeated step names at different levels of a
+    /// composite pipeline; a context never attached to one (a step invoked directly, as several
+    /// samples do) falls back to <see cref="StepBase.Name"/>, which is still unique enough for a
+    /// context that only ever runs one step invocation at a time.
+    /// </summary>
+    private string StateKey(PipelineContext context) =>
+        string.IsNullOrEmpty(context.CurrentStepPath) ? Name : context.CurrentStepPath;
+
+    private InvocationState GetState(PipelineContext context)
+    {
+        var key = StateKey(context);
+        if (context.StepState.TryGetValue(key, out var existing) && existing is InvocationState state)
+        {
+            return state;
+        }
+        state = new InvocationState();
+        context.StepState[key] = state;
+        return state;
+    }
 
     public string? SystemPrompt { get; set; } = string.IsNullOrWhiteSpace(systemPrompt) ? role.SystemPrompt : systemPrompt;
 
     public string? Prompt { get; set; } = prompt;
 
-    protected override bool SwitchToNextFallback(IStepResult error, int attempt)
+    protected override bool SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)
     {
-        if (_currentIndex < (_role.Fallbacks?.Count ?? 0))
+        // Only a provider failure is worth another engine. Anything else (a tool loop, a template or
+        // parsing bug, a cancellation) would fail the same way on every fallback, so it is left to
+        // the caller - a derived step may still handle it before delegating here.
+        if (error.Error?.OriginalException is not LlmProviderException)
         {
-            _currentIndex++;
-            if (string.IsNullOrWhiteSpace(Model) || Provider == null || LlmService == null)
-            {
-                return false;
-            }
+            return false;
+        }
+
+        var state = GetState(context);
+        var fallbackCount = _role.Fallbacks?.Count ?? 0;
+        var nextIndex = state.FallbackIndex + 1;
+
+        if (nextIndex > fallbackCount)
+        {
+            return false;
+        }
+
+        var fallback = _role.Fallbacks![nextIndex - 1];
+
+        // Validate BEFORE committing state.FallbackIndex: GetLlmService silently substitutes
+        // NullLlmService when Provider.Service is unresolved, so checking it via that method
+        // AFTER the switch would never catch a bad fallback - it would just point the step at
+        // NullLlmService for the rest of the invocation instead of reporting a clear failure.
+        if (string.IsNullOrWhiteSpace(fallback.Model) || fallback.Provider?.Service == null)
+        {
             if (Logger.IsEnabled(LogLevel.Warning))
             {
-                Logger.LogWarning("Step {StepName} switching to fallback engine {Index}: {Model} ({Provider})",
-                    Name, _currentIndex, Model, LlmService.Name);
+                Logger.LogWarning(
+                    "Step {StepName} cannot switch to fallback engine {Index}: model or provider service did not resolve.",
+                    Name, nextIndex);
             }
-
-            if (_conversation != null && _initialBookmark != null)
-            {
-                _conversation.RestoreBookmark(_initialBookmark);
-            }
-            return true;
+            return false;
         }
-        return false;
+
+        state.FallbackIndex = nextIndex;
+
+        if (Logger.IsEnabled(LogLevel.Warning))
+        {
+            Logger.LogWarning("Step {StepName} switching to fallback engine {Index}: {Model} ({Provider})",
+                Name, state.FallbackIndex, GetModel(context), GetLlmService(context).Name);
+        }
+
+        if (state.Conversation != null && state.InitialBookmark != null)
+        {
+            state.Conversation.RestoreBookmark(state.InitialBookmark);
+        }
+        return true;
     }
 
     /// <summary>Builds the user message sent to the LLM.</summary>
@@ -131,48 +214,54 @@ public abstract partial class BaseLlmStep(
     /// <summary>Builds the system message. Return null for no system prompt.</summary>
     protected virtual Task<string?> BuildSystemMessageAsync(IStepResult input, PipelineContext context) => Task.FromResult(SystemPrompt);
 
-    protected override async Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
+    protected override Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {
-        if (_conversation == null)
+        var key = StateKey(context);
+
+        if (!context.StepState.TryGetValue(key, out var stored) || stored is not InvocationState state
+            || state.Conversation == null)
         {
-            return;
+            context.StepState.Remove(key);
+            return Task.CompletedTask;
         }
 
-        if (result is ILlmStepResult llmResult)
-        {
-            if (StreamingHandlers?.Count > 0 && !string.IsNullOrEmpty(llmResult.AssistantMessage))
-            {
-                llmResult.AssistantMessage = await ProcessTagsNonStreamingAsync(llmResult.AssistantMessage, context, cancellationToken);
-            }
-        }
+        // Tags are processed inline in InvokeLlmAsync for both transports, so by the time this runs
+        // AssistantMessage already carries the tag-stripped content. Everything below is the
+        // conversation compaction to the canonical [user / assistant] pair - which is why a caller
+        // that invokes the step directly, without RetryMiddleware, must call FinalizeAsync itself
+        // or the tool traffic of every turn accumulates in the conversation forever.
 
-        if (_initialBookmark != null && _message != "")
+        if (state.InitialBookmark != null)
         {
-            // Always restore the bookmark first to rewind to the clean pre-turn state.
-            // This removes all mid-retry assistant messages from the conversation.
-            _conversation.RestoreBookmark(_initialBookmark);
+            // Always restore the bookmark first to rewind to the clean pre-turn state, even when
+            // the message ended up empty (BuildUserMessageAsync returned nothing) - skipping the
+            // restore in that case used to leave every retry's tool traffic in the conversation
+            // forever, since nothing else ever rewinds to this bookmark.
+            state.Conversation.RestoreBookmark(state.InitialBookmark);
 
-            if (!result.HasError)
+            if (!result.HasError && state.Message != "")
             {
                 // Success: write the canonical [user / assistant] pair.
-                _conversation.AddUserMessage(_message);
+                state.Conversation.AddUserMessage(state.Message);
                 if (result is ILlmStepResult llmFinal)
                 {
-                    _conversation.AddAssistantMessage(llmFinal.AssistantMessage);
+                    state.Conversation.AddAssistantMessage(llmFinal.AssistantMessage);
                 }
                 // If result is not ILlmStepResult (e.g. custom subclass), the user message is
                 // still recorded so the conversation is not left in an inconsistent state.
             }
-            // On error: bookmark already restored — user message and any error text are NOT recorded.
+            // On error, or when there was no user message to begin with: bookmark already
+            // restored — nothing else gets recorded.
         }
 
         if (result is ILlmStepResult llmRes)
-            AddConversationToContext(context, _conversation, llmRes);
-        _conversation = null;
-        _initialBookmark = null;
-        _message = "";
-        _request = null;
-        _currentIndex = 0; // Reset fallback index for next complete pipeline execution
+            AddConversationToContext(context, state.Conversation, llmRes);
+
+        // This invocation is done: drop its slot so a later, unrelated invocation of the same
+        // step in the same context (e.g. a LoopStep iteration) starts from a clean state.
+        context.StepState.Remove(key);
+
+        return Task.CompletedTask;
     }
 
     protected override async Task<IStepResult> ExecuteAsync(
@@ -182,33 +271,41 @@ public abstract partial class BaseLlmStep(
         IStepResult? lastStepResult,
         CancellationToken cancellationToken)
     {
+        var state = GetState(context);
+
         if (attempt == 1)
         {
-            // First attempt ever for this step invocation.
-            _conversation = GetConversationContext(context);
+            // First attempt ever for this step invocation (or the first attempt of a fresh round
+            // right after SwitchToNextFallback, which already set state.FallbackIndex on this
+            // same state object - left untouched here).
+            state.Conversation = GetConversationContext(context);
             // Create a fresh bookmark at the current (clean) position.
-            _initialBookmark = _conversation!.CreateBookmark();
+            state.InitialBookmark = state.Conversation!.CreateBookmark();
+
+            // The repeat detector compares tool calls within one turn only: a turn that legitimately
+            // starts with the same call the previous one ended with must not inherit its count.
+            ResetToolCallRepeatTracking();
 
             // Add the user message explicitly here — NOT inside BuildLlmRequestAsync.
             // This keeps BuildLlmRequestAsync free of conversation side-effects and makes
             // the mutation visible and reasoned-about at the call site.
-            _message = await BuildUserMessageAsync(input, context) ?? "";
-            _conversation.AddUserMessage(_message);
+            state.Message = await BuildUserMessageAsync(input, context) ?? "";
+            state.Conversation.AddUserMessage(state.Message);
 
-            _request = await BuildLlmRequestAsync(input, context, _conversation!, cancellationToken);
+            state.Request = await BuildLlmRequestAsync(input, context, state.Conversation!, cancellationToken);
 
             if (Logger.IsEnabled(LogLevel.Information))
             {
                 Logger.LogInformation("LLM step {StepName} starting, model: {Model}, conversation size: {MessageCount} messages",
-                    Name, Model, _conversation.History.Messages.Count);
+                    Name, GetModel(context), state.Conversation.History.Messages.Count);
             }
             if (Logger.IsEnabled(LogLevel.Debug))
             {
-                Logger.LogDebug("LLM step {StepName} bookmark created: {BookmarkId}", Name, _initialBookmark);
+                Logger.LogDebug("LLM step {StepName} bookmark created: {BookmarkId}", Name, state.InitialBookmark);
             }
             if (Logger.IsEnabled(LogLevel.Trace))
             {
-                Logger.LogTrace("LLM step {StepName} user message: {Message}", Name, _message);
+                Logger.LogTrace("LLM step {StepName} user message: {Message}", Name, state.Message);
             }
         }
         else
@@ -223,23 +320,27 @@ public abstract partial class BaseLlmStep(
                 Logger.LogDebug("LLM step {StepName} retry {Attempt}, adding error feedback to conversation: {Error}",
                     Name, attempt, errorFeedback);
             }
-            _conversation!.AddUserMessage(errorFeedback);
+            state.Conversation!.AddUserMessage(errorFeedback);
 
-            // _request.Conversation is a reference to _conversation (same object), so the
-            // LLM service will see the updated history automatically. The with-expression
+            // state.Request.Conversation is a reference to state.Conversation (same object), so
+            // the LLM service will see the updated history automatically. The with-expression
             // just makes the intent explicit and future-proofs against record copy scenarios.
-            _request = _request! with { Conversation = _conversation };
+            state.Request = state.Request! with { Conversation = state.Conversation };
         }
 
-        var llmResult = await InvokeLlmWithToolsAsync(_request!, context, 0, cancellationToken);
+        var llmResult = await InvokeLlmWithToolsAsync(state.Request!, context, 0, cancellationToken);
 
         if (!llmResult.IsSuccess)
         {
-            // Any provider-level error (retriable or fatal) must include the exception.
-            // This ensures RetryMiddleware recognizes it as an infrastructure error
-            // and immediately triggers SwitchToNextFallback instead of treating it 
-            // as a prompt parsing error.
-            return CreateErrorResult(llmResult.Error?.Message ?? "Provider error", llmResult.Error);
+            // Any provider-level error (retriable or fatal) must include the exception, typed as
+            // LlmProviderException: RetryMiddleware then treats it as an infrastructure error and
+            // asks SwitchToNextFallback, which only changes engine for that type. The tool-iteration
+            // limit keeps its own type so it is not mistaken for a provider outage.
+            var message = llmResult.Error?.Message ?? "Provider error";
+            var error = llmResult.Error is ToolIterationLimitExceededException or LlmProviderException
+                ? llmResult.Error
+                : new LlmProviderException(message, llmResult.Error, llmResult.IsRetriable);
+            return CreateErrorResult(message, error);
         }
 
         var primaryCandidate = llmResult.Candidates.FirstOrDefault();
@@ -266,7 +367,7 @@ public abstract partial class BaseLlmStep(
         // consecutive same-role messages and return empty/unexpected responses.
         // FinalizeAsync will restore the bookmark and rewrite the tail of the conversation
         // cleanly, so adding here is always safe — it just keeps the mid-retry state valid.
-        _conversation!.AddAssistantMessage(primaryCandidate?.Content ?? string.Empty);
+        state.Conversation!.AddAssistantMessage(primaryCandidate?.Content ?? string.Empty);
 
         if (result == null || parseError != null)
         {
@@ -307,12 +408,21 @@ public abstract partial class BaseLlmStep(
             systemPrompt = EnrichSystemPromptWithToolGuidelines(systemPrompt, Tools);
         }
 
-        if (StreamingHandlers?.Count > 0)
+        if (TagHandlers?.Count > 0)
         {
-            systemPrompt = EnrichSystemPromptWithStreamingTags(systemPrompt, StreamingHandlers);
+            systemPrompt = EnrichSystemPromptWithTags(systemPrompt, TagHandlers);
         }
 
+        // The sliding window is configured once, under AITaskAgent:Conversation, and every provider
+        // honours it (the OpenAI service used to send the whole history regardless). When the step
+        // runs outside DI the request keeps LlmRequest's own defaults.
+        var conversationOptions = (context.ServiceProvider.GetService(typeof(IOptions<AITaskAgentOptions>)) as IOptions<AITaskAgentOptions>)
+            ?.Value.Conversation;
+
         var toolDefinitions = Tools?.Select(t => t.GetDefinition()).ToList();
+
+        var provider = GetProvider(context);
+        var inference = GetInference(context);
 
         var request = new LlmRequest
         {
@@ -321,21 +431,25 @@ public abstract partial class BaseLlmStep(
             // with respect to conversation state.
             Conversation = conversation,
             SystemPrompt = systemPrompt,
-            Model = Model,
-            Temperature = Inference?.Temperature ?? Provider?.Inference?.Temperature,
-            MaxTokens = Inference?.MaxTokens ?? Provider?.Inference?.MaxTokens,
+            Model = GetModel(context),
+            Temperature = inference?.Temperature ?? provider?.Inference?.Temperature,
+            MaxTokens = inference?.MaxTokens ?? provider?.Inference?.MaxTokens,
+            UseMaxCompletionTokens = inference?.UseMaxCompletionTokens ?? provider?.Inference?.UseMaxCompletionTokens ?? false,
             Tools = toolDefinitions,
-            UseStreaming = Inference?.UseStreaming ?? Provider?.Inference?.UseStreaming ?? false,
-            BaseUrl = Provider?.BaseUrl,
-            ApiKey = Provider?.ApiKey,
+            UseStreaming = inference?.UseStreaming ?? provider?.Inference?.UseStreaming ?? false,
+            BaseUrl = provider?.BaseUrl,
+            ApiKey = provider?.ApiKey,
+            ApiVersion = provider?.ApiVersion,
+            UseSlidingWindow = conversationOptions?.UseSlidingWindow ?? true,
+            SlidingWindowMaxTokens = conversationOptions?.SlidingWindowMaxTokens ?? 8192,
             // Automatically merges options from both levels
             Options = MergeOptions(
-                Provider?.Inference?.Options,
-                Inference?.Options)
+                provider?.Inference?.Options,
+                inference?.Options)
         };
 
         request = ConfigureLlmRequest(request, context);
-        request = ConfigureJsonResponse(request, _message);
+        request = ConfigureJsonResponse(request, GetState(context).Message, provider);
 
         return request;
     }
@@ -436,30 +550,33 @@ public abstract partial class BaseLlmStep(
 
     private void UpdateContextMetrics(PipelineContext context, LlmResult response)
     {
+        var model = GetModel(context);
+        var llmServiceName = GetLlmService(context)?.Name;
+
         Metrics.LlmRequests.Add(1,
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Model),
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, LlmService?.Name));
+            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, model),
+            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, llmServiceName));
 
         if (response.TokensUsed.HasValue)
         {
             context.Metadata["TokensUsed"] = response.TokensUsed.Value;
             Metrics.LlmTokens.Add(response.TokensUsed.Value,
-                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Model),
-                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, LlmService?.Name));
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, model),
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, llmServiceName));
         }
 
         if (response.CostUsd.HasValue)
         {
             context.Metadata["CostUsd"] = response.CostUsd.Value;
             Metrics.LlmCost.Add((double)response.CostUsd.Value,
-                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Model),
-                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, LlmService?.Name));
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, model),
+                new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, llmServiceName));
         }
     }
 
     // ── JSON response configuration ──────────────────────────────────────────
 
-    private LlmRequest ConfigureJsonResponse(LlmRequest request, string userMessage)
+    private LlmRequest ConfigureJsonResponse(LlmRequest request, string userMessage, LlmProvider? provider)
     {
 
         if (Schema == null)
@@ -467,7 +584,7 @@ public abstract partial class BaseLlmStep(
             return request;
         }
 
-        var jsonCapability = (Provider?.Inference?.JsonSupport ?? false) ? JsonResponseCapability.JsonSchema : JsonResponseCapability.None;
+        var jsonCapability = (provider?.Inference?.JsonSupport ?? false) ? JsonResponseCapability.JsonSchema : JsonResponseCapability.None;
 
         if (Logger.IsEnabled(LogLevel.Debug))
         {
@@ -535,7 +652,7 @@ public abstract partial class BaseLlmStep(
         return sb.ToString();
     }
 
-    private static string EnrichSystemPromptWithStreamingTags(string? basePrompt, List<IStreamingTagHandler> handlers)
+    private static string EnrichSystemPromptWithTags(string? basePrompt, List<ITagHandler> handlers)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrEmpty(basePrompt))
@@ -543,25 +660,19 @@ public abstract partial class BaseLlmStep(
             sb.AppendLine(basePrompt);
         }
 
-        sb.AppendLine();
-        sb.AppendLine("## IN-TEXT STREAMING ACTIONS (NOT TOOLS)");
-        sb.AppendLine("You can execute actions directly by typing XML tags in your response. These are NOT functions or tools. DO NOT invoke them via the tool_call mechanism.");
-        sb.AppendLine("Simply type the XML tag directly in your text response to execute it.");
-        sb.AppendLine();
-        sb.AppendLine("**IMPORTANT BEHAVIOR:**");
-        sb.AppendLine("- The content inside XML tags (e.g., file content) is INVISIBLE to the user - they only see a brief placeholder.");
-        sb.AppendLine("- AFTER using any tag, you MUST provide a clear explanation of what you did, just like you would after a tool call.");
-        sb.AppendLine("- Example: After writing a file, say something like: 'He creado el archivo `demo.py` con el código para imprimir números primos del 1 al 100.'");
-        sb.AppendLine("- Do NOT just write the tag and stop. Always follow up with a user-friendly explanation.");
-        sb.AppendLine();
-        sb.AppendLine("### AVAILABLE TAGS (Type directly in chat)");
-        foreach (var handler in handlers)
-        {
-            sb.AppendLine($"- **<{handler.TagName}>**");
-        }
+        var tagList = string.Join(", ", handlers.Select(h => $"<{h.TagName}>"));
 
         sb.AppendLine();
-        sb.AppendLine("### DETAILED INSTRUCTIONS");
+        sb.AppendLine("## IN-TEXT ACTION TAGS (NOT TOOLS)");
+        sb.AppendLine($"Besides your tools you have these action tags: {tagList}.");
+        sb.AppendLine("A tag is executed by TYPING it literally in your reply text, exactly as documented below. It is not a function:");
+        sb.AppendLine("none of these names exists in your tools list, so a tool_call with one of them always fails and wastes a turn.");
+        sb.AppendLine();
+        sb.AppendLine("**How the user sees it:** the text between the opening and closing tag is hidden and replaced by a one-line");
+        sb.AppendLine("reference (e.g. `[write_file: demo.py (1.2 KB) — Prime numbers script]`). So, right after the closing tag, always");
+        sb.AppendLine("add one or two sentences saying what you did - never end your reply on the closing tag.");
+        sb.AppendLine();
+        sb.AppendLine("### TAG REFERENCE");
         foreach (var handler in handlers)
         {
             sb.AppendLine(handler.GetInstructions());

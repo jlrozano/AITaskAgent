@@ -21,7 +21,13 @@ public sealed class LlmEnvironment
     /// <summary>
     /// Default preset name used when a Step has no matching entry in <see cref="Roles"/>.
     /// </summary>
-    public string DefaultRole { get; init; } = "default";
+    /// <remarks>
+    /// Settable, not init-only: <c>ConfigureLlmEnvironmentOptions.Configure</c> receives an already
+    /// constructed <see cref="LlmEnvironment"/> (the standard <c>IConfigureOptions&lt;T&gt;</c>
+    /// pattern) and must be able to overwrite this scalar from configuration, the same way it
+    /// populates <see cref="Providers"/> and <see cref="Roles"/> in place.
+    /// </remarks>
+    public string DefaultRole { get; set; } = "default";
 
     public List<FallbackProviderSettings> FallbackProviders { get; init; } = [];
 }

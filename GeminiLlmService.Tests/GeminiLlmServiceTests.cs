@@ -9,8 +9,8 @@ namespace GeminiLlmService.Tests;
 /// </summary>
 public class GeminiLlmServiceTests
 {
-    private static GeminiLlmService.GeminiLlmService Service() =>
-        new(NullLogger<GeminiLlmService.GeminiLlmService>.Instance);
+    private static GeminiLlmServiceClass Service() =>
+        new(NullLogger<GeminiLlmServiceClass>.Instance);
 
     [Theory]
     [InlineData("", 0)]

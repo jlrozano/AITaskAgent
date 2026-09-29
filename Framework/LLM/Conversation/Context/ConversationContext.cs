@@ -1,3 +1,4 @@
+using AITaskAgent.Configuration;
 using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Models;
 using Microsoft.Extensions.Logging;
@@ -12,9 +13,17 @@ namespace AITaskAgent.LLM.Conversation.Context;
 public sealed class ConversationContext(
     int maxTokens = 4000,
     Func<string, int>? tokenCounter = null,
-    ILogger<ConversationContext>? logger = null)
+    ILogger<ConversationContext>? logger = null,
+    ConversationOptions? conversationOptions = null)
 {
     private readonly ILogger<ConversationContext> _logger = logger ?? NullLogger<ConversationContext>.Instance;
+
+    // Falls back to ConversationOptions' own defaults (KeepFirstNMessages: 2, UseBookmarks: true)
+    // when no options are supplied, matching the behavior every call site had before these were
+    // configurable, while letting a caller that does wire IOptions<AITaskAgentOptions>.Conversation
+    // (or ConversationOptions directly) actually change it instead of hitting a hardcoded value.
+    private readonly int _keepFirstNMessages = conversationOptions?.KeepFirstNMessages ?? new ConversationOptions().KeepFirstNMessages;
+    private readonly bool _useBookmarks = conversationOptions?.UseBookmarks ?? new ConversationOptions().UseBookmarks;
 
     /// <summary>Unique identifier for this conversation.</summary>
     public string ConversationId { get; init; } = Guid.NewGuid().ToString();
@@ -66,18 +75,29 @@ public sealed class ConversationContext(
     /// <summary>
     /// Adds an assistant message with tool calls to the conversation.
     /// </summary>
-    public ConversationContext AddAssistantMessageWithToolCalls(IEnumerable<ToolCall> toolCalls)
+    /// <param name="toolCalls">The tool calls requested by the assistant.</param>
+    /// <param name="content">
+    /// Text the assistant produced alongside the tool calls. Models can do both in one response,
+    /// and dropping the text loses the record of any in-text action (a &lt;write_file&gt; tag, say)
+    /// that already ran: the model then cannot tell from the history that it is done, and repeats
+    /// itself. Pass the processed text - tag bodies replaced by their reference - not the raw one.
+    /// </param>
+    public ConversationContext AddAssistantMessageWithToolCalls(
+        IEnumerable<ToolCall> toolCalls,
+        string? content = null)
     {
         List<ToolCall> toolCallList = toolCalls.ToList();
         History.AddMessage(new Message
         {
             Role = LlmConstants.MessageRoles.Assistant,
-            Content = string.Empty,
+            Content = content ?? string.Empty,
             ToolCalls = toolCallList
         });
         LastActivityAt = DateTime.UtcNow;
-        _logger.LogDebug("Added assistant message with {ToolCallCount} tool calls to conversation {ConversationId}",
-            toolCallList.Count, ConversationId);
+        _logger.LogDebug(
+            "Added assistant message with {ToolCallCount} tool calls to conversation {ConversationId}, "
+            + "content length: {Length}",
+            toolCallList.Count, ConversationId, content?.Length ?? 0);
         return this;
     }
 
@@ -146,17 +166,21 @@ public sealed class ConversationContext(
 
     /// <summary>
     /// Gets messages suitable for an LLM request with context management.
+    /// With <paramref name="useSlidingWindow"/> false the whole history is returned and
+    /// <paramref name="maxTokens"/> is ignored: if it exceeds the model's context, the provider's
+    /// explicit error is preferable to silently dropping the initial prompt, which is what trimming
+    /// to the most recent messages did.
     /// </summary>
     public List<Message> GetMessagesForRequest(
         int? maxTokens = null,
         string? fromBookmark = null,
         bool useSlidingWindow = true)
     {
-        var messages = fromBookmark != null
+        var messages = fromBookmark != null && _useBookmarks
             ? History.GetMessagesFromBookmark(fromBookmark)
             : useSlidingWindow
-            ? History.GetMessagesWithSlidingWindow(keepFirstN: 2, maxTokens: maxTokens)
-            : History.GetRecentMessages(maxTokens);
+            ? History.GetMessagesWithSlidingWindow(keepFirstN: _keepFirstNMessages, maxTokens: maxTokens)
+            : [.. History.Messages];
 
         if (useSlidingWindow && messages.Count < History.Messages.Count)
         {
@@ -172,7 +196,11 @@ public sealed class ConversationContext(
     /// </summary>
     public ConversationContext Clone()
     {
-        ConversationContext clone = new(History.MaxTokens, History.TokenCounter, _logger)
+        ConversationContext clone = new(
+            History.MaxTokens,
+            History.TokenCounter,
+            _logger,
+            new ConversationOptions { KeepFirstNMessages = _keepFirstNMessages, UseBookmarks = _useBookmarks })
         {
             ConversationId = ConversationId, // Keep same ID to represent same logical conversation in parallel branches
             Metadata = new Dictionary<string, object?>(Metadata),

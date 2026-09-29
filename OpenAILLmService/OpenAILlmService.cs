@@ -18,14 +18,22 @@ namespace OpenAILLmService;
 /// <summary>
 /// OpenAI-compatible implementation of ILlmService using direct HTTP calls.
 /// Supports any provider that implements the OpenAI chat completions protocol
-/// (OpenAI, OpenRouter, NVIDIA, Ollama, LM Studio, etc.).
+/// (OpenAI, OpenRouter, NVIDIA, Ollama, LM Studio, etc.) directly, and is the base for provider
+/// subclasses whose protocol diverges just enough to need it - see
+/// <see cref="AzureOpenAILlmService"/> (different endpoint shape and auth header) and
+/// <see cref="OpenRouterLlmService"/> (attribution headers). A provider only earns a subclass when
+/// its particularities are its own concept, never meaningful for another vendor served by this same
+/// class (Azure's deployment-based URL, OpenRouter's ranking headers) - particularities tied to the
+/// *model* rather than the vendor (a reasoning model's `&lt;think&gt;` tag, an XML tool-call dialect)
+/// belong in <see cref="OpenAiPluginRegistry"/> instead, since the same model can sit behind any of
+/// these vendors and the two kinds of quirk must be free to combine.
 /// </summary>
-public sealed class OpenAILlmService : ILlmService, IDisposable
+public class OpenAILlmService : ILlmService, IDisposable
 {
-    public string Name => "openai";
+    public virtual string Name => "openai";
 
     private readonly ConcurrentDictionary<string, HttpClient> _clients = new();
-    private readonly ILogger<OpenAILlmService> _logger;
+    private readonly ILogger _logger;
 
     private static readonly HashSet<int> TransientStatusCodes = [429, 500, 502, 503, 504];
 
@@ -39,6 +47,17 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
     /// a given failure is transient is decided by <see cref="LlmResult.IsRetriable"/>.
     /// </param>
     public OpenAILlmService(ILogger<OpenAILlmService> logger, RetryPolicy? retryPolicy = null)
+        : this((ILogger)logger, retryPolicy)
+    {
+    }
+
+    /// <summary>
+    /// For a subclass whose own constructor requests <c>ILogger&lt;TSubclass&gt;</c> from DI and
+    /// forwards it here - the plain <see cref="ILogger"/> parameter (rather than
+    /// <c>ILogger&lt;OpenAILlmService&gt;</c>) is what lets that subclass's log lines carry its own
+    /// category instead of this base type's, without any generics on this class.
+    /// </summary>
+    protected OpenAILlmService(ILogger logger, RetryPolicy? retryPolicy = null)
     {
         _logger = logger;
 
@@ -105,16 +124,32 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
             Timeout = TimeSpan.FromMinutes(30)
         };
 
-        client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", request.ApiKey ?? "");
-
-        // Headers de identificación para OpenRouter y similares.
-        // Sin pipeline policy, sin AsyncLocal, sin re-serialización del body.
-        client.DefaultRequestHeaders.Add("HTTP-Referer", "https://github.com/AITaskFramework");
-        client.DefaultRequestHeaders.Add("X-Title", "AITaskFramework");
+        ConfigureAuthentication(client, request);
+        ConfigureExtraHeaders(client, request);
 
         _clients.TryAdd(cacheKey, client);
         return client;
+    }
+
+    /// <summary>
+    /// Sets the client's auth header. The OpenAI chat-completions protocol authenticates with a
+    /// bearer token; a vendor whose auth scheme differs (Azure OpenAI uses an <c>api-key</c> header
+    /// instead) overrides this rather than the whole client-creation method.
+    /// </summary>
+    protected internal virtual void ConfigureAuthentication(HttpClient client, LlmRequest request)
+    {
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", request.ApiKey ?? "");
+    }
+
+    /// <summary>
+    /// Hook for headers specific to one vendor's own concept (e.g. OpenRouter's attribution
+    /// headers) rather than the shared chat-completions protocol. No-op by default: sending a
+    /// vendor's headers to every other vendor - which is what this used to do unconditionally - is
+    /// harmless to OpenRouter itself but leaks an unrelated vendor's identity into every request.
+    /// </summary>
+    protected internal virtual void ConfigureExtraHeaders(HttpClient client, LlmRequest request)
+    {
     }
 
     /// <summary>
@@ -124,10 +159,16 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
     /// </summary>
     private static readonly HashSet<string> FrameworkFacadeOptionKeys = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Temperature", "TopP", "MaxTokens", "UseStreaming", "JsonSupport", "ToolSupport", "Stop"
+        "Temperature", "TopP", "MaxTokens", "UseStreaming", "JsonSupport", "ToolSupport", "Stop",
+        "UseMaxCompletionTokens"
     };
 
-    private static string GetEndpoint(LlmRequest request)
+    /// <summary>
+    /// Builds the chat-completions URL. Azure OpenAI's shape diverges enough (deployment in the
+    /// path, mandatory <c>api-version</c> query string) that <see cref="AzureOpenAILlmService"/>
+    /// overrides this rather than branching on vendor here.
+    /// </summary>
+    protected internal virtual string GetEndpoint(LlmRequest request)
     {
         var baseUrl = request.BaseUrl?.TrimEnd('/') ?? "https://api.openai.com/v1";
         return $"{baseUrl}/chat/completions";
@@ -140,7 +181,13 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
         if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
             messages.Add(new JObject { ["role"] = "system", ["content"] = request.SystemPrompt });
 
-        foreach (var msg in request.Conversation.History.Messages)
+        // Same window the Gemini service applies and the step's trace log shows: sending the raw
+        // history ignored UseSlidingWindow entirely, so long tool loops grew the prompt without bound.
+        var conversationMessages = request.Conversation.GetMessagesForRequest(
+            maxTokens: request.SlidingWindowMaxTokens,
+            useSlidingWindow: request.UseSlidingWindow);
+
+        foreach (var msg in conversationMessages)
             messages.Add(msg.ToJObject());
 
         var body = new JObject
@@ -150,7 +197,8 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
         };
 
         if (request.Temperature.HasValue) body["temperature"] = request.Temperature.Value;
-        if (request.MaxTokens.HasValue)   body["max_tokens"]  = request.MaxTokens.Value;
+        if (request.MaxTokens.HasValue)
+            body[request.UseMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"] = request.MaxTokens.Value;
         if (request.TopP.HasValue)        body["top_p"]       = request.TopP.Value;
         if (request.User != null)         body["user"]        = request.User;
 
@@ -288,7 +336,13 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to parse API response JSON");
+            // A 2xx status does not guarantee a JSON body: rate-limited free-tier models and
+            // gateway hiccups can return an HTML page here, and without the body there is no way
+            // to tell those apart from a genuine malformed response after the fact.
+            _logger.LogError(
+                ex,
+                "Failed to parse API response JSON for model {Model}. Raw body: {Body}",
+                request.Model, Truncate(rawJson, RawBodyLogLimit));
             return LlmResult.Failure(ex, isRetriable: false);
         }
 
@@ -306,7 +360,13 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
         }
 
         var choicesRaw = (JArray)root["choices"]!;
-        var usageRaw   = root["usage"];
+        // "as JObject", not a plain indexer: a provider that sends an explicit `"usage": null`
+        // (common - some only populate usage on the last streaming chunk, or omit it entirely
+        // in error/content-filtered responses) hands back a non-null JValue wrapping JSON null,
+        // not a C# null. Indexing into that JValue with usageRaw?["total_tokens"] would then throw
+        // "Cannot access child value on Newtonsoft.Json.Linq.JValue" instead of the `?.` short-
+        // circuiting - the cast turns anything that isn't really an object into a real C# null.
+        var usageRaw   = root["usage"] as JObject;
         var model      = root["model"]?.Value<string>() ?? request.Model;
 
         var normCtx    = new NormalizationContext(Name, request.Tools?.Select(t => t.Name).ToList());
@@ -327,10 +387,13 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
     /// Procesa una choice del array choices del JSON de respuesta.
     /// Una sola fuente de datos: el raw JSON. Sin mezcla con tipos del SDK.
     /// </summary>
-    private LlmResponse ProcessChoice(JToken choiceToken, NormalizationContext normCtx)
+    internal LlmResponse ProcessChoice(JToken choiceToken, NormalizationContext normCtx)
     {
         var index     = choiceToken["index"]?.Value<int>() ?? 0;
-        var message   = choiceToken["message"];
+        // "as JObject": see the comment on usageRaw above - a choice with an explicit
+        // `"message": null` (a content-filtered choice, some error responses) must not crash
+        // when message?["content"] indexes into it.
+        var message   = choiceToken["message"] as JObject;
         var finishStr = choiceToken["finish_reason"]?.Value<string>() ?? string.Empty;
 
         var content      = message?["content"]?.Value<string>() ?? string.Empty;
@@ -475,11 +538,15 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
 
         // El bloque `usage` puede venir en cualquier chunk (incluido el final con
         // choices vacío). Leerlo aquí, antes de descartar chunks sin choices.
-        var usageTokens = chunk["usage"]?["total_tokens"]?.Value<int?>();
+        // "as JObject": with stream_options.include_usage (set below in BuildRequestBody), OpenAI
+        // sends an explicit `"usage": null` on every chunk except the last - indexing into that
+        // JValue directly throws "Cannot access child value on Newtonsoft.Json.Linq.JValue".
+        var usage = chunk["usage"] as JObject;
+        var usageTokens = usage?["total_tokens"]?.Value<int?>();
         if (usageTokens.HasValue) totalTokens = usageTokens.Value;
-        var usagePrompt = chunk["usage"]?["prompt_tokens"]?.Value<int?>();
+        var usagePrompt = usage?["prompt_tokens"]?.Value<int?>();
         if (usagePrompt.HasValue) promptTokens = usagePrompt.Value;
-        var usageCompletion = chunk["usage"]?["completion_tokens"]?.Value<int?>();
+        var usageCompletion = usage?["completion_tokens"]?.Value<int?>();
         if (usageCompletion.HasValue) completionTokens = usageCompletion.Value;
 
         if (chunk["choices"] is not JArray choices || choices.Count == 0)
@@ -488,7 +555,10 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
         foreach (var choice in choices)
         {
             var choiceIndex = choice["index"]?.Value<int>() ?? 0;
-            var delta       = choice["delta"];
+            // "as JObject": the final delta of a choice (once finish_reason is set) commonly
+            // arrives as `"delta": {}` but some providers send `"delta": null` instead - same
+            // JValue-indexing crash as usage/message above.
+            var delta       = choice["delta"] as JObject;
             var extractCtx  = GetExtractorCtx(choiceIndex);
 
             // ── Reasoning nativo (DeepSeek, etc.) ────────────────────────────
@@ -664,7 +734,7 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
                     RawFinishReason = rawFinishReason,
                     // Usa el acumulado del stream. Puede venir en este mismo chunk
                     // (algunos proveedores) o haberse leído en un chunk previo.
-                    TokensUsed       = totalTokens ?? chunk["usage"]?["total_tokens"]?.Value<int?>(),
+                    TokensUsed       = totalTokens ?? usage?["total_tokens"]?.Value<int?>(),
                     PromptTokens     = promptTokens,
                     CompletionTokens = completionTokens
                 };

@@ -9,6 +9,18 @@ namespace AITaskAgent.Tests;
 /// the failure the build cannot catch: two samples were shipping configuration written for an
 /// earlier shape of the LLM section and would have thrown on startup.
 /// </summary>
+/// <remarks>
+/// The BaseUrl assertion below was briefly dropped on the reasoning that neither backend crashes
+/// without one at the raw HTTP-client level. That verification was incomplete: it looked at
+/// OpenAILlmService/GeminiLlmService directly, not at how a properly wired sample actually reaches
+/// them. Every sample that goes through the framework's real config path -
+/// AITaskAgent.Configuration.ServiceCollectionExtensions.ConfigureLlmEnvironmentOptions, reached via
+/// AddAITaskAgent() + IOptions&lt;LlmEnvironment&gt; - throws there if BaseUrl is missing, by design
+/// ("has no BaseUrl configured"). Every sample using that path already supplies one, including for
+/// Gemini providers (the real generativelanguage.googleapis.com endpoint, even though the SDK would
+/// default to it anyway) - so the assertion holds in practice today, and only fails for a sample
+/// whose config drifted from that convention. Restored.
+/// </remarks>
 public class SampleConfigurationTests
 {
     /// <summary>Walks up from the test binaries to the repository root.</summary>

@@ -64,4 +64,51 @@ public class TinyTemplateRenderedTests
 
         Assert.Equal("kept", result);
     }
+
+    [Fact]
+    public void Resolves_file_include_with_at_bracket_syntax()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var partialPath = Path.Combine(tempDir, "_partial.md");
+            File.WriteAllText(partialPath, "Contenido Parcial {{value}}");
+
+            var template = "Inicio: @[_partial.md] Fin.";
+            var model = new { value = "123" };
+
+            var result = TinyTemplateRendered.Render(template, model, baseDirectory: tempDir);
+
+            Assert.Equal("Inicio: Contenido Parcial 123 Fin.", result);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Resolves_file_include_with_scriban_syntax()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var partialPath = Path.Combine(tempDir, "_partial.md");
+            File.WriteAllText(partialPath, "Directiva {{status}}");
+
+            var template = "Cabecera\n{{ include '_partial.md' }}\nPie";
+            var model = new { status = "OK" };
+
+            var result = TinyTemplateRendered.Render(template, model, baseDirectory: tempDir);
+
+            Assert.Equal("Cabecera\nDirectiva OK\nPie", result);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }
+

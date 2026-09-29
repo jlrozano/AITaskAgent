@@ -6,8 +6,13 @@ namespace OpenAILLmService.Normalization;
 
 public readonly struct ChunkResult
 {
-    public string Content   { get; init; }
-    public string Reasoning { get; init; }
+    // Every construction site sets only Content or only Reasoning (Flush included) - defaulting
+    // the other to string.Empty here, not null, is what keeps HasContent/HasReasoning safe to
+    // call unconditionally instead of throwing a NullReferenceException on the unset one.
+    public string Content   { get; init; } = string.Empty;
+    public string Reasoning { get; init; } = string.Empty;
+
+    public ChunkResult() { }
 
     public bool HasContent   => Content.Length > 0;
     public bool HasReasoning => Reasoning.Length > 0;
@@ -39,11 +44,11 @@ public enum ParserState
     CloseTagMatch
 }
 
-public sealed class StreamingTagParser
+public sealed class ReasoningTagStreamParser
 {
     private readonly TagDefinition[] _tags;
 
-    public StreamingTagParser(IEnumerable<TagDefinition> tags)
+    public ReasoningTagStreamParser(IEnumerable<TagDefinition> tags)
     {
         _tags = [.. tags.OrderByDescending(t => t.OpenTag.Length)];
 
@@ -271,7 +276,7 @@ public sealed class StreamingTagParser
 
 public sealed class ThinkTagReasoningExtractor : IReasoningExtractor
 {
-    private readonly StreamingTagParser _parser = new([
+    private readonly ReasoningTagStreamParser _parser = new([
         new TagDefinition
         {
             Name     = "think",
@@ -284,7 +289,7 @@ public sealed class ThinkTagReasoningExtractor : IReasoningExtractor
         => _parser.ProcessChunk(delta, ctx);
 
     public ChunkResult Flush(TagExtractionContext ctx)
-        => StreamingTagParser.Flush(ctx);
+        => ReasoningTagStreamParser.Flush(ctx);
 
     public LlmResponse NormalizeAssembled(LlmResponse response)
         => _parser.NormalizeAssembled(response);

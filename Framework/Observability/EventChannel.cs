@@ -13,8 +13,12 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
     private readonly ILogger<EventChannel> _logger;
     private readonly EventChannelOptions _options;
 
-    // (correlationId, writer): null correlationId = global subscriber (receives all events)
-    private readonly List<(string? CorrelationId, ChannelWriter<IProgressEvent> Writer)> _subscribers = [];
+    // (correlationId, channel, capacity): null correlationId = global subscriber (receives all
+    // events). Capacity is tracked alongside the channel because BoundedChannelFullMode.DropOldest
+    // never reports a drop through TryWrite - it silently evicts the oldest buffered event and
+    // still returns true - so detecting a drop requires checking Reader.Count against capacity
+    // before writing.
+    private readonly List<(string? CorrelationId, Channel<IProgressEvent> Channel, int Capacity)> _subscribers = [];
 
     // Background consumer tasks created by Subscribe(Func<>). Awaited in DisposeAsync to
     // ensure all buffered events have been delivered before the channel is torn down.
@@ -53,7 +57,7 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
         // 3. Route event to matching subscribers:
         //    - Global subscribers (correlationId == null) receive all events
         //    - Filtered subscribers only receive events matching their correlationId
-        List<(string? CorrelationId, ChannelWriter<IProgressEvent> Writer)> subscribersCopy;
+        List<(string? CorrelationId, Channel<IProgressEvent> Channel, int Capacity)> subscribersCopy;
         lock (_subscribersLock)
         {
             subscribersCopy = [.. _subscribers];
@@ -61,17 +65,27 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
 
         var eventCorrelationId = progressEvent.CorrelationId;
 
-        foreach (var (correlationId, writer) in subscribersCopy)
+        foreach (var (correlationId, channel, capacity) in subscribersCopy)
         {
             // Skip if subscriber has a filter that doesn't match this event
             if (correlationId != null && correlationId != eventCorrelationId)
                 continue;
 
+            // BoundedChannelFullMode.DropOldest silently evicts the oldest buffered event to make
+            // room and still reports success from TryWrite below - check fullness up front so the
+            // drop is at least observable instead of vanishing without a trace.
+            if (channel.Reader.CanCount && channel.Reader.Count >= capacity)
+            {
+                _logger.LogWarning(
+                    "Subscriber channel full (capacity {Capacity}), dropping oldest buffered event to make room for {EventType}",
+                    capacity, progressEvent.EventType);
+            }
+
             try
             {
-                if (!writer.TryWrite(progressEvent))
+                if (!channel.Writer.TryWrite(progressEvent))
                 {
-                    _logger.LogDebug(
+                    _logger.LogWarning(
                         "Subscriber channel full, event {EventType} dropped",
                         progressEvent.EventType);
                 }
@@ -79,6 +93,14 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
             catch (ChannelClosedException)
             {
                 _logger.LogDebug("Subscriber channel closed, removing");
+
+                // A closed writer never reopens: without removing it here, every future SendAsync
+                // keeps retrying (and re-catching) against a dead subscriber for the rest of the
+                // channel's lifetime.
+                lock (_subscribersLock)
+                {
+                    _subscribers.RemoveAll(s => s.Channel == channel);
+                }
             }
         }
 
@@ -96,9 +118,12 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(handler);
 
-        // 1. Create a bounded channel for this subscription
+        // 1. Create a bounded channel for this subscription. Capacity comes from
+        //    EventChannelOptions.ChannelCapacity instead of a hardcoded value, so the option is
+        //    actually connected to the channel it documents itself as controlling.
+        var capacity = _options.ChannelCapacity;
         var subscriberChannel = Channel.CreateBounded<IProgressEvent>(
-            new BoundedChannelOptions(200)
+            new BoundedChannelOptions(capacity)
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,
@@ -133,17 +158,20 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
         // 3. Register BEFORE returning to avoid race condition with SendAsync.
         lock (_subscribersLock)
         {
-            _subscribers.Add((correlationId, subscriberChannel.Writer));
+            _subscribers.Add((correlationId, subscriberChannel, capacity));
             _backgroundLoops.Add(consumerTask);
         }
 
-        // 4. Dispose: remove from list and TryComplete — loop drains buffer and exits cleanly
+        // 4. Dispose: remove from list and TryComplete — loop drains buffer and exits cleanly.
+        //    The consumer task deliberately stays in _backgroundLoops: completing the writer only
+        //    *starts* the drain, and DisposeAsync is what awaits it. Removing the task here broke
+        //    that guarantee - a subscriber that disposed its subscription and then the channel
+        //    could observe the channel fully disposed while its last events were still buffered.
         return new HandlerSubscription(() =>
         {
             lock (_subscribersLock)
             {
-                _subscribers.RemoveAll(s => s.Writer == subscriberChannel.Writer);
-                _backgroundLoops.Remove(consumerTask);
+                _subscribers.RemoveAll(s => s.Channel == subscriberChannel);
             }
             subscriberChannel.Writer.TryComplete();
         });
@@ -166,14 +194,14 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
 
         lock (_subscribersLock)
         {
-            _subscribers.Add((correlationId, subscriberChannel.Writer));
+            _subscribers.Add((correlationId, subscriberChannel, capacity));
         }
 
         return new EventSubscription(subscriberChannel.Reader, () =>
         {
             lock (_subscribersLock)
             {
-                _subscribers.RemoveAll(s => s.Writer == subscriberChannel.Writer);
+                _subscribers.RemoveAll(s => s.Channel == subscriberChannel);
             }
             subscriberChannel.Writer.TryComplete();
         });
@@ -185,7 +213,7 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
         {
             if (evt is Events.LlmResponseEvent llmEvt)
             {
-                _logger.LogDebug(
+                _logger.Log(_options.EventLogLevel,
                     "{EventType} from {StepName} | CorrelationId: {CorrelationId} | IsThinking: {IsThinking} | FinishReason: {FinishReason} | Content: {Content} | Tokens: {Tokens}",
                     evt.EventType, evt.StepName, evt.CorrelationId, llmEvt.IsThinking, llmEvt.FinishReason, llmEvt.Content, llmEvt.TokensUsed);
             }
@@ -208,9 +236,9 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
         List<Task> loopsToAwait;
         lock (_subscribersLock)
         {
-            foreach (var (_, writer) in _subscribers)
+            foreach (var (_, channel, _) in _subscribers)
             {
-                writer.TryComplete();
+                channel.Writer.TryComplete();
             }
             _subscribers.Clear();
             loopsToAwait = [.. _backgroundLoops];

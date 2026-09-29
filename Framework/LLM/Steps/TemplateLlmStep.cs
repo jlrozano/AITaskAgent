@@ -33,7 +33,7 @@ public class TemplateLlmStep<TIn, TOut> : BaseLlmStep<TIn, TOut>
     ) : base(
             name,
             role,
-            string.IsNullOrWhiteSpace(promtTemplateString) ? $"{name}_promt.md" : promtTemplateString,
+            string.IsNullOrWhiteSpace(promtTemplateString) ? $"{name}_prompt.md" : promtTemplateString,
             string.IsNullOrEmpty(systemTemplateString) ? (role.SystemPrompt ?? $"{name}_system.md") : systemTemplateString)
     {
         Tools = tools == null ? [] : AvailableTools.Instance.GetTools([.. tools]).ToList();
@@ -71,7 +71,17 @@ public class TemplateLlmStep<TIn, TOut> : BaseLlmStep<TIn, TOut>
     {
 
         var rawSystemPrompt = await base.BuildSystemMessageAsync(input, context);
-        return PromptTemplateResolver.Resolve(rawSystemPrompt, input, context, _templateProvider, _variables);
+        return PromptTemplateResolver.Resolve(rawSystemPrompt, input, context, SystemTemplateProvider, _variables);
     }
+
+    /// <summary>
+    /// The provider used to resolve the system prompt as a template <b>name</b>. Defaults to the
+    /// same <see cref="ITemplateProvider"/> passed to the constructor (matching
+    /// <see cref="BuildUserMessageAsync"/>), but a subclass that composes its system prompt from
+    /// literal fragments rather than a bare file name (e.g. appending an option catalogue) should
+    /// override this to return null, so that composed text is rendered directly instead of being
+    /// looked up on disk as if it were a template name.
+    /// </summary>
+    protected virtual ITemplateProvider? SystemTemplateProvider => _templateProvider;
 
 }

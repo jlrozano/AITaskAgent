@@ -29,6 +29,7 @@ public class BuildRequestBodyTests
     [InlineData("JsonSupport")]
     [InlineData("ToolSupport")]
     [InlineData("Stop")]
+    [InlineData("UseMaxCompletionTokens")]
     public void Framework_facade_keys_are_not_forwarded_as_raw_body_fields(string facadeKey)
     {
         var request = MinimalRequest() with { JsonSupport = true, Temperature = 0.3f, MaxTokens = 2000 };

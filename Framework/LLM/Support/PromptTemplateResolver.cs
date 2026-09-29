@@ -48,7 +48,7 @@ public static class PromptTemplateResolver
 
         var model = new
         {
-            Input = input.Value,     // {{ input.someproperty }}
+            Input = input.Value ?? input,     // {{ input.someproperty }}
             Context = mergedContext  // {{ context.mykey }}
         };
 

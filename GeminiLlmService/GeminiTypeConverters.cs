@@ -276,9 +276,11 @@ internal static class GeminiTypeConverters
 
         var schema = new Schema();
 
-        if (schemaObj.TryGetValue("type", out var typeValue))
-        {
-            schema.Type = typeValue.Value<string>()?.ToUpperInvariant() switch
+        // Absent, unrecognized or non-string "type" all fall back to OBJECT, same as a null
+        // schemaObj above - a tool's root parameters schema is always an object regardless of
+        // whether the model bothered to say so.
+        schema.Type = schemaObj.TryGetValue("type", out var typeValue)
+            ? typeValue.Value<string>()?.ToUpperInvariant() switch
             {
                 "OBJECT" => Google.GenAI.Types.Type.OBJECT,
                 "STRING" => Google.GenAI.Types.Type.STRING,
@@ -287,8 +289,8 @@ internal static class GeminiTypeConverters
                 "BOOLEAN" => Google.GenAI.Types.Type.BOOLEAN,
                 "ARRAY" => Google.GenAI.Types.Type.ARRAY,
                 _ => Google.GenAI.Types.Type.OBJECT
-            };
-        }
+            }
+            : Google.GenAI.Types.Type.OBJECT;
 
         if (schemaObj.TryGetValue("description", out var descValue))
         {

@@ -1,6 +1,9 @@
 using AITaskAgent.LLM.Models;
 using Google.GenAI.Types;
 using GeminiLlmService;
+// System.Type (brought in by ImplicitUsings) and Google.GenAI.Types.Type collide under the bare
+// name "Type" - alias the one these tests actually assert against.
+using Type = Google.GenAI.Types.Type;
 
 namespace GeminiLlmService.Tests;
 

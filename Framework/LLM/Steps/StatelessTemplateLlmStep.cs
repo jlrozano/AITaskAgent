@@ -32,10 +32,12 @@ public class StatelessTemplateLlmStep<TIn, TOut>(
 
     protected override Task<object?> SaveStateAsync()
     {
-        // En un paso "Stateless", la conversación vive de forma aislada en `_conversation`.
-        // Guardando el contexto entero garantizamos que las herramientas o historial previo (ej: el AskUser Tool) 
+        // En un paso "Stateless", la conversación vive de forma aislada en `_currentConversation`
+        // (lo que devolvió GetConversationContext para esta invocación - BaseLlmStep guarda esa
+        // misma instancia en su propio estado por invocación, no aquí).
+        // Guardando el contexto entero garantizamos que las herramientas o historial previo (ej: el AskUser Tool)
         // no se pierdan al suspender el proceso. El framework (PipelineContext) ya lo serializará automáticamente.
-        return Task.FromResult<object?>(_conversation);
+        return Task.FromResult<object?>(_currentConversation);
     }
 
     protected override Task RestoreStateAsync(object? state, object? hitlResponse)

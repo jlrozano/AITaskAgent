@@ -110,6 +110,16 @@ public sealed record PipelineContext
     public ConcurrentDictionary<string, IStepResult> StepResults { get; init; } = [];
 
     /// <summary>
+    /// Framework-internal scratch space for a step's own per-invocation state (e.g.
+    /// <c>BaseLlmStep</c>'s pending conversation bookmark and fallback index) - keyed by
+    /// <see cref="CurrentStepPath"/> so sequential steps sharing a context never collide, and
+    /// NOT carried over by <see cref="CloneForBranch"/> (unlike <see cref="Metadata"/>, which is
+    /// shared on purpose for cross-branch aggregation) so concurrent branches never collide
+    /// either. Not for step authors' own data - use <see cref="Metadata"/> for that.
+    /// </summary>
+    internal Dictionary<string, object> StepState { get; private init; } = [];
+
+    /// <summary>
     /// Current path in the pipeline execution tree.
     /// Used for building step result keys. Internal setter for Pipeline use.
     /// </summary>
@@ -139,6 +149,7 @@ public sealed record PipelineContext
             CorrelationId = CorrelationId,
             Metadata = Metadata,
             StepResults = StepResults,
+            StepState = [],
             _currentPath = ""
         };
 

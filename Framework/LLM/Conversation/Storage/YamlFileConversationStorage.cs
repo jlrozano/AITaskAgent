@@ -63,8 +63,14 @@ public sealed class YamlFileConversationStorage : IConversationStorage
         document.StartedAt ??= FormatUtcTimestamp(conversation.StartedAt);
         document.CompletedAt = FormatUtcTimestamp(conversation.LastActivityAt); // Update completedAt on save
 
+        // Preserve each surviving message's original timestamp by position instead of
+        // stamping every message with "now" on every save - otherwise a message's timestamp
+        // silently drifted forward on each subsequent save of the same conversation.
+        List<LegacySessionMessage>? previousMessages = document.Messages;
         document.Messages = conversation.History.Messages
-            .Select(ToLegacyMessage)
+            .Select((message, index) => ToLegacyMessage(
+                message,
+                previousMessages != null && index < previousMessages.Count ? previousMessages[index].Timestamp : null))
             .ToList();
 
         document.Events ??= [];
@@ -148,11 +154,16 @@ public sealed class YamlFileConversationStorage : IConversationStorage
         return Path.Combine(_basePath, $"{safeId}.yaml");
     }
 
-    private static LegacySessionMessage ToLegacyMessage(Message message)
+    private static LegacySessionMessage ToLegacyMessage(Message message, string? existingTimestamp = null)
     {
+        // Round-trips the actual role instead of collapsing "system"/"tool" into "agent": the
+        // legacy format's "agent"/"orchestrator" split only ever applied to assistant messages,
+        // so system and tool now get their own explicit legacy role.
         string role = message.Role switch
         {
             LlmConstants.MessageRoles.User => "user",
+            LlmConstants.MessageRoles.System => "system",
+            LlmConstants.MessageRoles.Tool => "tool",
             LlmConstants.MessageRoles.Assistant => string.Equals(message.Name, "orchestrator", StringComparison.OrdinalIgnoreCase)
                 ? "orchestrator"
                 : "agent",
@@ -162,9 +173,15 @@ public sealed class YamlFileConversationStorage : IConversationStorage
         return new LegacySessionMessage
         {
             Role = role,
-            AgentName = role == "user" ? null : message.Name,
+            AgentName = role is "user" or "system" or "tool" ? null : message.Name,
             Content = message.Content ?? string.Empty,
-            Timestamp = FormatUtcTimestamp(DateTime.UtcNow) // Ideally we should have timestamp on Message
+            // Reuse the timestamp this message already had on disk when there is one, so re-saving
+            // an unchanged message doesn't keep bumping it to "now".
+            Timestamp = !string.IsNullOrWhiteSpace(existingTimestamp) ? existingTimestamp : FormatUtcTimestamp(DateTime.UtcNow),
+            ToolCallId = message.ToolCallId,
+            ToolCalls = message.ToolCalls is { Count: > 0 }
+                ? [.. message.ToolCalls.Select(tc => new LegacyToolCall { Id = tc.Id, Name = tc.Name, Arguments = tc.Arguments })]
+                : null
         };
     }
 
@@ -178,15 +195,25 @@ public sealed class YamlFileConversationStorage : IConversationStorage
         string frameworkRole = legacyMessage.Role switch
         {
             "user" => LlmConstants.MessageRoles.User,
+            "system" => LlmConstants.MessageRoles.System,
+            "tool" => LlmConstants.MessageRoles.Tool,
             "orchestrator" or "agent" => LlmConstants.MessageRoles.Assistant,
             _ => LlmConstants.MessageRoles.Assistant
         };
+
+        List<ToolCall>? toolCalls = legacyMessage.ToolCalls is { Count: > 0 }
+            ? [.. legacyMessage.ToolCalls
+                .Where(tc => tc.Id != null && tc.Name != null && tc.Arguments != null)
+                .Select(tc => new ToolCall { Id = tc.Id!, Name = tc.Name!, Arguments = tc.Arguments! })]
+            : null;
 
         return new Message
         {
             Role = frameworkRole,
             Name = frameworkRole == LlmConstants.MessageRoles.Assistant ? legacyMessage.AgentName : null,
-            Content = legacyMessage.Content ?? string.Empty
+            Content = legacyMessage.Content ?? string.Empty,
+            ToolCallId = frameworkRole == LlmConstants.MessageRoles.Tool ? legacyMessage.ToolCallId : null,
+            ToolCalls = toolCalls
         };
     }
 
@@ -243,5 +270,14 @@ public sealed class YamlFileConversationStorage : IConversationStorage
         public string? AgentName { get; set; }
         public string? Content { get; set; }
         public string? Timestamp { get; set; }
+        public string? ToolCallId { get; set; }
+        public List<LegacyToolCall>? ToolCalls { get; set; }
+    }
+
+    private class LegacyToolCall
+    {
+        public string? Id { get; set; }
+        public string? Name { get; set; }
+        public string? Arguments { get; set; }
     }
 }

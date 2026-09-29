@@ -199,6 +199,11 @@ public static class ServiceCollectionExtensions
                 .Select(f => BuildFallback(f, options.Providers, "FallbackProviders"))
                 .ToList();
 
+            // FallbackProviders is documented as functional on IOptions<LlmEnvironment>.Value, so
+            // the raw, unresolved settings must actually land on options, not just the resolved
+            // globalFallbacks used internally to seed roles below.
+            options.FallbackProviders.AddRange(raw.FallbackProviders);
+
             // 2. Build Roles
             foreach (var kvp in raw.Roles)
             {
@@ -243,6 +248,11 @@ public static class ServiceCollectionExtensions
 
                 options.Roles[roleName] = role;
             }
+
+            // This was never copied from `raw`, so a configured DefaultRole other than "default"
+            // was silently ignored - options.DefaultRole stayed at its hardcoded initializer, and
+            // every sample happened to name a role "default" too, so nobody noticed.
+            options.DefaultRole = raw.DefaultRole;
 
             // Steps that name no role fall back to this one, so a missing default is a failure
             // waiting to happen at the first such step rather than at startup.

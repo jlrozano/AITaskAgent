@@ -67,6 +67,46 @@ public record LlmInferenceSettings
         init => Set(nameof(Stop), value);
     }
 
+    /// <summary>
+    /// Some newer reasoning-model families (OpenAI's o1/o3 series, GPT-5) reject the chat-
+    /// completions body's traditional <c>max_tokens</c> field with HTTP 400 and require
+    /// <c>max_completion_tokens</c> instead. This is tied to which *model* is being called, not
+    /// which vendor serves it - the same model can sit behind OpenAI directly, Azure OpenAI, or an
+    /// OpenRouter proxy - so it is a per-role setting rather than something an <c>ILlmService</c>
+    /// could infer from its own vendor.
+    /// </summary>
+    public bool UseMaxCompletionTokens
+    {
+        get => Get<bool?>(nameof(UseMaxCompletionTokens)) ?? false;
+        init => Set(nameof(UseMaxCompletionTokens), value);
+    }
+
+    /// <summary>
+    /// Per-attempt limit, in seconds, of a non-streaming call: an attempt with no response by then is abandoned and
+    /// counts as a retriable failure, so a hung provider costs one attempt instead of the whole step. Null leaves the
+    /// <c>ILlmService</c>'s own default; 0 or less disables the limit. A service that cannot enforce it ignores it.
+    /// </summary>
+    /// <remarks>
+    /// Timeouts depend on the model (a reasoning model thinks for minutes) rather than on the pipeline, so they travel
+    /// with the provider's or the role's inference settings like the rest of the call's parameters.
+    /// </remarks>
+    public int? RequestTimeoutSeconds
+    {
+        get => Get<int?>(nameof(RequestTimeoutSeconds));
+        init => Set(nameof(RequestTimeoutSeconds), value);
+    }
+
+    /// <summary>
+    /// Streaming inactivity limit, in seconds: the longest the service waits for the next line of the stream (the first
+    /// one included) before abandoning the call as a retriable failure. It resets with every line, so a long answer that
+    /// keeps arriving is never cut. Null leaves the <c>ILlmService</c>'s own default; 0 or less disables the limit.
+    /// </summary>
+    public int? StreamingInactivityTimeoutSeconds
+    {
+        get => Get<int?>(nameof(StreamingInactivityTimeoutSeconds));
+        init => Set(nameof(StreamingInactivityTimeoutSeconds), value);
+    }
+
     // --- Helper Methods ---
 
     /// <summary>

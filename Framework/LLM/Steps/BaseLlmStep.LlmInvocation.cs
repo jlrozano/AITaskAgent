@@ -10,18 +10,11 @@ using AITaskAgent.Observability.Events;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace AITaskAgent.LLM.Steps;
 
 public abstract partial class BaseLlmStep
 {
-    private static readonly Regex _tagRegex =
-        TagRegex();
-
-    private static readonly Regex _attrRegex =
-        AttrRegex();
-
     private async Task<LlmResult> InvokeLlmWithToolsAsync(
         LlmRequest request,
         PipelineContext context,
@@ -30,15 +23,25 @@ public abstract partial class BaseLlmStep
     {
         if (toolIteration >= MaxToolIterations)
         {
-            throw new InvalidOperationException(
-                $"Maximum tool iterations ({MaxToolIterations}) exceeded - possible infinite loop");
+            // Typed so it is never taken for a provider outage: SwitchToNextFallback only changes
+            // engine on LlmProviderException, so the same tool loop is not replayed against every
+            // fallback. A derived step can still recognise it and pick another strategy - the
+            // conversation keeps every tool result until the bookmark is restored.
+            Logger.LogWarning(
+                "Step {StepName} stopped: maximum tool iterations ({Max}) exceeded - possible infinite loop",
+                Name, MaxToolIterations);
+
+            return LlmResult.Failure(new ToolIterationLimitExceededException(Name, MaxToolIterations), false);
         }
+
+        var model = GetModel(context);
+        var llmServiceName = GetLlmService(context)?.Name;
 
         using var llmActivity = Telemetry.Source.StartActivity("LLM.Invoke", ActivityKind.Client);
         if (llmActivity != null)
         {
-            llmActivity.SetTag(AITaskAgentConstants.TelemetryTags.LlmModel, Model);
-            llmActivity.SetTag(AITaskAgentConstants.TelemetryTags.LlmProvider, LlmService?.Name);
+            llmActivity.SetTag(AITaskAgentConstants.TelemetryTags.LlmModel, model);
+            llmActivity.SetTag(AITaskAgentConstants.TelemetryTags.LlmProvider, llmServiceName);
             llmActivity.SetTag("llm.iteration", toolIteration);
             llmActivity.SetTag("llm.has_tools", request.Tools?.Count > 0);
         }
@@ -48,12 +51,24 @@ public abstract partial class BaseLlmStep
             Logger.LogDebug(
                 "LLM invoke starting (iteration {Iteration}), model: {Model}, tools available: {ToolCount}",
                 toolIteration,
-                Model,
+                model,
                 request.Tools?.Count ?? 0);
         }
 
         var llmStopwatch = Stopwatch.StartNew();
-        var result = await InvokeLlmAsync(request, context, Name, cancellationToken);
+        LlmResult result;
+        try
+        {
+            result = await InvokeLlmAsync(request, context, Name, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // A provider that throws (broken stream, open circuit...) instead of returning a Failure
+            // is still a provider failure: typing it here is what lets SwitchToNextFallback tell it
+            // apart from a failure of the step's own logic. A requested cancellation propagates as is.
+            Logger.LogError(ex, "LLM invocation of step {StepName} threw (iteration {Iteration})", Name, toolIteration);
+            return LlmResult.Failure(new LlmProviderException(ex.Message, ex, isRetriable: true), true);
+        }
         llmStopwatch.Stop();
 
         if (llmActivity != null)
@@ -64,8 +79,8 @@ public abstract partial class BaseLlmStep
 
         Metrics.LlmDuration.Record(
             llmStopwatch.Elapsed.TotalMilliseconds,
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, Model),
-            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, LlmService?.Name));
+            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmModel, model),
+            new KeyValuePair<string, object?>(AITaskAgentConstants.TelemetryTags.LlmProvider, llmServiceName));
 
         UpdateContextMetrics(context, result);
 
@@ -80,7 +95,7 @@ public abstract partial class BaseLlmStep
                 Logger.LogError(
                     "LLM reported success with no candidates (model: {Model}, iteration: {Iteration}, "
                     + "tokens: {Tokens}). Check the provider response logged by the LLM service.",
-                    Model,
+                    model,
                     toolIteration,
                     result.TokensUsed);
 
@@ -135,7 +150,10 @@ public abstract partial class BaseLlmStep
             }
         }
 
-        _conversation?.AddAssistantMessageWithToolCalls(toolCalls);
+        // The text goes in with the tool calls. It carries the references of any tag that already
+        // ran this turn, so the model can see in its own history that the action is done - dropping
+        // it (the old behaviour) is what let the model repeat a write it had already performed.
+        GetState(context).Conversation?.AddAssistantMessageWithToolCalls(toolCalls, primaryCandidate.Content);
 
         await ExecuteToolCallsAsync(
             Name,
@@ -168,11 +186,25 @@ public abstract partial class BaseLlmStep
         );
     }
 
+    /// <summary>
+    /// Tag names executed while processing the most recent LLM response, whichever channel carried
+    /// them. Reset on every call to <see cref="InvokeLlmAsync"/> and read right after by
+    /// <see cref="ExecuteToolCallsAsync"/>, which runs before the next invocation.
+    /// </summary>
+    private readonly HashSet<string> _tagsExecutedInLastResponse = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Keys of the tool calls requested in the previous iteration.</summary>
     private HashSet<string>? _lastToolCallKeys;
 
     /// <summary>How many consecutive iterations have asked for exactly the same calls.</summary>
     private int _consecutiveIdenticalToolCalls;
+
+    /// <summary>Forgets the previous turn's tool calls; called at the start of every turn.</summary>
+    private void ResetToolCallRepeatTracking()
+    {
+        _lastToolCallKeys = null;
+        _consecutiveIdenticalToolCalls = 0;
+    }
 
     /// <summary>
     /// Detects a model looping on the same tool calls.
@@ -282,6 +314,7 @@ public abstract partial class BaseLlmStep
         PipelineContext context,
         CancellationToken cancellationToken)
     {
+        var conversation = GetState(context).Conversation;
 
         if (availableTools == null || availableTools.Count == 0)
         {
@@ -292,7 +325,7 @@ public abstract partial class BaseLlmStep
 
             foreach (var toolCall in toolCalls)
             {
-                _conversation?.AddToolMessage(toolCall.Id, "Error: No tools available");
+                conversation?.AddToolMessage(toolCall.Id, "Error: No tools available");
             }
 
             return;
@@ -304,11 +337,58 @@ public abstract partial class BaseLlmStep
 
             if (tool == null)
             {
-                if (Logger.IsEnabled(LogLevel.Error))
+                // A model calling a tag as if it were a tool isn't a normal recoverable tool
+                // failure (wrong path, missing file) - it ignored the instructions already sitting
+                // in its own system prompt (see EnrichSystemPromptWithTags). A generic
+                // "not found" doesn't fix that: it doesn't point back at those instructions, so nothing
+                // changes and the model repeats the exact same broken call. Restating the tag's own
+                // GetInstructions() verbatim - not a paraphrase - gives it the exact usage spec again,
+                // right when it is needed, instead of trusting it to go re-read a system prompt that
+                // may be several turns and tool results back by now.
+                var matchingTag = TagHandlers?.FirstOrDefault(
+                    h => h.TagName.Equals(toolCall.Name, StringComparison.OrdinalIgnoreCase));
+
+                string errorMessage;
+                if (matchingTag != null && _tagsExecutedInLastResponse.Contains(toolCall.Name))
                 {
+                    // The model wrote the tag AND called it as a tool in the same response, so the
+                    // action already happened. Restating GetInstructions() here would tell it to
+                    // write the tag "now" - which it just did - and those contradictory
+                    // instructions are what kept the loop alive: it cannot comply with both, so it
+                    // retried the call until the repeat detector killed the step.
+                    errorMessage =
+                        $"'{toolCall.Name}' already ran: you wrote the tag in this same response and " +
+                        "the action completed - its result is recorded in your message above. Do not " +
+                        "call it as a tool and do not write the tag again. Just tell the user what " +
+                        "you did.";
+
+                    Logger.LogInformation(
+                        "Model called '{ToolName}' as a tool, but its tag already ran in this response - "
+                        + "told it the action is done instead of restating the instructions.",
+                        toolCall.Name);
+                }
+                else if (matchingTag != null)
+                {
+                    errorMessage =
+                        $"Error: '{toolCall.Name}' is not a callable tool. It is a tag documented in your " +
+                        "own system prompt, under \"IN-TEXT ACTION TAGS (NOT TOOLS)\" - check it. " +
+                        "Here are its instructions again:\n\n" +
+                        matchingTag.GetInstructions() +
+                        "\n\nWrite the tag directly in your response text now, with the actual content " +
+                        "inside it - do not call it as a function.";
+
+                    Logger.LogWarning(
+                        "Model called '{ToolName}' as a tool - it is a registered tag. Restated its instructions.",
+                        toolCall.Name);
+                }
+                else
+                {
+                    errorMessage = $"Error: Tool '{toolCall.Name}' not found";
+
                     Logger.LogError("Tool '{ToolName}' not found in registry", toolCall.Name);
                 }
-                _conversation?.AddToolMessage(toolCall.Id, $"Error: Tool '{toolCall.Name}' not found");
+
+                conversation?.AddToolMessage(toolCall.Id, errorMessage);
                 continue;
             }
 
@@ -326,7 +406,7 @@ public abstract partial class BaseLlmStep
                     Logger,
                     cancellationToken);
 
-                _conversation?.AddToolMessage(toolCall.Id, result ?? string.Empty);
+                conversation?.AddToolMessage(toolCall.Id, result ?? string.Empty);
             }
             catch (Exception ex)
             {
@@ -334,7 +414,7 @@ public abstract partial class BaseLlmStep
                 {
                     Logger.LogError(ex, "Tool {ToolName} execution failed", toolCall.Name);
                 }
-                _conversation?.AddToolMessage(toolCall.Id, $"Error executing tool: {ex.Message}");
+                conversation?.AddToolMessage(toolCall.Id, $"Error executing tool: {ex.Message}");
             }
         }
     }
@@ -345,6 +425,14 @@ public abstract partial class BaseLlmStep
         string stepName,
         CancellationToken cancellationToken)
     {
+        // Scoped to this single response: ExecuteToolCallsAsync reads it right after this method
+        // returns, before the next invocation clears it again.
+        _tagsExecutedInLastResponse.Clear();
+
+        var llmService = GetLlmService(context);
+        var model = GetModel(context);
+        var provider = GetProvider(context);
+
         if (Logger.IsEnabled(LogLevel.Trace))
         {
             var prompts = request.Conversation.GetMessagesForRequest(
@@ -366,9 +454,62 @@ public abstract partial class BaseLlmStep
         LlmResult result;
         if (!request.UseStreaming)
         {
-            // Direct invocation without internal fallback loop. 
+            // Direct invocation without internal fallback loop.
             // The RetryMiddleware handles validation-based retries for structural/semantic failures and step errors without exceptions.
-            result = await LlmService.InvokeAsync(request, cancellationToken);
+            result = await llmService.InvokeAsync(request, cancellationToken);
+
+            // A batch response is the streaming case with one chunk per channel: the same scanner
+            // runs over the reasoning and then the content, so tags behave identically whichever
+            // transport and whichever channel carried them. Tag handling must not depend on
+            // FinalizeAsync, which only RetryMiddleware calls - a step invoked directly (bypassing
+            // IPipeline, as several samples do) would otherwise never get its tags processed at all.
+            //
+            // Only the primary candidate is scanned: it is the one the step goes on to use, and a
+            // tag is an action with side effects - running the alternatives' tags too would write
+            // n versions of the same file and let the last one win.
+            if (result.IsSuccess && TagHandlers?.Count > 0 && result.Candidates.Count > 0)
+            {
+                var candidate = result.Candidates[0];
+                var scanner = new StreamingTagParser(TagHandlers, Logger);
+
+                string? purgedReasoning = null;
+                if (!string.IsNullOrEmpty(candidate.Reasoning))
+                {
+                    purgedReasoning = await scanner.ProcessChunkAsync(candidate.Reasoning, context, cancellationToken)
+                        + await scanner.FlushAsync(context, cancellationToken);
+                }
+
+                // A tag cannot span channels, hence the flush above; whatever ran while scanning
+                // the reasoning is referenced from the content, which is what gets persisted - the
+                // reasoning itself never is.
+                var reasoningReferences = scanner.CompletedTagReferences.ToList();
+
+                var purgedContent = string.IsNullOrEmpty(candidate.Content)
+                    ? string.Empty
+                    : await scanner.ProcessChunkAsync(candidate.Content, context, cancellationToken);
+                purgedContent += await scanner.FlushAsync(context, cancellationToken);
+                purgedContent = AppendReferences(purgedContent, reasoningReferences);
+
+                _tagsExecutedInLastResponse.UnionWith(scanner.ExecutedTags);
+
+                var processedCandidates = new List<LlmResponse>(result.Candidates)
+                {
+                    [0] = candidate with
+                    {
+                        Content = purgedContent,
+                        Reasoning = purgedReasoning ?? candidate.Reasoning
+                    }
+                };
+
+                result = LlmResult.Success(
+                    processedCandidates,
+                    tokensUsed: result.TokensUsed,
+                    promptTokens: result.PromptTokens,
+                    completionTokens: result.CompletionTokens,
+                    costUsd: result.CostUsd,
+                    model: result.Model,
+                    nativeResponse: result.NativeResponse);
+            }
         }
         else
         {
@@ -382,9 +523,50 @@ public abstract partial class BaseLlmStep
             int? promptTokens = null;
             int? completionTokens = null;
 
-            StreamingTagParser tagParser = new(StreamingHandlers ?? []);
+            // The scanner's state machine spans chunks, and only the primary choice (index 0) gets
+            // one: it is the choice the step goes on to use, and a tag is an action with side
+            // effects that the discarded alternatives must not trigger. Every delta of that choice
+            // goes through it in arrival order, reasoning or not - a tag is a tag wherever the model
+            // wrote it. While a tag is open nothing is emitted; its placeholder is emitted where the
+            // tag closed. Other choices' text passes through untouched.
+            Dictionary<int, StreamingTagParser> tagScanners = [];
+            Dictionary<int, bool> lastChannelWasThinking = [];
+            Dictionary<int, List<string>> reasoningReferences = [];
+            var handlers = TagHandlers ?? [];
 
-            await foreach (var chunk in LlmService.InvokeStreamingAsync(request, cancellationToken))
+            StreamingTagParser? ScannerFor(int idx)
+            {
+                if (idx != 0 || handlers.Count == 0)
+                {
+                    return null;
+                }
+
+                if (!tagScanners.TryGetValue(idx, out var scanner))
+                {
+                    tagScanners[idx] = scanner = new StreamingTagParser(handlers, Logger);
+                }
+                return scanner;
+            }
+
+            // Emits purged text and files it under the channel it came from.
+            async Task EmitPurgedAsync(int idx, string text, bool isThinking)
+            {
+                if (string.IsNullOrEmpty(text)) return;
+
+                (isThinking ? reasoningBuilders[idx] : contentBuilders[idx]).Append(text);
+
+                await context.SendEventAsync(new LlmResponseEvent
+                {
+                    StepName = stepName,
+                    Content = text,
+                    FinishReason = FinishReason.Streaming,
+                    IsThinking = isThinking,
+                    ChoiceIndex = idx,
+                    CorrelationId = context.CorrelationId
+                }, cancellationToken);
+            }
+
+            await foreach (var chunk in llmService.InvokeStreamingAsync(request, cancellationToken))
             {
                 var choiceIdx = chunk.ChoiceIndex;
 
@@ -392,44 +574,39 @@ public abstract partial class BaseLlmStep
                 if (!contentBuilders.ContainsKey(choiceIdx)) contentBuilders[choiceIdx] = new StringBuilder();
                 if (!reasoningBuilders.ContainsKey(choiceIdx)) reasoningBuilders[choiceIdx] = new StringBuilder();
                 if (!choiceToolCallBuilders.ContainsKey(choiceIdx)) choiceToolCallBuilders[choiceIdx] = [];
+                if (!reasoningReferences.ContainsKey(choiceIdx)) reasoningReferences[choiceIdx] = [];
 
                 if (!string.IsNullOrEmpty(chunk.Delta))
                 {
-                    if (chunk.IsThinking)
-                    {
-                        reasoningBuilders[choiceIdx].Append(chunk.Delta);
+                    var scanner = ScannerFor(choiceIdx);
 
-                        await context.SendEventAsync(new LlmResponseEvent
-                        {
-                            StepName = stepName,
-                            Content = chunk.Delta,
-                            FinishReason = FinishReason.Streaming,
-                            IsThinking = true,
-                            ChoiceIndex = choiceIdx,
-                            CorrelationId = context.CorrelationId
-                        }, cancellationToken);
+                    if (scanner == null)
+                    {
+                        await EmitPurgedAsync(choiceIdx, chunk.Delta, chunk.IsThinking);
                     }
                     else
                     {
-                        var cleanDelta = chunk.Delta;
-                        if (!string.IsNullOrEmpty(cleanDelta))
+                        // A tag cannot span channels: when the stream switches between reasoning and
+                        // content, whatever is still open was never a tag and goes out as plain text.
+                        if (lastChannelWasThinking.TryGetValue(choiceIdx, out var previousWasThinking)
+                            && previousWasThinking != chunk.IsThinking)
                         {
-                            cleanDelta = await tagParser.ProcessChunkAsync(cleanDelta, context, cancellationToken);
+                            await EmitPurgedAsync(choiceIdx, await scanner.FlushAsync(context, cancellationToken), previousWasThinking);
                         }
+                        lastChannelWasThinking[choiceIdx] = chunk.IsThinking;
 
-                        if (!string.IsNullOrEmpty(cleanDelta))
+                        var referencesBefore = scanner.CompletedTagReferences.Count;
+                        var purged = await scanner.ProcessChunkAsync(chunk.Delta, context, cancellationToken);
+                        await EmitPurgedAsync(choiceIdx, purged, chunk.IsThinking);
+
+                        // References produced while scanning reasoning get appended to the content at
+                        // the end: the reasoning is not persisted, the record of the action must be.
+                        if (chunk.IsThinking)
                         {
-                            contentBuilders[choiceIdx].Append(cleanDelta);
-
-                            await context.SendEventAsync(new LlmResponseEvent
+                            for (var i = referencesBefore; i < scanner.CompletedTagReferences.Count; i++)
                             {
-                                StepName = stepName,
-                                Content = cleanDelta,
-                                FinishReason = FinishReason.Streaming,
-                                IsThinking = false,
-                                ChoiceIndex = choiceIdx,
-                                CorrelationId = context.CorrelationId
-                            }, cancellationToken);
+                                reasoningReferences[choiceIdx].Add(scanner.CompletedTagReferences[i]);
+                            }
                         }
                     }
                 }
@@ -470,12 +647,24 @@ public abstract partial class BaseLlmStep
                 if (chunk.CompletionTokens.HasValue) completionTokens = chunk.CompletionTokens.Value;
             }
 
+            // End of stream: a tag still open was never a tag - its text goes out as plain text on
+            // the channel it was on, and no handler runs (nothing was opened, so nothing leaks).
+            foreach (var (choiceIdx, scanner) in tagScanners)
+            {
+                var wasThinking = lastChannelWasThinking.GetValueOrDefault(choiceIdx, false);
+                await EmitPurgedAsync(choiceIdx, await scanner.FlushAsync(context, cancellationToken), wasThinking);
+                _tagsExecutedInLastResponse.UnionWith(scanner.ExecutedTags);
+            }
+
             // Finalize all candidates
             List<LlmResponse> candidates = [];
             foreach (var choiceIdx in contentBuilders.Keys.OrderBy(k => k))
             {
-                var content = contentBuilders[choiceIdx].ToString();
+                var content = AppendReferences(
+                    contentBuilders[choiceIdx].ToString(),
+                    reasoningReferences.GetValueOrDefault(choiceIdx) ?? []);
                 var reasoning = reasoningBuilders[choiceIdx].Length > 0 ? reasoningBuilders[choiceIdx].ToString() : null;
+
                 var fReason = finishReasons.GetValueOrDefault(choiceIdx, FinishReason.Stop);
                 var rawFReason = rawFinishReasons.GetValueOrDefault(choiceIdx);
 
@@ -527,8 +716,8 @@ public abstract partial class BaseLlmStep
                 RawFinishReason = primaryCandidate.RawFinishReason,
                 ChoiceIndex = primaryCandidate.Index,
                 TokensUsed = totalTokens,
-                Model = Model,
-                Provider = LlmService?.Name,
+                Model = model,
+                Provider = llmService?.Name,
                 CorrelationId = context.CorrelationId
             }, cancellationToken);
 
@@ -537,7 +726,7 @@ public abstract partial class BaseLlmStep
                 tokensUsed: totalTokens,
                 promptTokens: promptTokens,
                 completionTokens: completionTokens,
-                model: Model);
+                model: model);
         }
 
         // Services report tokens but not cost: they never see the provider's model catalogue.
@@ -545,7 +734,7 @@ public abstract partial class BaseLlmStep
         // declares the per-million prices - from being configuration nobody reads.
         if (result.CostUsd is null && result.IsSuccess)
         {
-            result.CostUsd = Provider.CalculateCost(result.Model ?? Model, result.PromptTokens, result.CompletionTokens);
+            result.CostUsd = provider.CalculateCost(result.Model ?? model, result.PromptTokens, result.CompletionTokens);
         }
 
         // ── Normalización post-ensamblado ──
@@ -605,8 +794,8 @@ public abstract partial class BaseLlmStep
                         RawFinishReason = rawReason,
                         ChoiceIndex = candidate.Index,
                         TokensUsed = result.TokensUsed ?? 0,
-                        Model = Model,
-                        Provider = LlmService?.Name,
+                        Model = model,
+                        Provider = llmService?.Name,
                         CorrelationId = context.CorrelationId
                     }, cancellationToken);
                 }
@@ -616,74 +805,24 @@ public abstract partial class BaseLlmStep
         return result;
     }
 
-    private async Task<string> ProcessTagsNonStreamingAsync(
-        string content,
-        PipelineContext context,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Appends to <paramref name="content"/> the references of tags that ran while scanning the
+    /// reasoning. The reasoning itself is shown to the user but never persisted; the record of an
+    /// action it carried must survive in the content, or the model cannot see in its own history
+    /// that the action is done.
+    /// </summary>
+    /// <param name="content">Purged response content.</param>
+    /// <param name="reasoningReferences">Placeholders produced by tags found in the reasoning.</param>
+    private static string AppendReferences(string content, IReadOnlyList<string> reasoningReferences)
     {
-        if (StreamingHandlers == null || StreamingHandlers.Count == 0 || string.IsNullOrEmpty(content))
+        var references = string.Join("\n", reasoningReferences.Where(r => !string.IsNullOrEmpty(r)));
+
+        if (references.Length == 0)
         {
-            return content ?? string.Empty;
+            return content;
         }
 
-        var handlerDict = StreamingHandlers.ToDictionary(h => h.TagName);
-        var tagRegex = _tagRegex;
-
-        StringBuilder sb = new();
-        var lastIndex = 0;
-
-        foreach (Match match in tagRegex.Matches(content))
-        {
-            sb.Append(content[lastIndex..match.Index]);
-
-            var tagName = match.Groups[1].Value;
-            var attrString = match.Groups[2].Value;
-            var tagContent = match.Groups[3].Value;
-
-            if (handlerDict.TryGetValue(tagName, out var handler))
-            {
-                var attributes = ParseAttributes(attrString);
-                string placeholder;
-                try
-                {
-                    var result = await handler.OnCompleteTagAsync(attributes, tagContent, context, cancellationToken);
-                    placeholder = result ?? string.Empty;
-                }
-                catch (Exception ex)
-                {
-                    if (Logger.IsEnabled(LogLevel.Error))
-                    {
-                        Logger.LogError(ex, "Error processing tag {TagName}", tagName);
-                    }
-                    placeholder = $"[Error processing tag {tagName}: {ex.Message}]";
-                }
-                sb.Append(placeholder);
-            }
-            else
-            {
-                sb.Append(match.Value);
-            }
-
-            lastIndex = match.Index + match.Length;
-        }
-
-        if (lastIndex < content.Length)
-        {
-            sb.Append(content[lastIndex..]);
-        }
-
-        return sb.ToString();
-    }
-
-    private static Dictionary<string, string> ParseAttributes(string attrString)
-    {
-        Dictionary<string, string> attributes = new();
-        foreach (Match match in _attrRegex.Matches(attrString))
-        {
-            attributes[match.Groups[1].Value] = match.Groups[2].Value;
-        }
-
-        return attributes;
+        return string.IsNullOrEmpty(content) ? references : $"{content}\n{references}";
     }
 
     private LlmResponse CanonicalizeToolCallsResponse(LlmResponse response)
@@ -713,9 +852,4 @@ public abstract partial class BaseLlmStep
         };
     }
 
-    [GeneratedRegex(@"<(\w+)([^>]*)>(.*?)</\1>", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline, "es-ES")]
-    private static partial Regex TagRegex();
-
-    [GeneratedRegex(@"(\w+)\s*=\s*[""']([^""']*)[""']", RegexOptions.Compiled, "es-ES")]
-    private static partial Regex AttrRegex();
 }
