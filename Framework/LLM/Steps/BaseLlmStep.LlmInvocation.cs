@@ -180,7 +180,8 @@ public abstract partial class BaseLlmStep
             tokensUsed: (result.TokensUsed ?? 0) + (nextResult.TokensUsed ?? 0),
             promptTokens: (result.PromptTokens ?? 0) + (nextResult.PromptTokens ?? 0),
             completionTokens: (result.CompletionTokens ?? 0) + (nextResult.CompletionTokens ?? 0),
-            costUsd: (result.CostUsd ?? 0) + (nextResult.CostUsd ?? 0),
+            // Null only when no iteration was priced: 0 would read as a free call, not as a model without a price.
+            costUsd: result.CostUsd is null && nextResult.CostUsd is null ? null : (result.CostUsd ?? 0) + (nextResult.CostUsd ?? 0),
             model: nextResult.Model,
             nativeResponse: nextResult.NativeResponse
         );
@@ -706,6 +707,7 @@ public abstract partial class BaseLlmStep
 
             var primaryCandidate = candidates[0];
             var finalReason = primaryCandidate.FinishReason ?? FinishReason.Other;
+            var streamedCost = PriceOf(provider, model, model, promptTokens, completionTokens);
 
             await context.SendEventAsync(new LlmResponseEvent
             {
@@ -716,6 +718,9 @@ public abstract partial class BaseLlmStep
                 RawFinishReason = primaryCandidate.RawFinishReason,
                 ChoiceIndex = primaryCandidate.Index,
                 TokensUsed = totalTokens,
+                PromptTokens = promptTokens,
+                CompletionTokens = completionTokens,
+                CostUsd = streamedCost,
                 Model = model,
                 Provider = llmService?.Name,
                 CorrelationId = context.CorrelationId
@@ -726,6 +731,7 @@ public abstract partial class BaseLlmStep
                 tokensUsed: totalTokens,
                 promptTokens: promptTokens,
                 completionTokens: completionTokens,
+                costUsd: streamedCost,
                 model: model);
         }
 
@@ -734,7 +740,7 @@ public abstract partial class BaseLlmStep
         // declares the per-million prices - from being configuration nobody reads.
         if (result.CostUsd is null && result.IsSuccess)
         {
-            result.CostUsd = provider.CalculateCost(result.Model ?? model, result.PromptTokens, result.CompletionTokens);
+            result.CostUsd = PriceOf(provider, result.Model, model, result.PromptTokens, result.CompletionTokens);
         }
 
         // ── Normalización post-ensamblado ──
@@ -783,7 +789,10 @@ public abstract partial class BaseLlmStep
                     }, cancellationToken);
                 }
 
-                if (!string.IsNullOrEmpty(candidate.Content) || (candidate.ToolCalls != null && candidate.ToolCalls.Count > 0))
+                // The primary choice always gets its final event, even when empty: it carries the call's usage, and an
+                // empty answer (a reasoning model that spends MaxTokens thinking) is precisely the one that costs most.
+                var isPrimary = ReferenceEquals(candidate, result.Candidates[0]);
+                if (isPrimary || !string.IsNullOrEmpty(candidate.Content) || (candidate.ToolCalls != null && candidate.ToolCalls.Count > 0))
                 {
                     await context.SendEventAsync(new LlmResponseEvent
                     {
@@ -794,6 +803,9 @@ public abstract partial class BaseLlmStep
                         RawFinishReason = rawReason,
                         ChoiceIndex = candidate.Index,
                         TokensUsed = result.TokensUsed ?? 0,
+                        PromptTokens = isPrimary ? result.PromptTokens : null,
+                        CompletionTokens = isPrimary ? result.CompletionTokens : null,
+                        CostUsd = isPrimary ? result.CostUsd : null,
                         Model = model,
                         Provider = llmService?.Name,
                         CorrelationId = context.CorrelationId
@@ -804,6 +816,17 @@ public abstract partial class BaseLlmStep
 
         return result;
     }
+
+    /// <summary>
+    /// Cost of one call. The price is looked up by the model the service says answered and, if that one has none, by
+    /// the model that was requested: Azure answers with the versioned model name (<c>gpt-4.1-mini-2025-04-14</c>) while
+    /// the catalogue, like the role, names the deployment.
+    /// </summary>
+    private static decimal? PriceOf(Configuration.LlmProvider provider, string? responseModel, string requestedModel, int? promptTokens, int? completionTokens) =>
+        provider.CalculateCost(responseModel ?? requestedModel, promptTokens, completionTokens)
+        ?? (responseModel != null && !string.Equals(responseModel, requestedModel, StringComparison.OrdinalIgnoreCase)
+            ? provider.CalculateCost(requestedModel, promptTokens, completionTokens)
+            : null);
 
     /// <summary>
     /// Appends to <paramref name="content"/> the references of tags that ran while scanning the

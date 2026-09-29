@@ -36,6 +36,21 @@ public sealed record LlmResponseEvent : ProgressEventBase
     /// <summary>Total tokens used (only set on final response).</summary>
     public int TokensUsed { get; init; }
 
+    /// <summary>
+    /// Prompt tokens of this call, as the service reported them. Only set on the final event of the primary choice, so
+    /// summing it over the final events of a run counts every call once; null when the service reports no split.
+    /// </summary>
+    public int? PromptTokens { get; init; }
+
+    /// <summary>Completion tokens of this call; set like <see cref="PromptTokens"/>.</summary>
+    public int? CompletionTokens { get; init; }
+
+    /// <summary>
+    /// Cost in USD of this call, from the prices of <c>LlmProvider.Models</c>; set like <see cref="PromptTokens"/>, and
+    /// null when the model has no price configured.
+    /// </summary>
+    public decimal? CostUsd { get; init; }
+
     /// <summary>LLM model used.</summary>
     public string? Model { get; init; }
 
