@@ -23,6 +23,9 @@ public sealed class AnalysisHost
         ChatRole = ChatAgent.EnsureRole(Roles, configuration);
         TemplateProvider = AnalysisPipelineFactory.CreateDefaultTemplateProvider();
         ChatOptions = ChatOptions.FromConfiguration(configuration);
+        // Los del chat al arrancar el host; los del análisis, al arrancar cada análisis (AnalysisRunner).
+        logger.LogInformation("{Limits}", EffectiveLimits.DescribeChat(ChatOptions, ChatRole));
+        logger.LogInformation("{Limits}", EffectiveLimits.DescribeFramework(serviceProvider));
 
         // Describir imágenes (plan v2 §7.4): el rol de CodebaseAnalysis:Documents:VisionRole con su proveedor y clave.
         var visionRole = CodebaseAnalysis.Core.Documents.DocumentOptions.FromConfiguration(configuration).VisionRole;

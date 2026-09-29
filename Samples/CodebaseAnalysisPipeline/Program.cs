@@ -14,12 +14,16 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
+using Serilog.Filters;
 using System.Text;
 
 namespace Samples.CodebaseAnalysisPipeline;
 
 internal static class Program
 {
+    /// <summary>Propiedad de Serilog de los mensajes que van al fichero de log y no a la consola.</summary>
+    private const string FileOnlyProperty = "FileOnly";
+
     private static async Task Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
@@ -55,8 +59,11 @@ internal static class Program
             .MinimumLevel.Is(logEventLevel)
             .Enrich.FromLogContext()
             .Enrich.With<StepOriginEnricher>()
-            .WriteTo.Console(restrictedToMinimumLevel: logEventLevel,
-                outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Origin:l}{Message:lj}{NewLine}{Exception}")
+            // Lo marcado con FileOnlyProperty va solo al fichero: ya sale en la consola por el reporter del pipeline.
+            .WriteTo.Logger(console => console
+                .Filter.ByExcluding(Matching.WithProperty(FileOnlyProperty))
+                .WriteTo.Console(restrictedToMinimumLevel: logEventLevel,
+                    outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Origin:l}{Message:lj}{NewLine}{Exception}"))
             .WriteTo.File(Path.Combine(logDir, "analysis-pipeline-.log"), rollingInterval: RollingInterval.Day, restrictedToMinimumLevel: logEventLevel,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Origin:l}{Message:lj}{NewLine}{Exception}")
             .CreateLogger();
@@ -160,6 +167,14 @@ internal static class Program
             return Task.CompletedTask;
         });
         var startedAt = DateTimeOffset.UtcNow;
+
+        // Los límites de tiempo efectivos: AnalysisRunner los escribe en la consola por el reporter, que no llega al fichero
+        // de log; aquí van también al fichero, que es donde se busca por qué se cortó un paso.
+        var fileOnly = Log.ForContext(FileOnlyProperty, true);
+        foreach (var line in EffectiveLimits.DescribeAnalysis(serviceProvider, roles))
+        {
+            fileOnly.Information("{Limits}", line);
+        }
 
         IStepResult? finalResult = null;
         try

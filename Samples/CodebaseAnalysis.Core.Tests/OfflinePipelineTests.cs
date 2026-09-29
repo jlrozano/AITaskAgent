@@ -125,6 +125,13 @@ public sealed class OfflinePipelineTests
         Assert.Contains(reporter.Entries, e =>
             e.Source == Steps.BdpEnricherStep.StepName && e.Message == "ℹ️ El grafo ya contiene enriquecimiento estructural y semántico previo.");
         Assert.DoesNotContain(reporter.Entries, e => e.Level == AnalysisLogLevel.Error);
+        // Los límites efectivos, una línea por grupo, justo después del arranque.
+        var start = reporter.Entries.ToList().FindIndex(e => e.Message.StartsWith("🚀 Ejecutando AnalysisPipeline", StringComparison.Ordinal));
+        string[] prefixes =
+            ["⏱️ Límites de CodebaseAnalysis:Timeouts:", "⏱️ Límites de JavaAnalyzer:", "⏱️ Plazos LLM de los roles del análisis", "⏱️ Límites de AITaskAgent:Timeouts"];
+        var limits = reporter.Entries.Skip(start + 1).Take(prefixes.Length).ToList();
+        Assert.All(prefixes.Zip(limits), p => Assert.StartsWith(p.First, p.Second.Message, StringComparison.Ordinal));
+        Assert.All(limits, e => Assert.Equal(AnalysisRunner.SourceName, e.Source));
 
         // 9 auditores y la síntesis; el enriquecedor no se invoca porque el grafo ya está enriquecido.
         Assert.Equal(10, llm.Calls);

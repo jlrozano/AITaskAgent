@@ -57,6 +57,7 @@ public static class AnalysisRunner
         var context = CreateContext(input, serviceProvider, eventChannel, reporter);
 
         context.Report(SourceName, AnalysisLogLevel.Info, "🚀 Ejecutando AnalysisPipeline completo con AITaskFramework...");
+        ReportLimits(context, serviceProvider, roles);
         return await pipeline.ExecuteAsync(input, context, cancellationToken);
     }
 
@@ -90,7 +91,18 @@ public static class AnalysisRunner
 
         context.Report(SourceName, AnalysisLogLevel.Info,
             $"♻️ Regenerando {string.Join(", ", reports)} {(synthesis ? "y el resumen ejecutivo" : "sin el resumen ejecutivo")} con AITaskFramework...");
+        ReportLimits(context, serviceProvider, roles);
         return await pipeline.ExecuteAsync(regeneration, context, cancellationToken);
+    }
+
+    /// <summary>
+    /// Vuelca los límites de tiempo efectivos (<see cref="EffectiveLimits.DescribeAnalysis"/>) al reporter y al canal: en la
+    /// web llegan al log de la ejecución y al registro de eventos; la CLI los escribe también en su fichero de log.
+    /// </summary>
+    private static void ReportLimits(PipelineContext context, IServiceProvider serviceProvider, Dictionary<string, LlmRole> roles)
+    {
+        foreach (var line in EffectiveLimits.DescribeAnalysis(serviceProvider, roles))
+            context.Report(SourceName, AnalysisLogLevel.Info, line);
     }
 
     /// <summary>Copia de <paramref name="input"/> con otros informes pedidos y sin reindexar.</summary>
