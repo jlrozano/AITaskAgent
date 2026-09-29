@@ -425,7 +425,7 @@ public sealed class RegenerationTests
             .Select(e => (string)e.Metadata![AnalysisEventTypes.MetadataKeys.FileName]!);
         Assert.Equal(synthesis ? [target, ReportCatalog.ExecutiveReportFileName] : [target], written);
 
-        Assert.Equal(CannedReport.Trim(), (await File.ReadAllTextAsync(Path.Combine(input.OutputReportsPath, target))).Trim());
+        Assert.Equal(CannedReport.Trim(), ProvenanceKeys.Strip(await File.ReadAllTextAsync(Path.Combine(input.OutputReportsPath, target))).Trim());
         foreach (var file in others)
         {
             var isExecutive = Path.GetFileName(file) == ReportCatalog.ExecutiveReportFileName;

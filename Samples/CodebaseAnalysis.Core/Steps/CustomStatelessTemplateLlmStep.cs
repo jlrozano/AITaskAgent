@@ -45,6 +45,12 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
     // BaseLlmStep usa PipelineContext.StepState, que es interno del framework.
     private readonly ConditionalWeakTable<PipelineContext, InvocationState> _invocations = new();
 
+    private readonly LlmRole _role;
+    private readonly ITemplateProvider _templateProvider;
+    private string? _systemSha;
+    private string? _promptSha;
+    private bool _shasComputed;
+
     private InvocationState State(PipelineContext context) => _invocations.GetOrCreateValue(context);
 
     private bool IsFinalAnswerMode(PipelineContext context) =>
@@ -61,6 +67,8 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
         IList<string>? tools = null)
         : base(name, role, templateProvider, tools)
     {
+        _role = role;
+        _templateProvider = templateProvider;
         Prompt = promptTemplateName;
         SystemPrompt = systemPromptTemplateName;
         AssociatedReportType = reportType;
@@ -127,6 +135,10 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
                 context.Report(Name, AnalysisLogLevel.Warning, $"⚠️ [LLM]{targetInfo} no incluye la línea 'analysis-meta': su semáforo queda como {SingleReportResult.UnknownHealth}.");
             }
 
+            // Procedencia (recomendación 12): después del aviso, porque sin línea del modelo la crea sin health.
+            singleReport.MarkdownContent = ReportMarkdown.SetMetaValues(singleReport.MarkdownContent, Provenance(context, result));
+            singleReport.PopulateDerivedMetadata();
+
             // Único punto de escritura de los informes individuales: se guardan al terminar cada
             // auditor, así que sobreviven aunque la síntesis ejecutiva falle después.
             var pipelineInput = context.Get<AnalysisPipelineInput>(AnalysisContextKeys.PipelineInput);
@@ -149,6 +161,31 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Pares de procedencia de <see cref="ReportProvenance"/> para el informe que escribe este paso (o la síntesis con este
+    /// paso): el modelo y el servicio del rol, el modelo que respondió según <paramref name="result"/>, los SHA de sus dos
+    /// plantillas y el grafo de <see cref="AnalysisContextKeys.GraphProvenance"/>.
+    /// </summary>
+    public IReadOnlyList<KeyValuePair<string, string>> Provenance(PipelineContext context, IStepResult? result)
+    {
+        if (!_shasComputed)
+        {
+            // Las plantillas no cambian durante la vida del paso: el proveedor las cachea.
+            _systemSha = ReportProvenance.TemplateSha(_templateProvider, SystemPrompt);
+            _promptSha = ReportProvenance.TemplateSha(_templateProvider, Prompt);
+            _shasComputed = true;
+        }
+
+        return ReportProvenance.Build(
+            DateTimeOffset.UtcNow,
+            _role.Model,
+            _role.Provider.Service?.Name,
+            (result as ILlmStepResult)?.Model,
+            _systemSha,
+            _promptSha,
+            context.Get<GraphProvenance>(AnalysisContextKeys.GraphProvenance));
     }
 
     /// <summary>Tope de tools agotado por primera vez en esta invocación, con un mensaje de respuesta final configurado.</summary>

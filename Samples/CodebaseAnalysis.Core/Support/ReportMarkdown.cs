@@ -103,6 +103,43 @@ public static partial class ReportMarkdown
     }
 
     /// <summary>
+    /// Fija las claves de <paramref name="values"/> en la última línea <c>analysis-meta</c>: quita las que ya tuviera con esos
+    /// nombres (también las que haya escrito el modelo), conserva el resto en su orden y añade las nuevas al final; si no hay
+    /// línea, la añade al final del informe. Los valores no pueden llevar <c>;</c>, que separa las claves, ni cerrar el
+    /// comentario: el <c>;</c> pasa a <c>,</c>, <c>--&gt;</c> a <c>-&gt;</c> y los saltos de línea a espacios.
+    /// </summary>
+    /// <remarks>
+    /// Los lectores de la línea (<c>SingleReportResult</c>, <see cref="SetCriticalInMeta"/>, <c>ReportWriter</c>) parten por
+    /// <c>;</c> y por el primer <c>=</c> e ignoran las claves que no conocen, así que la procedencia no cambia el semáforo.
+    /// </remarks>
+    public static string SetMetaValues(string markdown, IReadOnlyList<KeyValuePair<string, string>> values)
+    {
+        if (values.Count == 0)
+            return markdown;
+
+        var keys = values.Select(v => v.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var added = values.Select(v => $"{v.Key}={SanitizeMetaValue(v.Value)}");
+        var matches = AnalysisMetaRegex().Matches(markdown);
+        if (matches.Count == 0)
+            return markdown.TrimEnd() + $"\n\n<!-- analysis-meta: {string.Join("; ", added)} -->\n";
+
+        var last = matches[^1];
+        var pairs = last.Groups["body"].Value
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(p =>
+            {
+                var separator = p.IndexOf('=');
+                return separator <= 0 || !keys.Contains(p[..separator].Trim());
+            })
+            .Concat(added);
+        var line = $"<!-- analysis-meta: {string.Join("; ", pairs)} -->";
+        return string.Concat(markdown.AsSpan(0, last.Index), line, markdown.AsSpan(last.Index + last.Length));
+    }
+
+    private static string SanitizeMetaValue(string value) =>
+        value.Replace("-->", "->", StringComparison.Ordinal).Replace(';', ',').ReplaceLineEndings(" ").Trim();
+
+    /// <summary>
     /// Quita un H1 inicial que solo repite el nombre del fichero cuando detrás hay otro H1: el modelo a veces
     /// abre con "# 00_resumen_ejecutivo.md" y después pone el título real.
     /// </summary>

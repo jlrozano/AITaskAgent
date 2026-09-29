@@ -59,6 +59,16 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
         using var conn = new SqliteConnection($"Data Source={dbPath}");
         await conn.OpenAsync(cancellationToken);
 
+        // Procedencia de los informes: el grafo tal como lo ven los auditores, después de indexar y enriquecer.
+        try
+        {
+            context.Set(AnalysisContextKeys.GraphProvenance, await GraphProvenance.ReadAsync(conn, cancellationToken));
+        }
+        catch (SqliteException ex)
+        {
+            context.Report(StepName, AnalysisLogLevel.Warning, $"⚠️ No se pudo leer la huella del grafo para la procedencia de los informes: {ex.Message}");
+        }
+
         facetResult.DetectedLanguages = await DetectEcosystemAsync(conn, repoPath, cancellationToken);
         facetResult.RawFacets["detected_languages"] = facetResult.DetectedLanguages;
         facetResult.RawFacets["technology_stack"] = facetResult.DetectedLanguages;

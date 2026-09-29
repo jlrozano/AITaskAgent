@@ -424,7 +424,7 @@ public sealed class PostAuditV2CoreTests
         var final = Assert.Single(llm.FinalRequests, r => r.LastUserMessage == AnalysisPipelineFactory.AuditorToolLimitPrompt);
         Assert.True(final.ToolResultCount >= 3);
         Assert.DoesNotContain(reporter.Entries, e => e.Message.Contains("Maximum tool iterations"));
-        Assert.Equal(CannedReport, File.ReadAllText(Path.Combine(input.OutputReportsPath, "04_flujos_end_to_end.md")));
+        Assert.Equal(CannedReport, ProvenanceKeys.Strip(File.ReadAllText(Path.Combine(input.OutputReportsPath, "04_flujos_end_to_end.md"))));
     }
 
     [Fact]

@@ -103,3 +103,15 @@ internal sealed class CannedLlmService(string content) : ILlmService
 
     public int GetMaxContextTokens(string? model = null) => 1_000_000;
 }
+
+/// <summary>
+/// Quita de la línea <c>analysis-meta</c> las claves de procedencia que añade el pipeline (<c>ReportProvenance</c>), para
+/// comparar un informe escrito con la respuesta del modelo falso.
+/// </summary>
+internal static class ProvenanceKeys
+{
+    private static readonly System.Text.RegularExpressions.Regex Pattern = new(
+        @"; (generated_at|model|provider|response_model|system_sha|prompt_sha|graph|enrichment|app|fallback)=[^;]*?(?=; | -->)");
+
+    public static string Strip(string markdown) => Pattern.Replace(markdown, string.Empty);
+}

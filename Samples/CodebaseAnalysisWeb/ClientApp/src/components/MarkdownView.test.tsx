@@ -61,6 +61,17 @@ describe('MarkdownView', () => {
     await screen.findByTestId('diagram');
   });
 
+  it('tampoco muestra la línea analysis-meta con la procedencia que añade el pipeline', () => {
+    const meta =
+      '<!-- analysis-meta: health=Amber; critical=2; generated_at=2026-09-29T16:05:07Z; model=gpt-5.4; provider=azure-openai; ' +
+      'system_sha=0123456789ab; prompt_sha=ba9876543210; graph=C-repo|2026-09-29 10:00:00|cbm=0.6.1; enrichment=JavaAnalyzer#12,StrutsJsp#13; app=1.0.0+6322741 -->';
+    const { container } = render(<MarkdownView source={`# Informe\n\nTexto.\n\n${meta}\n`} />);
+    expect(container.textContent).toContain('Texto.');
+    expect(container.textContent).not.toContain('analysis-meta');
+    expect(container.textContent).not.toContain('gpt-5.4');
+    expect(container.textContent).not.toContain('JavaAnalyzer#12');
+  });
+
   it('un bloque mermaid llama a mermaid.render con el código y pinta el SVG', async () => {
     const { container } = render(<MarkdownView source={report} />);
     expect(await screen.findByTestId('diagram')).toBeInTheDocument();

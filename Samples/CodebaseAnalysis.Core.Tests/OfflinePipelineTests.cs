@@ -128,5 +128,26 @@ public sealed class OfflinePipelineTests
 
         // 9 auditores y la síntesis; el enriquecedor no se invoca porque el grafo ya está enriquecido.
         Assert.Equal(10, llm.Calls);
+
+        // Procedencia (recomendación 12): el pipeline completa la línea del modelo en cada informe y en el resumen.
+        foreach (var file in reportFiles)
+        {
+            var meta = ReportMarkdown.GetLastMetaLine(await File.ReadAllTextAsync(Path.Combine(input.OutputReportsPath, file!)))!;
+            Assert.Matches(
+                @"^<!-- analysis-meta: health=Green; generated_at=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ; model=fake-model; provider=canned; " +
+                @"system_sha=[0-9a-f]{12}; prompt_sha=[0-9a-f]{12}; app=[^;]+ -->$", meta);
+        }
+        var smellsMeta = ReportMarkdown.GetLastMetaLine(await File.ReadAllTextAsync(Path.Combine(input.OutputReportsPath, "02_code_smells.md")))!;
+        var deadMeta = ReportMarkdown.GetLastMetaLine(await File.ReadAllTextAsync(Path.Combine(input.OutputReportsPath, "03_codigo_muerto.md")))!;
+        string Sha(string line, string key) => line.Split("; ").Single(p => p.StartsWith(key + "=", StringComparison.Ordinal));
+        Assert.NotEqual(Sha(smellsMeta, "system_sha"), Sha(deadMeta, "system_sha"));
+
+        // El consumo de las diez llamadas, del canal (LlmUsageTracker), por auditor y en total.
+        var tracker = new LlmUsageTracker();
+        events.ForEach(tracker.Observe);
+        var usage = tracker.Snapshot();
+        Assert.Equal((10, 50L, 50L), (usage.Total.Calls, usage.Total.PromptTokens, usage.Total.CompletionTokens));
+        Assert.Equal(9, usage.BySource.Count(s => s.Report != null));
+        Assert.Null(usage.Total.CostUsd);
     }
 }

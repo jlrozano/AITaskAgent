@@ -56,6 +56,9 @@ public class ExecutiveSynthesizerStep : IStep<ParallelResult, AnalysisPipelineFi
 
     private const int MaxOutlineHeadings = 30;
 
+    /// <summary>Clave de <c>analysis-meta</c> del resumen generado por código porque el modelo no respondió.</summary>
+    public const string FallbackKey = "fallback";
+
     public string Name => StepName;
     public IResume? Resume => null;
     public int MaxRetries => 1;
@@ -243,11 +246,18 @@ public class ExecutiveSynthesizerStep : IStep<ParallelResult, AnalysisPipelineFi
             ?? llmResult?.Value?.ToString()
             ?? string.Empty;
 
-        if (string.IsNullOrWhiteSpace(executiveMarkdown))
+        var fallback = string.IsNullOrWhiteSpace(executiveMarkdown);
+        if (fallback)
         {
             executiveMarkdown = GenerateFallbackExecutiveSummary(individualReports, failures, synthesisInput);
         }
         executiveMarkdown = ReportMarkdown.RemoveFileNameHeading(executiveMarkdown);
+
+        // Procedencia (recomendación 12), como en los informes; sin respuesta del modelo el resumen lo escribe el código.
+        var provenance = _llmStep.Provenance(context, llmResult).ToList();
+        if (fallback)
+            provenance.Insert(1, new(FallbackKey, "true"));
+        executiveMarkdown = ReportMarkdown.SetMetaValues(executiveMarkdown, provenance);
 
         // 6. Guardar archivo maestro
         var executivePath = Path.Combine(outputDir, AnalysisPipelineInput.ExecutiveReportFileName);

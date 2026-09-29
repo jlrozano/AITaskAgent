@@ -39,4 +39,10 @@ public static class AnalysisContextKeys
     /// C#, <c>BdpEnricherStep</c> no recurre al CLI ni al fallback del LLM.
     /// </summary>
     public const string DetectedLanguages = "DetectedLanguages";
+
+    /// <summary>
+    /// La <c>Support.GraphProvenance</c> del grafo sobre el que trabajan los auditores (huella de indexación y filas de
+    /// <c>enrichment_runs</c>); la pone <c>SqlFacetExtractorStep</c> y va a la línea <c>analysis-meta</c> de cada informe.
+    /// </summary>
+    public const string GraphProvenance = "GraphProvenance";
 }
