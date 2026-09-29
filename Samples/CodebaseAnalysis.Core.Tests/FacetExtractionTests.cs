@@ -270,6 +270,36 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
     }
 
     /// <summary>
+    /// Con <c>USES_TYPE</c> en el grafo, un <c>new</c> con el constructor implícito deja arista (<c>new_implicit</c>), así que
+    /// <c>ZeroFaninClasses</c> ya no pide que el tipo declare constructor. Quedan fuera los tipos que Struts instancia por
+    /// reflexión: el <c>form_type</c> y el <c>action_type</c> de sus <c>Route</c>, comparados con el <c>fqn</c> del tipo.
+    /// </summary>
+    [Fact]
+    public async Task With_type_uses_a_zero_fan_in_type_needs_no_declared_constructor_and_struts_reflective_types_are_left_out()
+    {
+        using var g = await CbmTestGraph.CreateAsync(Path.Combine(_temp.Path, "codebase.db"), "demo");
+        const string marked = "{\"enriched_by\":[\"JavaAnalyzer\"]}";
+        static string Type(string fqn) => $"{{\"enriched_by\":[\"JavaAnalyzer\"],\"fqn\":\"{fqn}\"}}";
+        var main = await g.NodeAsync("Method", "main", "demo.App.main", "src/App.java", 1, 3, marked);
+        var usado = await g.NodeAsync("Class", "Usado", "demo.Usado", "src/Usado.java", 1, 9, Type("demo.Usado"));
+        await g.EdgeAsync(main, usado, "USES_TYPE", "{\"enriched_by\":[\"JavaAnalyzer\"],\"lines\":[2],\"count\":1,\"contexts\":[\"new_implicit\"]}");
+        await g.EdgeAsync(main, main, "CALLS", marked);
+        // Ninguna declara constructor ni tiene usos; la acción no tiene HANDLES (su clase no casó con la ruta).
+        await g.NodeAsync("Class", "Implicito", "demo.Implicito", "src/Implicito.java", 1, 9, Type("demo.Implicito"));
+        await g.NodeAsync("Class", "ConsultaForm", "demo.web.ConsultaForm", "src/web/ConsultaForm.java", 1, 9, Type("demo.web.ConsultaForm"));
+        await g.NodeAsync("Class", "ConsultarAction", "demo.web.ConsultarAction", "src/web/ConsultarAction.java", 1, 9, Type("demo.web.ConsultarAction"));
+        await g.NodeAsync("Route", "/consultar", "__route__ANY__/consultar", "WEB-INF/struts-config.xml", 4, 4,
+            "{\"framework\":\"struts\",\"route_path\":\"/consultar\",\"action_type\":\"demo.web.ConsultarAction\",\"form_type\":\"demo.web.ConsultaForm\"}");
+
+        var facets = await FacetsAsync(g.DatabasePath);
+
+        var zero = Rows(facets.ZeroFaninClasses, "zero_fanin_classes");
+        Assert.Equal(["demo.Implicito"], zero.Select(r => Text(r, "qualified_name")));
+        Assert.Equal(("0", "calculado: aristas CALLS y USES_TYPE de otros tipos resueltas por JavaAnalyzer"),
+            (Text(zero[0], "fan_in"), Text(zero[0], "fan_in_source")));
+    }
+
+    /// <summary>
     /// Q9: <c>UnreadFields</c> lista los campos privados, sin los <c>static final</c>, que ningún <c>READS</c> lee, con su
     /// fichero, su línea y cuántos los escriben. Un campo es el nodo con <c>field_name</c>, sea <c>Field</c> o el
     /// <c>Variable</c> en que se anclan las constantes de enum; el <c>Variable</c> gemelo de cbm y un <c>Field</c> sin

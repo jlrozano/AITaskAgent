@@ -184,9 +184,11 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             ORDER BY r.file, start_line, r.qualified_name LIMIT 20;", cancellationToken);
 
         // Solo tipos con fan_in conocido y igual a 0: un fan_in sin dato es uso desconocido, no nulo. Quedan fuera los que
-        // atienden una ruta (HANDLES, suyo o de sus métodos) y los que tienen subtipos: esos tienen uso por otra vía. Con el
-        // fan_in calculado, además, solo los que declaran constructor: instanciar con el constructor implícito no deja arista
-        // CALLS (no hay nodo al que llegar), así que en los demás un cero no prueba nada. Los más grandes primero.
+        // atienden una ruta (HANDLES, suyo o de sus métodos), los que tienen subtipos, que tienen uso por otra vía, y los que
+        // la configuración de Struts instancia por reflexión (form_type y action_type de sus Route, por FQN). Con el fan_in
+        // calculado y sin USES_TYPE en el grafo, además, solo los que declaran constructor: instanciar con el constructor
+        // implícito no deja arista CALLS (no hay nodo al que llegar), así que en los demás un cero no prueba nada. Con
+        // USES_TYPE ese new deja una arista (contexto new_implicit) y el requisito sobra. Los más grandes primero.
         facetResult.ZeroFaninClasses = await QueryToJsonAsync(conn, $@"
             SELECT n.name, n.qualified_name, n.file, n.label,
                    {StartLineExpr} AS start_line,
@@ -198,7 +200,12 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
               AND NOT EXISTS (SELECT 1 FROM edges h WHERE h.source_id = n.id AND h.type = 'HANDLES')
               AND NOT EXISTS (SELECT 1 FROM temp.facet_members m JOIN edges h ON h.source_id = m.method_id AND h.type = 'HANDLES' WHERE m.type_id = n.id)
               AND NOT EXISTS (SELECT 1 FROM edges s WHERE s.target_id = n.id AND s.type IN ('INHERITS', 'IMPLEMENTS'))
+              AND coalesce(replace(json_extract(n.properties, '$.fqn'), '$', '.'), '') NOT IN (
+                  SELECT replace(t.value, '$', '.') FROM nodes r,
+                         json_each(json_array(json_extract({SafeJson("r.properties")}, '$.form_type'), json_extract({SafeJson("r.properties")}, '$.action_type'))) t
+                  WHERE r.label = 'Route' AND json_extract({SafeJson("r.properties")}, '$.framework') = 'struts' AND t.value IS NOT NULL)
               AND (json_extract(n.properties, '$.fan_in') IS NOT NULL
+                   OR @type_uses = 1
                    OR EXISTS (SELECT 1 FROM temp.facet_members m JOIN nodes c ON c.id = m.method_id
                               WHERE m.type_id = n.id AND (c.label = 'Constructor' OR json_extract(c.properties, '$.is_constructor') = 1)))
             ORDER BY loc_total DESC, n.qualified_name LIMIT 20;", cancellationToken, parameters: metricParameters);
@@ -777,6 +784,7 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
                 enrichers.Count > 0 ? string.Join(", ", enrichers) : "—"),
             ["@src_type_uses"] = string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 typeUses ? SourceResolvedCallsAndTypeUsesFormat : SourceResolvedCallsFormat, enrichers.Count > 0 ? string.Join(", ", enrichers) : "—"),
+            ["@type_uses"] = typeUses ? 1 : 0,
             ["@src_members"] = SourceDefinesMethod,
             ["@src_lines"] = SourceLineRange,
             ["@src_cyclomatic"] = SourceCyclomaticSum
