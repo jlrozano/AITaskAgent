@@ -56,6 +56,20 @@ public static class FileToolsConfiguration
         set => Volatile.Write(ref _defaultEncoding, value);
     }
 
+    private static IReadOnlyList<string> _searchExcluded = [];
+
+    /// <summary>
+    /// Directories a directory search (<c>grep_search</c>) does not enter although they are allowed, such as the host's
+    /// own working data or generated output inside the root. Full paths; empty unless the host sets them, and setting
+    /// null clears them. Reading a file there by its path is still allowed.
+    /// </summary>
+    public static IReadOnlyList<string> SearchExcludedDirectories
+    {
+        get => Volatile.Read(ref _searchExcluded);
+        set => Volatile.Write(ref _searchExcluded,
+            value is null ? [] : [.. value.Where(d => !string.IsNullOrWhiteSpace(d)).Select(Path.GetFullPath)]);
+    }
+
     /// <summary>
     /// Every directory the tools may touch: <see cref="RootDirectory"/> first, then the ones
     /// added afterwards.

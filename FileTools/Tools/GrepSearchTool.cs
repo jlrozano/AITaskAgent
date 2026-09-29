@@ -15,6 +15,11 @@ namespace AITaskAgent.FileTools.Tools;
 /// <remarks>
 /// Each file is decoded with <see cref="TextFileEncoding"/> before matching, so the pattern runs on the same text
 /// view_file shows: an accented query also matches in an ISO-8859-1 file.
+/// On a large repository a directory search walks every file under the path: files are visited in ordinal path order,
+/// so a capped result is the same on every run; version-control, build-output and dependency folders
+/// (<see cref="ExcludedDirectoryNames"/>) and the host's <see cref="FileToolsConfiguration.SearchExcludedDirectories"/>
+/// are skipped; files over 1 MB and binary files are skipped; and each line is cut to <see cref="MaxLineChars"/>
+/// characters. When the cap is reached the last element of the array says so and carries no <c>Filename</c>.
 /// </remarks>
 public sealed class GrepSearchTool : BaseFileTool
 {
@@ -22,11 +27,27 @@ public sealed class GrepSearchTool : BaseFileTool
 
     /// <inheritdoc/>
     public override bool IsReadOnly => true;
-    public override string Description => "Use this tool to find exact pattern matches within files or directories. Results returned in JSON format including Filename, LineNumber, and LineContent. Total results capped at 50.";
-    public override string? UsageGuidelines => "Use to find text patterns or code references across files. Supports regex.";
+    public override string Description => "Use this tool to find exact pattern matches within files or directories. Results returned in JSON format including Filename, LineNumber, and LineContent. Total results capped at 50; a last element with Truncated=true says the cap was reached.";
+    public override string? UsageGuidelines => "Use to find text patterns or code references across files. Supports regex. Narrow large searches with SearchPath or Includes globs (e.g. '**/*.java', '**/*.xml').";
 
     /// <summary>Upper bound on a single regex match, to defend against catastrophic backtracking.</summary>
     private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>Maximum matches returned by one search.</summary>
+    public const int MaxMatches = 50;
+
+    /// <summary>Characters kept of each matching line: a minified file has lines of hundreds of kilobytes.</summary>
+    public const int MaxLineChars = 300;
+
+    /// <summary>Files larger than this are not searched.</summary>
+    private const long MaxFileBytes = 1024 * 1024;
+
+    /// <summary>
+    /// Folders never searched inside a directory search, wherever they sit: version control, .NET build output and
+    /// npm dependencies. The same ones <see cref="FindByNameTool"/> leaves out, plus <c>node_modules</c>. A file path
+    /// given as <c>SearchPath</c> is always searched.
+    /// </summary>
+    public static IReadOnlyCollection<string> ExcludedDirectoryNames { get; } = [".git", "bin", "obj", "node_modules"];
 
     public override ToolDefinition GetDefinition()
     {
@@ -89,7 +110,6 @@ public sealed class GrepSearchTool : BaseFileTool
 
         var results = new List<object>();
         int matchCount = 0;
-        const int MaxMatches = 50;
 
         Regex regex;
         try
@@ -135,6 +155,7 @@ public sealed class GrepSearchTool : BaseFileTool
                     var matchResult = matcher.Execute(new DirectoryInfoWrapper(new DirectoryInfo(resolvedSearchPath)));
                     files.AddRange(matchResult.Files
                         .Select(f => Path.GetFullPath(Path.Combine(resolvedSearchPath, f.Path)))
+                        .Where(f => !IsInExcludedDirectory(resolvedSearchPath, f))
                         .Where(FileToolsConfiguration.IsAllowed));
                 }
                 else
@@ -146,10 +167,14 @@ public sealed class GrepSearchTool : BaseFileTool
                     // enumerated path's text.
                     files.AddRange(Directory
                         .EnumerateFiles(resolvedSearchPath, "*", SearchOption.AllDirectories)
+                        .Where(f => !IsInExcludedDirectory(resolvedSearchPath, f))
                         .Where(FileToolsConfiguration.IsAllowed));
                 }
             }
             catch { }
+
+            // Same order on every run, so a search that hits the cap returns the same matches.
+            files.Sort(StringComparer.Ordinal);
         }
         else
         {
@@ -161,13 +186,15 @@ public sealed class GrepSearchTool : BaseFileTool
             cancellationToken.ThrowIfCancellationRequested();
             if (matchCount >= MaxMatches) break;
 
-            // Skip binaries/huge files simplistic check
-            if (new FileInfo(file).Length > 1024 * 1024) continue;
+            // Skip huge files; binaries are recognised below by a NUL character.
+            if (new FileInfo(file).Length > MaxFileBytes) continue;
 
             try
             {
                 // Same decoding rule as view_file, so an accented query also matches in a Latin-1 file.
                 var lines = await TextFileEncoding.ReadAllLinesAsync(file, cancellationToken);
+                if (lines.Any(l => l.Contains('\0'))) continue;
+
                 for (int i = 0; i < lines.Length; i++)
                 {
                     if (matchCount >= MaxMatches) break;
@@ -179,11 +206,12 @@ public sealed class GrepSearchTool : BaseFileTool
                             ? Path.GetFileName(file)
                             : Path.GetRelativePath(resolvedSearchPath, file);
 
+                        var content = lines[i].Trim();
                         results.Add(new
                         {
                             Filename = relativePath,
                             LineNumber = i + 1,
-                            LineContent = lines[i].Trim()
+                            LineContent = content.Length > MaxLineChars ? content[..MaxLineChars] + "…" : content
                         });
                         matchCount++;
                     }
@@ -201,7 +229,40 @@ public sealed class GrepSearchTool : BaseFileTool
         }
 
         if (results.Count == 0) return "No results found";
+        if (matchCount >= MaxMatches)
+        {
+            // An element without Filename: readers that take the matches (ClaimAuditor) skip it.
+            results.Add(new
+            {
+                Truncated = true,
+                Note = $"Results capped at {MaxMatches}; there may be more matches. Narrow SearchPath or Includes to see the rest."
+            });
+        }
         return JsonConvert.SerializeObject(results, Formatting.Indented);
+    }
+
+    /// <summary>
+    /// True when <paramref name="file"/> sits, below <paramref name="searchRoot"/>, in one of the
+    /// <see cref="ExcludedDirectoryNames"/> or inside one of <see cref="FileToolsConfiguration.SearchExcludedDirectories"/>.
+    /// Only the part below the search root counts: searching inside a folder called <c>bin</c> on purpose still works.
+    /// </summary>
+    private static bool IsInExcludedDirectory(string searchRoot, string file)
+    {
+        var relative = Path.GetRelativePath(searchRoot, file);
+        var segments = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            if (ExcludedDirectoryNames.Contains(segments[i], StringComparer.OrdinalIgnoreCase))
+                return true;
+        }
+
+        foreach (var excluded in FileToolsConfiguration.SearchExcludedDirectories)
+        {
+            var prefix = Path.TrimEndingDirectorySeparator(excluded) + Path.DirectorySeparatorChar;
+            if (file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     private record Arguments(

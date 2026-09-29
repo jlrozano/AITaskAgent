@@ -25,6 +25,7 @@ public class ToolBehaviorTests : IDisposable
     {
         FileToolsConfiguration.RootDirectory = _originalRoot;
         FileToolsConfiguration.ClearAdditionalAllowedDirectories();
+        FileToolsConfiguration.SearchExcludedDirectories = null!;
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
@@ -136,6 +137,59 @@ public class ToolBehaviorTests : IDisposable
         var result = await tool.ExecuteAsync(args, Context(), "test", NullLogger.Instance);
 
         Assert.Equal("No results found", result);
+    }
+
+    /// <summary>
+    /// A directory search on a large repository: no version-control, build or dependency folders, nothing under the
+    /// host's excluded directories, no binaries, files in ordinal order and a trailing element without Filename when the
+    /// cap is reached, so the same search gives the same capped answer every time.
+    /// </summary>
+    [Fact]
+    public async Task GrepSearchTool_skips_tooling_folders_host_exclusions_and_binaries_and_says_when_it_is_capped()
+    {
+        foreach (var dir in new[] { "src", ".git", "node_modules/lib", "bin", "work/.data" })
+            Directory.CreateDirectory(Path.Combine(_root, dir));
+        for (var i = 0; i < 60; i++)
+            await File.WriteAllTextAsync(Path.Combine(_root, "src", $"F{i:D2}.java"), "class F { String s = \"needle\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_root, ".git", "config"), "needle\n");
+        await File.WriteAllTextAsync(Path.Combine(_root, "node_modules", "lib", "x.js"), "needle\n");
+        await File.WriteAllTextAsync(Path.Combine(_root, "bin", "out.txt"), "needle\n");
+        await File.WriteAllTextAsync(Path.Combine(_root, "work", ".data", "report.md"), "needle\n");
+        await File.WriteAllBytesAsync(Path.Combine(_root, "blob.dat"), [0x6E, 0x65, 0x65, 0x64, 0x6C, 0x65, 0x00, 0x01]);
+        FileToolsConfiguration.SearchExcludedDirectories = [Path.Combine(_root, "work", ".data")];
+
+        var tool = new GrepSearchTool();
+        var args = $$"""{"SearchPath": "{{_root.Replace("\\", "\\\\")}}", "Query": "needle"}""";
+        var result = await tool.ExecuteAsync(args, Context(), "test", NullLogger.Instance);
+
+        var items = Newtonsoft.Json.Linq.JArray.Parse(result);
+        var matches = items.Where(i => i["Filename"] != null).Select(i => (string)i["Filename"]!).ToList();
+        Assert.Equal(GrepSearchTool.MaxMatches, matches.Count);
+        Assert.All(matches, m => Assert.StartsWith("src", m));
+        Assert.Equal(Path.Combine("src", "F00.java"), matches[0]);
+        Assert.Equal(Path.Combine("src", "F49.java"), matches[^1]);
+        var last = items[^1];
+        Assert.Null(last?["Filename"]);
+        Assert.True((bool)last!["Truncated"]!);
+
+        // The same folder searched on purpose is searched.
+        var direct = await tool.ExecuteAsync($$"""{"SearchPath": "{{Path.Combine(_root, "bin").Replace("\\", "\\\\")}}", "Query": "needle"}""",
+            Context(), "test", NullLogger.Instance);
+        Assert.Contains("out.txt", direct);
+    }
+
+    [Fact]
+    public async Task GrepSearchTool_cuts_a_very_long_matching_line()
+    {
+        var file = Path.Combine(_root, "min.js");
+        await File.WriteAllTextAsync(file, "var a='needle';" + new string('x', 5000));
+
+        var result = await new GrepSearchTool().ExecuteAsync(
+            $$"""{"SearchPath": "{{file.Replace("\\", "\\\\")}}", "Query": "needle"}""", Context(), "test", NullLogger.Instance);
+
+        var line = (string)Newtonsoft.Json.Linq.JArray.Parse(result)[0]["LineContent"]!;
+        Assert.Equal(GrepSearchTool.MaxLineChars + 1, line.Length);
+        Assert.EndsWith("…", line);
     }
 
     [Fact]
