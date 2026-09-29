@@ -9,7 +9,9 @@ namespace CodebaseAnalysis.Core.Tests.Enrichment;
 /// Grafo sintético que imita lo que deja cbm al indexar <see cref="JavaTestRepo"/> (QN por ruta, sobrecargas fundidas en un
 /// nodo con la línea de la última, <c>Function</c> de los métodos de interfaz, <c>CALLS</c> decididas por nombre, el código
 /// de test indexado, un nodo con <c>properties</c> que no es JSON válido y los campos como <c>Field</c> y <c>Variable</c>),
-/// y el resultado del analizador Java para ese mismo repositorio escrito según el contrato JSONL.
+/// y el resultado del analizador Java para ese mismo repositorio escrito según el contrato JSONL. Ese resultado sintético no
+/// incluye el código añadido para las referencias (<c>Filtro</c>, <c>Servicio.buscar</c>, <c>Servicio.contarUsos</c> y los
+/// campos de <c>Servicio</c>): tiene sus nodos de cbm y solo lo recorre el analizador real, en los tests con JDK.
 /// </summary>
 internal static class JavaGraphFixture
 {
@@ -27,6 +29,15 @@ internal static class JavaGraphFixture
     public static readonly string BeanQn = Qn(JavaTestRepo.BeanPath, "Bean");
     public static readonly string BeanId = Qn(JavaTestRepo.BeanPath, "Bean.id");
     public static readonly string GetId = Qn(JavaTestRepo.BeanPath, "Bean.getId");
+    public static readonly string FiltroQn = Qn(JavaTestRepo.FiltroPath, "Filtro");
+    public static readonly string ServicioQn = Qn(JavaTestRepo.ServicioPath, "Servicio");
+    public static readonly string Buscar = Qn(JavaTestRepo.ServicioPath, "Servicio.buscar");
+    public static readonly string ContarUsos = Qn(JavaTestRepo.ServicioPath, "Servicio.contarUsos");
+
+    /// <summary>Campos nuevos de <c>Servicio</c> con el QN de cbm, que lleva el inicializador en el nombre.</summary>
+    public static readonly string LimiteField = Qn(JavaTestRepo.ServicioPath, "Servicio.LIMITE = 10");
+    public static readonly string PendienteField = Qn(JavaTestRepo.ServicioPath, "Servicio.pendiente");
+    public static readonly string UsosField = Qn(JavaTestRepo.ServicioPath, "Servicio.usos");
 
     private static int Line(string path, string fragment) => JavaTestRepo.LineOf(path, fragment);
 
@@ -49,6 +60,12 @@ internal static class JavaGraphFixture
         var getId = await g.NodeAsync("Method", "getId", Qn(JavaTestRepo.BeanPath, "Bean.getId"), JavaTestRepo.BeanPath, 9, 11,
             "{\"signature\":\"()\",\"return_type\":\"long\",\"parent_class\":\"" + Qn(JavaTestRepo.BeanPath, "Bean") + "\"}");
         await g.EdgeAsync(bean, getId, "DEFINES_METHOD");
+
+        // Filtro: bean que solo se usa como parámetro, con su constructor (cbm lo nombra como la clase).
+        await FileAsync(JavaTestRepo.FiltroPath);
+        var filtro = await g.NodeAsync("Class", "Filtro", FiltroQn, JavaTestRepo.FiltroPath, 3, 6);
+        var filtroCtor = await g.NodeAsync("Method", "Filtro", Qn(JavaTestRepo.FiltroPath, "Filtro.Filtro"), JavaTestRepo.FiltroPath, 4, 5);
+        await g.EdgeAsync(filtro, filtroCtor, "DEFINES_METHOD");
         // cbm guarda cada campo dos veces: un Field en <QN del tipo>.<name>, con parent_class (y con el inicializador en el
         // name, si lo tiene: «nombreConexion = null»), y un Variable en <prefijo>.<nombre>.
         await g.NodeAsync("Field", "id", BeanId, JavaTestRepo.BeanPath, 7, 7,
@@ -82,7 +99,8 @@ internal static class JavaGraphFixture
 
         // Servicio (ISO-8859-1): properties con un salto de línea sin escapar, como los 60 nodos del repo objetivo.
         var servicioFile = await FileAsync(JavaTestRepo.ServicioPath);
-        var servicio = await g.NodeAsync("Class", "Servicio", Qn(JavaTestRepo.ServicioPath, "Servicio"), JavaTestRepo.ServicioPath, 6, 25,
+        var servicioPath = JavaTestRepo.ServicioPath;
+        var servicio = await g.NodeAsync("Class", "Servicio", ServicioQn, servicioPath, 6, JavaTestRepo.LineCount(servicioPath),
             "{\"base_classes\":[\"extends\nBase\"]}");
         var ejecutar = await g.NodeAsync("Method", "ejecutar", Ejecutar, JavaTestRepo.ServicioPath, 10, 20,
             "{\"docstring\":\"/**\\n * A\\ufffdade la acci\\ufffdn.\\n */\"}");
@@ -90,6 +108,21 @@ internal static class JavaGraphFixture
         await g.EdgeAsync(servicioFile, servicio, "DEFINES");
         await g.EdgeAsync(servicio, ejecutar, "DEFINES_METHOD");
         await g.EdgeAsync(servicio, web, "DEFINES_METHOD");
+        foreach (var (qn, name, fragment, endFragment) in new[]
+                 {
+                     (Buscar, "buscar", "public com.acme.Bean buscar", "return (com.acme.Bean) o;"),
+                     (ContarUsos, "contarUsos", "public int contarUsos", "return usos;")
+                 })
+        {
+            var method = await g.NodeAsync("Method", name, qn, servicioPath, Line(servicioPath, fragment), Line(servicioPath, endFragment) + 1);
+            await g.EdgeAsync(servicio, method, "DEFINES_METHOD");
+        }
+        var servicioParent = "{\"parent_class\":\"" + ServicioQn + "\"}";
+        foreach (var (qn, name, fragment) in new[]
+                 {
+                     (LimiteField, "LIMITE = 10", "LIMITE = 10;"), (PendienteField, "pendiente", "String pendiente;"), (UsosField, "usos", "int usos;")
+                 })
+            await g.NodeAsync("Field", name, qn, servicioPath, Line(servicioPath, fragment), Line(servicioPath, fragment), servicioParent);
 
         await FileAsync(JavaTestRepo.ConsultarActionPath);
         var action = await g.NodeAsync("Class", "ConsultarAction", Qn(JavaTestRepo.ConsultarActionPath, "ConsultarAction"), JavaTestRepo.ConsultarActionPath, 3, 7);
@@ -194,7 +227,7 @@ internal static class JavaGraphFixture
         lines.Add(J(Type(JavaTestRepo.BasePath, ["Base"], "com.acme.negocio.Base", "class", 3, 5, @abstract: true)));
         lines.Add(J(Method(JavaTestRepo.BasePath, ["Base"], "com.acme.negocio.Base", "log", 4, 4, ["java.lang.String"], ["String"], ["m"], "void", "void", access: "protected")));
 
-        lines.Add(J(Type(servicio, ["Servicio"], "com.acme.negocio.Servicio", "class", 6, 25, Ref("com.acme.negocio.Base", "project"))));
+        lines.Add(J(Type(servicio, ["Servicio"], "com.acme.negocio.Servicio", "class", 6, JavaTestRepo.LineCount(servicio), Ref("com.acme.negocio.Base", "project"))));
         lines.Add(J(Method(servicio, ["Servicio"], "com.acme.negocio.Servicio", "ejecutar", Line(servicio, "ejecutar()"), 20, [], [], [], "void", "void", doc: "Añade la acción.", cyclomatic: 3)));
         lines.Add(J(Method(servicio, ["Servicio"], "com.acme.negocio.Servicio", "web", Line(servicio, "public void web"), 24,
             ["javax.servlet.http.HttpServletRequest"], ["HttpServletRequest"], ["r"], "void", "void")));
@@ -496,7 +529,7 @@ public class JavaGraphWriterTests
         Assert.True(run.DurationMs >= 0);
 
         var outcome = run.Outcome!;
-        Assert.Equal(6, outcome.FilesAnalyzed);
+        Assert.Equal(JavaTestRepo.SourceFiles.Count, outcome.FilesAnalyzed);
         Assert.Equal(0, outcome.FilesUnmatched);
         Assert.Equal(2, outcome.NodesCreated);
         Assert.Equal(15, outcome.NodesUpdated);
@@ -913,9 +946,12 @@ public class JavaGraphWriterTests
         Assert.Equal("{}", await graph.TextAsync("SELECT properties FROM nodes WHERE label = 'Variable'"));
 
         Assert.Equal((4, 0, 0), (result.Stats.FieldsMatched, result.Stats.FieldsCreated, result.Stats.FieldsUnmatched));
-        Assert.Equal(1, result.Stats.CbmFieldsUnmatched);
-        Assert.Equal(0, await graph.CountAsync("SELECT COUNT(1) FROM nodes WHERE label = 'Field' AND qualified_name NOT LIKE '%=%' AND qualified_name <> @id",
-            ("@id", JavaGraphFixture.BeanId)));
+        // contadorTotal y los tres campos de Servicio del fixture, que el resultado sintético no declara.
+        Assert.Equal(4, result.Stats.CbmFieldsUnmatched);
+        // Ningún Field creado: los que no llevan inicializador en el QN son todos del fixture.
+        Assert.Equal(0, await graph.CountAsync(
+            "SELECT COUNT(1) FROM nodes WHERE label = 'Field' AND qualified_name NOT LIKE '%=%' AND qualified_name NOT IN (@id, @pendiente, @usos)",
+            ("@id", JavaGraphFixture.BeanId), ("@pendiente", JavaGraphFixture.PendienteField), ("@usos", JavaGraphFixture.UsosField)));
         var details = JsonNode.Parse(result.Outcome.Details!)!;
         Assert.Equal(4, details["fields"]!["matched"]!.GetValue<int>());
         Assert.Equal(0, details["cbm_match"]!["fields_unmatched_ratio"]!.GetValue<double>());
@@ -1014,7 +1050,8 @@ public class JavaGraphWriterTests
         Assert.Equal(0, stats.FieldsCreatedNameMismatch);
         Assert.Equal(0, stats.FieldsUnmatchedRatio);
         Assert.False(stats.ExceedsUnmatchedThreshold);
-        Assert.Equal(0, stats.CbmFieldsUnmatched);
+        // Solo los tres campos de Servicio del fixture, que el resultado sintético no declara: los Variable no cuentan.
+        Assert.Equal(3, stats.CbmFieldsUnmatched);
         var fields = JsonNode.Parse(result.Outcome.Details!)!["fields"]!;
         Assert.Equal((1, 2), (fields["matched_variable"]!.GetValue<int>(), fields["created_without_cbm_counterpart"]!.GetValue<int>()));
     }
@@ -1208,7 +1245,7 @@ public class JavaAnalysisReaderTests
         using var temp = new TempDirectory();
         var records = JavaAnalysisReader.Read(JavaGraphFixture.WriteResult(temp.Path, JavaGraphFixture.ResultLines())).ToList();
 
-        Assert.Equal(6, records.OfType<JavaFileRecord>().Count());
+        Assert.Equal(JavaTestRepo.SourceFiles.Count, records.OfType<JavaFileRecord>().Count());
         Assert.Equal(7, records.OfType<JavaTypeRecord>().Count());
         Assert.Equal(10, records.OfType<JavaMethodRecord>().Count());
         Assert.Single(records.OfType<JavaDiagnosticRecord>());

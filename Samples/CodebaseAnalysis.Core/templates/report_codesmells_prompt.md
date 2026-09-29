@@ -19,6 +19,11 @@ Genera el **Informe de Auditoría de Code Smells y Mantenibilidad** para el proy
 {{ coupling_metrics }}
 ```
 
+- **Campos privados que nada lee (sin `READS`)**: campos Java `private` que no son `static final`, con su fichero y línea; `writes` cuenta los métodos que los escriben. Un campo escrito y nunca leído es estado inútil; confírmalo en el código, porque la reflexión, la serialización y los frameworks que usan campos por nombre (`ActionForm` de Struts, beans) no dejan `READS`.
+```json
+{{ unread_fields }}
+```
+
 ---
 
 ### Metodología de Ejecución del Auditor:

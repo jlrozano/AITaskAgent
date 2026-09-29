@@ -6,7 +6,9 @@ namespace CodebaseAnalysis.Core.Tests.Enrichment;
 /// Repositorio Java de prueba pequeño (criterio 10 de la spec), generado en código y sin binarios: sobrecargas, interfaz e
 /// implementación, clase anidada, herencia, un fuente en ISO-8859-1 y otro en UTF-8, una raíz de test que debe quedar
 /// excluida, un <c>struts-config</c> con forwards globales y locales, definiciones de Tiles y JSP con y sin scriptlets.
-/// Lo usan los tests del escritor del grafo, del plugin Struts/JSP y del paso de extremo a extremo.
+/// Para las referencias de tipos y campos (criterio 1 del plan del 2026-09-29), <c>Servicio</c> devuelve <c>Bean</c> con un
+/// <c>cast</c>, usa <c>Filtro</c> solo como parámetro y tiene una constante estática, un campo privado sin leer y otro que se
+/// lee y se escribe. Lo usan los tests del escritor del grafo, del plugin Struts/JSP y del paso de extremo a extremo.
 /// </summary>
 public static class JavaTestRepo
 {
@@ -14,6 +16,7 @@ public static class JavaTestRepo
     private static readonly Encoding Latin1 = Encoding.Latin1;
 
     public const string BeanPath = "src/com/acme/Bean.java";
+    public const string FiltroPath = "src/com/acme/Filtro.java";
     public const string DaoPath = "src/com/acme/dao/Dao.java";
     public const string DaoImplPath = "src/com/acme/dao/DaoImpl.java";
     public const string BasePath = "src/com/acme/negocio/Base.java";
@@ -29,7 +32,7 @@ public static class JavaTestRepo
 
     /// <summary>Los fuentes Java fuera de la raíz de test, que son los que se analizan.</summary>
     public static IReadOnlyList<string> SourceFiles { get; } =
-        [BeanPath, DaoPath, DaoImplPath, BasePath, ServicioPath, ConsultarActionPath];
+        [BeanPath, FiltroPath, DaoPath, DaoImplPath, BasePath, ServicioPath, ConsultarActionPath];
 
     /// <summary>Ficheros del repositorio: ruta relativa con <c>/</c>, texto y codificación con la que se escribe.</summary>
     public static IReadOnlyList<(string Path, string Text, Encoding Encoding)> Files { get; } =
@@ -63,6 +66,16 @@ public static class JavaTestRepo
 
                 public long getId() {
                     return id;
+                }
+            }
+
+            """, Utf8),
+
+        (FiltroPath, """
+            package com.acme;
+
+            public class Filtro {
+                public Filtro() {
                 }
             }
 
@@ -134,6 +147,19 @@ public static class JavaTestRepo
 
                 public void web(javax.servlet.http.HttpServletRequest r) {
                     r.getSession();
+                }
+
+                private static final int LIMITE = 10;
+                private String pendiente;
+                private int usos;
+
+                public com.acme.Bean buscar(Object o, com.acme.Filtro f) {
+                    usos = LIMITE;
+                    return (com.acme.Bean) o;
+                }
+
+                public int contarUsos() {
+                    return usos;
                 }
             }
 

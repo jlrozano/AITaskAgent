@@ -314,11 +314,11 @@ public class LanguageEnricherStepTests(ITestOutputHelper output)
         var messages = reporter.Entries.Where(e => e.Source == LanguageEnricherStep.StepName).ToList();
         Assert.DoesNotContain(messages, e => e.Level == AnalysisLogLevel.Error);
         Assert.Equal(
-            "🔎 Lenguajes detectados en disco: Java (6 ficheros .java); 1 struts-config y 4 JSP; raíces de test excluidas: test.",
+            "🔎 Lenguajes detectados en disco: Java (7 ficheros .java); 1 struts-config y 4 JSP; raíces de test excluidas: test.",
             messages[0].Message);
         Assert.Contains(messages, e => e.Message == $"☕ Analizador Java: JDK {TestJdk.Info!.Version} en '{TestJdk.Info.JdkPath}'.");
         Assert.Contains(messages, e => e.Message.StartsWith("⏳ Analizador Java: ", StringComparison.Ordinal));
-        Assert.Contains(messages, e => e.Level == AnalysisLogLevel.Success && e.Message.StartsWith("✅ Analizador Java: 6 ficheros en ", StringComparison.Ordinal));
+        Assert.Contains(messages, e => e.Level == AnalysisLogLevel.Success && e.Message.StartsWith("✅ Analizador Java: 7 ficheros en ", StringComparison.Ordinal));
         var missing = Assert.Single(messages, e => e.Level == AnalysisLogLevel.Warning && e.Message.Contains(" en el classpath: ", StringComparison.Ordinal));
         Assert.Contains("javax.servlet", missing.Message);
         Assert.EndsWith("Añade sus jars en JavaAnalyzer:ProvidedClasspath.", missing.Message);
@@ -352,7 +352,7 @@ public class LanguageEnricherStepTests(ITestOutputHelper output)
         Assert.Equal(0, await graph.CountAsync("SELECT COUNT(1) FROM edges WHERE type = 'USAGE'"));
         Assert.Contains(messages, e => e.Level == AnalysisLogLevel.Success && e.Message.Contains(" USES_TYPE, ", StringComparison.Ordinal)
             && e.Message.Contains("de las referencias a tipos y campos resueltas", StringComparison.Ordinal)
-            && e.Message.Contains("1 de 1 campo casado con cbm (100,00 %)", StringComparison.Ordinal));
+            && e.Message.Contains("4 de 4 campos casados con cbm (100,00 %)", StringComparison.Ordinal));
 
         // Sobrecarga creada con su overload_of.
         var overload = await PropertiesAsync(graph, JavaGraphFixture.DaoImplConsultar + "(Hashtable,long)");

@@ -214,6 +214,112 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
         Assert.Empty(Rows(facets.ZeroFaninClasses, "zero_fanin_classes"));
     }
 
+    /// <summary>
+    /// Q9: el <c>fan_in</c> calculado de un tipo cuenta los orígenes de sus <c>USES_TYPE</c> resueltas entrantes desde otros
+    /// tipos, así que un bean usado solo como tipo no sale en <c>ZeroFaninClasses</c>. No cuentan las del propio tipo, sus
+    /// métodos o sus campos (por <c>parent_class</c> o por <c>DEFINES</c>), y un método que llama y usa el tipo cuenta una vez.
+    /// </summary>
+    [Fact]
+    public async Task The_computed_fan_in_of_a_type_counts_its_uses_as_a_type_from_other_types()
+    {
+        using var g = await CbmTestGraph.CreateAsync(Path.Combine(_temp.Path, "codebase.db"), "demo");
+        const string marked = "{\"enriched_by\":[\"JavaAnalyzer\"]}";
+        static string Uses(string context) => $"{{\"enriched_by\":[\"JavaAnalyzer\"],\"lines\":[3],\"count\":1,\"contexts\":[\"{context}\"]}}";
+        async Task<(long Type, long Ctor)> TypeAsync(string name)
+        {
+            var type = await g.NodeAsync("Class", name, $"demo.{name}", $"src/{name}.java", 1, 20, marked);
+            var ctor = await g.NodeAsync("Method", name, $"demo.{name}.{name}", $"src/{name}.java", 2, 2, "{\"enriched_by\":[\"JavaAnalyzer\"],\"is_constructor\":true}");
+            await g.EdgeAsync(type, ctor, "DEFINES_METHOD", marked);
+            return (type, ctor);
+        }
+
+        var (servicio, _) = await TypeAsync("Servicio");
+        var buscar = await g.NodeAsync("Method", "buscar", "demo.Servicio.buscar", "src/Servicio.java", 3, 9, marked);
+        await g.EdgeAsync(servicio, buscar, "DEFINES_METHOD", marked);
+        var (bean, beanCtor) = await TypeAsync("Bean");
+        var (filtro, _) = await TypeAsync("Filtro");
+        var (solo, soloCtor) = await TypeAsync("Solo");
+        var soloCampo = await g.NodeAsync("Field", "yo = null", "demo.Solo.yo = null", "src/Solo.java", 4, 4,
+            "{\"enriched_by\":[\"JavaAnalyzer\"],\"field_name\":\"yo\",\"parent_class\":\"demo.Solo\"}");
+        var soloCreado = await g.NodeAsync("Field", "otro", "demo.Solo.otro", "src/Solo.java", 5, 5, "{\"enriched_by\":[\"JavaAnalyzer\"],\"field_name\":\"otro\"}");
+        await g.EdgeAsync(solo, soloCreado, "DEFINES", marked);
+
+        // Bean: buscar lo llama (su constructor) y lo usa como tipo, y Servicio lo anota: dos orígenes. Filtro: solo parámetro.
+        await g.EdgeAsync(buscar, beanCtor, "CALLS", marked);
+        await g.EdgeAsync(buscar, bean, "USES_TYPE", Uses("return"));
+        await g.EdgeAsync(servicio, bean, "USES_TYPE", Uses("annotation"));
+        await g.EdgeAsync(buscar, filtro, "USES_TYPE", Uses("param"));
+        // Solo solo se usa desde sí mismo: el tipo, su constructor y sus dos campos (cbm con parent_class y creado con DEFINES).
+        foreach (var source in new[] { solo, soloCtor, soloCampo, soloCreado })
+            await g.EdgeAsync(source, solo, "USES_TYPE", Uses("local"));
+        // Un USES_TYPE sin marca de enriquecedor no cuenta.
+        await g.EdgeAsync(buscar, solo, "USES_TYPE", "{\"contexts\":[\"local\"]}");
+
+        var facets = await FacetsAsync(g.DatabasePath);
+        const string withTypeUses = "calculado: aristas CALLS y USES_TYPE de otros tipos resueltas por JavaAnalyzer";
+
+        var coupling = Rows(facets.CouplingMetrics, "coupling_metrics");
+        Assert.Equal(("2", withTypeUses), (Text(Row(coupling, "demo.Bean"), "fan_in"), Text(Row(coupling, "demo.Bean"), "fan_in_source")));
+        Assert.Equal("1", Text(Row(coupling, "demo.Filtro"), "fan_in"));
+        // Los métodos siguen con el fan_in de CALLS.
+        Assert.Equal("calculado: aristas CALLS resueltas por JavaAnalyzer", Text(Row(coupling, "demo.Bean.Bean"), "fan_in_source"));
+
+        var zero = Rows(facets.ZeroFaninClasses, "zero_fanin_classes");
+        Assert.Equal(["demo.Servicio", "demo.Solo"], zero.Select(r => Text(r, "qualified_name")).Order(StringComparer.Ordinal));
+        Assert.Equal(withTypeUses, Text(Row(zero, "demo.Solo"), "fan_in_source"));
+    }
+
+    /// <summary>
+    /// Q9: <c>UnreadFields</c> lista los campos privados, sin los <c>static final</c>, que ningún <c>READS</c> lee, con su
+    /// fichero, su línea y cuántos los escriben. Un campo es el nodo con <c>field_name</c>, sea <c>Field</c> o el
+    /// <c>Variable</c> en que se anclan las constantes de enum; el <c>Variable</c> gemelo de cbm y un <c>Field</c> sin
+    /// analizar no lo son.
+    /// </summary>
+    [Fact]
+    public async Task Unread_fields_are_the_private_non_constant_fields_without_reads()
+    {
+        using var g = await CbmTestGraph.CreateAsync(Path.Combine(_temp.Path, "codebase.db"), "demo");
+        const string marked = "{\"enriched_by\":[\"JavaAnalyzer\"]}";
+        const string access = "{\"enriched_by\":[\"JavaAnalyzer\"],\"lines\":[30],\"count\":1}";
+        var reader = await g.NodeAsync("Method", "leer", "demo.Svc.leer", "src/Svc.java", 29, 32, marked);
+        async Task<long> FieldAsync(string label, string name, string qn, int line, string? fieldName, string accessibility = "private",
+            bool isStatic = false, bool isFinal = false)
+        {
+            var properties = fieldName == null
+                ? "{}"
+                : $"{{\"enriched_by\":[\"JavaAnalyzer\"],\"field_name\":\"{fieldName}\",\"type_fqn\":\"int\",\"accessibility\":\"{accessibility}\","
+                  + $"\"is_static\":{(isStatic ? "true" : "false")},\"is_final\":{(isFinal ? "true" : "false")}}}";
+            return await g.NodeAsync(label, name, qn, "src/Svc.java", line, line, properties);
+        }
+
+        // Insertados fuera de orden: la faceta ordena por fichero y línea.
+        var escrito = await FieldAsync("Field", "escrito = 0", "demo.Svc.escrito = 0", 9, "escrito");
+        await FieldAsync("Field", "pendiente", "demo.Svc.pendiente", 5, "pendiente");
+        var leido = await FieldAsync("Field", "leido", "demo.Svc.leido", 6, "leido");
+        await FieldAsync("Field", "cache", "demo.Svc.cache", 7, "cache", isStatic: true);
+        await FieldAsync("Field", "LIMITE = 10", "demo.Svc.LIMITE = 10", 8, "LIMITE", isStatic: true, isFinal: true);
+        await FieldAsync("Field", "publico", "demo.Svc.publico", 10, "publico", accessibility: "public");
+        await FieldAsync("Field", "sinAnalizar", "demo.Svc.sinAnalizar", 11, null);
+        // Anclados en un Variable: uno leído no sale; otro sin leer sí, porque cuenta el field_name y no el label.
+        var anclado = await FieldAsync("Variable", "ROJO", "demo.Color.ROJO", 12, "ROJO");
+        await FieldAsync("Variable", "AZUL", "demo.Color.AZUL", 13, "AZUL");
+        await FieldAsync("Variable", "pendiente", "demo.pendiente", 5, null);
+        foreach (var target in new[] { leido, anclado })
+            await g.EdgeAsync(reader, target, "READS", access);
+        await g.EdgeAsync(reader, escrito, "WRITES", access);
+        // Una WRITES no es lectura, y un USAGE de cbm tampoco.
+        await g.EdgeAsync(reader, escrito, "USAGE");
+
+        var facets = await FacetsAsync(g.DatabasePath);
+
+        var unread = Rows(facets.UnreadFields, "unread_fields");
+        Assert.Equal(["pendiente", "cache", "escrito", "AZUL"], unread.Select(r => Text(r, "field_name")));
+        var written = Row(unread, "demo.Svc.escrito = 0");
+        Assert.Equal(("Field", "src/Svc.java", "9", "1", "int"),
+            (Text(written, "label"), Text(written, "file"), Text(written, "start_line"), Text(written, "writes"), Text(written, "type_fqn")));
+        Assert.Equal(("Variable", "0"), (Text(Row(unread, "demo.Color.AZUL"), "label"), Text(Row(unread, "demo.Color.AZUL"), "writes")));
+    }
+
     // ------------------------------------------------------------------ Struts/JSP
 
     private static void Write(string root, string relative, string text) =>
@@ -416,8 +522,13 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(fromCalls, Text(servicio, "fan_out_source"));
         Assert.True(int.Parse(Text(servicio, "fan_out")!) >= 3);
         // Servicio solo se instancia con su constructor implícito: su cero no prueba nada y no sale como sin uso.
-        Assert.DoesNotContain(Rows(facets.ZeroFaninClasses, "zero_fanin_classes"),
-            r => Text(r, "qualified_name") == JavaGraphFixture.Qn(JavaTestRepo.ServicioPath, "Servicio"));
+        var zero = Rows(facets.ZeroFaninClasses, "zero_fanin_classes");
+        Assert.DoesNotContain(zero, r => Text(r, "qualified_name") == JavaGraphFixture.Qn(JavaTestRepo.ServicioPath, "Servicio"));
+        // Filtro declara constructor y solo se usa como parámetro de Servicio.buscar: su USES_TYPE le da fan_in 1 y no sale.
+        var filtro = Row(coupling, JavaGraphFixture.FiltroQn);
+        Assert.Equal(("1", "calculado: aristas CALLS y USES_TYPE de otros tipos resueltas por JavaAnalyzer"),
+            (Text(filtro, "fan_in"), Text(filtro, "fan_in_source")));
+        Assert.DoesNotContain(zero, r => Text(r, "qualified_name") == JavaGraphFixture.FiltroQn);
         Assert.Single(Rows(facets.SuspiciousJsps, "suspicious_jsps"));
     }
 

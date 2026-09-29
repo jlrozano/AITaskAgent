@@ -10,9 +10,10 @@ namespace CodebaseAnalysis.Core.Tools;
 
 /// <summary>
 /// Vecinos de un nodo del grafo por sus aristas: llamantes y llamados (<c>CALLS</c>), jerarquía (<c>INHERITS</c>,
-/// <c>IMPLEMENTS</c>), métodos de un tipo (<c>DEFINES_METHOD</c>), rutas (<c>HANDLES</c>) y las aristas Struts/JSP. Es
-/// de solo lectura y no lee el código: lo que devuelve es del grafo del último análisis. Cada arista dice su procedencia:
-/// resuelta por un enriquecedor (<c>enriched_by</c>), estimada por el fallback del LLM, de la ingesta de Office (sin marca,
+/// <c>IMPLEMENTS</c>), métodos de un tipo (<c>DEFINES_METHOD</c>), rutas (<c>HANDLES</c>), las aristas Struts/JSP y los usos
+/// de tipos y campos del analizador Java (<c>USES_TYPE</c>, <c>READS</c>, <c>WRITES</c>), con un filtro por línea del fichero
+/// de origen. Es de solo lectura y no lee el código: lo que devuelve es del grafo del último análisis. Cada arista dice su
+/// procedencia: resuelta por un enriquecedor (<c>enriched_by</c>), estimada por el fallback del LLM, de la ingesta de Office (sin marca,
 /// con su nodo de origen escrito por OfficeTools), heurística de cbm (sin marca; las <c>CALLS</c> de cbm traen
 /// <c>strategy</c> y <c>confidence</c>) o de estructura de cbm (pertenencia), y la cabecera avisa si hay aristas sin resolver.
 /// </summary>
@@ -33,7 +34,8 @@ public sealed class GraphNeighborsTool : LlmTool
     public static IReadOnlyList<string> DefaultEdgeTypes { get; } =
     [
         "CALLS", "INHERITS", "IMPLEMENTS", "DEFINES_METHOD", "HANDLES",
-        "FORWARDS_TO", "SUBMITS_TO", "INCLUDES", "RENDERS", "EXTENDS_DEFINITION"
+        "FORWARDS_TO", "SUBMITS_TO", "INCLUDES", "RENDERS", "EXTENDS_DEFINITION",
+        "USES_TYPE", "READS", "WRITES"
     ];
 
     /// <summary>
@@ -86,6 +88,10 @@ public sealed class GraphNeighborsTool : LlmTool
         "qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué métodos define un tipo (DEFINES_METHOD), " +
         "qué clase atiende una ruta (HANDLES) y, en Struts/JSP, qué JSP o definición Tiles muestra una acción (FORWARDS_TO), " +
         "a qué acción envía una JSP (SUBMITS_TO), qué incluye (INCLUDES) y qué JSP compone una definición (RENDERS, EXTENDS_DEFINITION). " +
+        "En Java, además, qué tipos usa un método, un campo o un tipo (USES_TYPE, con el contexto: parámetro, retorno, local, cast, new…) " +
+        "y qué campos lee o escribe (READS, WRITES), con sus líneas. " +
+        "Dónde se usa una clase o un campo: direction 'in' sobre la clase (USES_TYPE y CALLS entrantes) o sobre el campo (READS y WRITES entrantes). " +
+        "Qué referencia hay en la línea N de un fichero: 'line' con el método que la contiene y direction 'out'. " +
         "Cada arista dice su procedencia: resuelta por un enriquecedor (fiable), heurística de cbm (una pista, con su confianza si la trae) o de estructura. " +
         "Devuelve datos del grafo, no el código: para confirmar un hecho, abre la línea que indica con view_file.";
     public override bool IsReadOnly => true;
@@ -106,7 +112,11 @@ public sealed class GraphNeighborsTool : LlmTool
         "edge_types": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Tipos de arista a incluir. Por defecto: CALLS, INHERITS, IMPLEMENTS, DEFINES_METHOD, HANDLES, FORWARDS_TO, SUBMITS_TO, INCLUDES, RENDERS, EXTENDS_DEFINITION."
+          "description": "Tipos de arista a incluir. Por defecto: CALLS, INHERITS, IMPLEMENTS, DEFINES_METHOD, HANDLES, FORWARDS_TO, SUBMITS_TO, INCLUDES, RENDERS, EXTENDS_DEFINITION, USES_TYPE, READS, WRITES."
+        },
+        "line": {
+          "type": "integer",
+          "description": "Solo las aristas que tienen esa línea entre sus líneas. Es una línea del fichero de origen de la arista: con direction 'out', la del propio nodo (las llamadas, los tipos y los campos que usa un método en esa línea)."
         },
         "limit": {
           "type": "integer",
@@ -128,6 +138,7 @@ public sealed class GraphNeighborsTool : LlmTool
         var direction = "both";
         var edgeTypes = new List<string>();
         var limit = DefaultLimit;
+        int? line = null;
 
         try
         {
@@ -151,6 +162,18 @@ public sealed class GraphNeighborsTool : LlmTool
             }
             if (root.TryGetProperty("limit", out var l) && l.TryGetInt32(out var lInt))
                 limit = lInt;
+            // Número o, si el modelo lo manda como texto, un entero en texto.
+            if (root.TryGetProperty("line", out var n))
+            {
+                var parsed = n.ValueKind switch
+                {
+                    JsonValueKind.Number when n.TryGetInt32(out var number) => number,
+                    JsonValueKind.String when int.TryParse(n.GetString(), out var text) => text,
+                    _ => 0
+                };
+                if (parsed > 0)
+                    line = parsed;
+            }
         }
         catch
         {
@@ -172,15 +195,15 @@ public sealed class GraphNeighborsTool : LlmTool
 
         var node = candidates[0];
         var nodeId = Convert.ToInt64(node["id"]);
-        var (sql, bind) = NeighborsQuery(nodeId, direction, edgeTypes, limit);
+        var (sql, bind) = NeighborsQuery(nodeId, direction, edgeTypes, limit, line);
         var rows = await _graphDb.SelectAsync(sql, bind, dbPath, cancellationToken);
-        var (countSql, countBind) = CountQuery(nodeId, direction, edgeTypes);
+        var (countSql, countBind) = CountQuery(nodeId, direction, edgeTypes, line);
         var counts = (await _graphDb.SelectAsync(countSql, countBind, dbPath, cancellationToken))
             .ToDictionary(r => ($"{r["dir"]}", $"{r["type"]}"),
                 r => new EdgeCount(Convert.ToInt32(r["n"]), Convert.ToInt32(r["resolved"] ?? 0), Convert.ToInt32(r["llm"] ?? 0),
                     Convert.ToInt32(r["office"] ?? 0)));
 
-        return Render(node, direction, edgeTypes, limit, rows, counts);
+        return Render(node, direction, edgeTypes, limit, line, rows, counts);
     }
 
     /// <summary>
@@ -223,17 +246,22 @@ public sealed class GraphNeighborsTool : LlmTool
     private static string EscapeLike(string text) =>
         text.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 
+    // Filtro de línea: la arista lleva @line en su lista lines, que son líneas del fichero de su origen.
+    private static string LinePredicate(string alias) =>
+        $" AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid({alias}properties) THEN {alias}properties ELSE '{{}}' END, '$.lines') ln WHERE ln.value = @line)";
+
     private static (string Sql, Action<Microsoft.Data.Sqlite.SqliteParameterCollection> Bind) NeighborsQuery(
-        long nodeId, string direction, List<string> edgeTypes, int limit)
+        long nodeId, string direction, List<string> edgeTypes, int limit, int? line)
     {
         var types = string.Join(", ", edgeTypes.Select((_, i) => $"@t{i}"));
+        var lineFilter = line.HasValue ? LinePredicate("e.") : "";
         string Part(string dir, string self, string other) =>
             $"SELECT '{dir}' AS dir, e.type AS type, n.id AS id, n.label AS label, n.name AS name, n.qualified_name AS qn, " +
             $"{FileExpr} AS file_path, {LineExpr} AS line_start, " +
             "CASE WHEN json_valid(e.properties) THEN e.properties END AS props, " +
             $"CASE WHEN e.type = 'CALLS' THEN {InterfaceExpr} END AS iface, " +
             $"(SELECT {OriginExpr("s")} FROM nodes s WHERE s.id = e.source_id) AS source_origin " +
-            $"FROM edges e JOIN nodes n ON n.id = e.{other} WHERE e.{self} = @id AND e.type IN ({types})";
+            $"FROM edges e JOIN nodes n ON n.id = e.{other} WHERE e.{self} = @id AND e.type IN ({types}){lineFilter}";
 
         var parts = new List<string>();
         if (direction is "out" or "both")
@@ -249,13 +277,16 @@ public sealed class GraphNeighborsTool : LlmTool
             for (var i = 0; i < edgeTypes.Count; i++)
                 p.AddWithValue($"@t{i}", edgeTypes[i]);
             p.AddWithValue("@lim", limit);
+            if (line.HasValue)
+                p.AddWithValue("@line", line.Value);
         });
     }
 
     private static (string Sql, Action<Microsoft.Data.Sqlite.SqliteParameterCollection> Bind) CountQuery(
-        long nodeId, string direction, List<string> edgeTypes)
+        long nodeId, string direction, List<string> edgeTypes, int? line)
     {
         var types = string.Join(", ", edgeTypes.Select((_, i) => $"@t{i}"));
+        var lineFilter = line.HasValue ? LinePredicate("") : "";
         // Por procedencia: resueltas por un enriquecedor, estimadas por el LLM (solo su marca), de la ingesta de Office (sin
         // marca, con el nodo de origen de OfficeTools) y, el resto, de cbm.
         var provenance = $"SUM(CASE WHEN {ResolvedPredicate} THEN 1 ELSE 0 END) AS resolved, " +
@@ -263,14 +294,16 @@ public sealed class GraphNeighborsTool : LlmTool
                          $"SUM(CASE WHEN NOT {MarkPredicate()} AND {OfficeSourcePredicate} THEN 1 ELSE 0 END) AS office";
         var parts = new List<string>();
         if (direction is "out" or "both")
-            parts.Add($"SELECT 'out' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE source_id = @id AND type IN ({types}) GROUP BY type");
+            parts.Add($"SELECT 'out' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE source_id = @id AND type IN ({types}){lineFilter} GROUP BY type");
         if (direction is "in" or "both")
-            parts.Add($"SELECT 'in' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE target_id = @id AND type IN ({types}) GROUP BY type");
+            parts.Add($"SELECT 'in' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE target_id = @id AND type IN ({types}){lineFilter} GROUP BY type");
         return (string.Join(" UNION ALL ", parts), p =>
         {
             p.AddWithValue("@id", nodeId);
             for (var i = 0; i < edgeTypes.Count; i++)
                 p.AddWithValue($"@t{i}", edgeTypes[i]);
+            if (line.HasValue)
+                p.AddWithValue("@line", line.Value);
         });
     }
 
@@ -295,6 +328,7 @@ public sealed class GraphNeighborsTool : LlmTool
         string direction,
         List<string> edgeTypes,
         int limit,
+        int? line,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> rows,
         Dictionary<(string Dir, string Type), EdgeCount> counts)
     {
@@ -305,6 +339,8 @@ public sealed class GraphNeighborsTool : LlmTool
         var sb = new StringBuilder($"# Vecinos en el grafo de `{qn}`\n\n");
         sb.AppendLine($"- Nodo: `{node["label"]}` **{Cell(node["name"])}** · {Location(node)}");
         sb.AppendLine($"- Dirección: `{direction}` · Tipos: {string.Join(", ", edgeTypes.Select(t => $"`{t}`"))} · {(total == 1 ? "1 arista" : $"{total} aristas")}.");
+        if (line.HasValue)
+            sb.AppendLine($"- Línea: {line} del fichero de origen de cada arista ({(direction == "out" ? $"`{nodeFile}`" : "el del nodo si sale, el del vecino si llega")}).");
         AppendProvenanceHeader(sb, rows, counts);
         if (node["iface"] is { } ownIface && direction is "in" or "both")
             sb.AppendLine($"\n> Es un método de la interfaz `{ownIface}`: quien llama a la interfaz llega aquí; las implementaciones se ven con `{ToolName}` sobre `{ownIface}`, `direction: in`, `edge_types: [\"IMPLEMENTS\"]`.");
@@ -312,7 +348,9 @@ public sealed class GraphNeighborsTool : LlmTool
 
         if (rows.Count == 0)
         {
-            sb.AppendLine("*(El nodo no tiene aristas de esos tipos en esa dirección)*");
+            sb.AppendLine(line.HasValue
+                ? $"*(El nodo no tiene aristas de esos tipos en esa dirección con la línea {line})*"
+                : "*(El nodo no tiene aristas de esos tipos en esa dirección)*");
             return sb.ToString();
         }
 
@@ -451,7 +489,10 @@ public sealed class GraphNeighborsTool : LlmTool
                           "o estimación del LLM). Son pistas: confírmalas en el código antes de afirmarlas. Las resueltas por un enriquecedor son fiables.");
     }
 
-    /// <summary>Lo que aporta la arista: líneas y número de llamadas, el forward, el rol en la definición o la ruta.</summary>
+    /// <summary>
+    /// Lo que aporta la arista: líneas y número de llamadas, los contextos de un uso de tipo, el acceso a un campo, el forward,
+    /// el rol en la definición o la ruta.
+    /// </summary>
     private static string Detail(string type, string? props, string? sourceFile)
     {
         if (string.IsNullOrWhiteSpace(props))
@@ -473,6 +514,18 @@ public sealed class GraphNeighborsTool : LlmTool
                     parts.Add(n == 1 ? "1 llamada" : $"{n} llamadas");
                 if (root.TryGetProperty("context", out var ctx) && ctx.ValueKind == JsonValueKind.String && ctx.GetString() == "initializer")
                     parts.Add("desde un inicializador");
+                break;
+            case "USES_TYPE":
+                if (Strings(root, "contexts") is { Count: > 0 } contexts)
+                    parts.Add("como " + string.Join(", ", contexts.Select(x => $"`{x}`")));
+                if (root.TryGetProperty("count", out var uses) && uses.TryGetInt32(out var u))
+                    parts.Add(u == 1 ? "1 referencia" : $"{u} referencias");
+                break;
+            case "READS":
+            case "WRITES":
+                parts.Add(type == "READS" ? "lectura" : "escritura");
+                if (root.TryGetProperty("count", out var accesses) && accesses.TryGetInt32(out var a))
+                    parts.Add(a == 1 ? "1 acceso" : $"{a} accesos");
                 break;
             case "FORWARDS_TO":
                 if (Strings(root, "forward_names") is { Count: > 0 } names)

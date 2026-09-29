@@ -28,6 +28,12 @@ public class ReportFacetInput : StepResult
     public string OrphanRoutes { get; set; } = "[]";
     public string ZeroFaninClasses { get; set; } = "[]";
 
+    /// <summary>
+    /// Campos Java privados, sin los <c>static final</c>, sin <c>READS</c> entrante, con fichero y línea. Va también al
+    /// informe 02.
+    /// </summary>
+    public string UnreadFields { get; set; } = "[]";
+
     /// <summary>Acciones Struts (<c>Route</c> con <c>framework = struts</c>) sin <c>HANDLES</c> entrante, con el motivo.</summary>
     public string StrutsActionsWithoutHandler { get; set; } = "[]";
 

@@ -24,9 +24,14 @@ Genera el **Informe de Detección de Código Muerto y Elementos Huérfanos** par
 {{ struts_actions_without_handler }}
 ```
 
-- **Clases, Tablas o Módulos con Cero Uso Entrante Conocido (`fan_in = 0`)**: solo los que tienen `fan_in` conocido, como propiedad del grafo o calculado de las aristas `CALLS` resueltas (`fan_in_source` dice cuál). Los que no tienen el dato no aparecen: su uso entrante es desconocido, no cero. Quedan fuera los que atienden una ruta (`HANDLES`) y los que tienen subtipos. El `fan_in` calculado cuenta llamadas a métodos y constructores del tipo, y solo se usa en los tipos que declaran constructor (una instanciación con el constructor implícito no deja arista); no ve referencias de tipo, campos estáticos, reflexión ni uso desde JSP o XML.
+- **Clases, Tablas o Módulos con Cero Uso Entrante Conocido (`fan_in = 0`)**: solo los que tienen `fan_in` conocido, como propiedad del grafo o calculado de las aristas resueltas (`fan_in_source` dice cuáles). Los que no tienen el dato no aparecen: su uso entrante es desconocido, no cero. Quedan fuera los que atienden una ruta (`HANDLES`) y los que tienen subtipos. El `fan_in` calculado cuenta las llamadas a métodos y constructores del tipo (`CALLS`) y, si las hay, sus usos como tipo desde otros tipos (`USES_TYPE`: parámetro, retorno, variable, cast, `new`, `X.CONSTANTE`…), y solo se usa en los tipos que declaran constructor; no ve reflexión ni uso desde JSP o XML.
 ```json
 {{ zero_fanin_classes }}
+```
+
+- **Campos privados que nada lee (sin `READS`)**: campos Java `private` que no son `static final`, con su fichero y línea; `writes` cuenta los métodos que los escriben. Son candidatos: la reflexión, la serialización y los frameworks que leen o escriben campos por nombre (los `ActionForm` de Struts, los beans) no dejan `READS`.
+```json
+{{ unread_fields }}
 ```
 
 ---

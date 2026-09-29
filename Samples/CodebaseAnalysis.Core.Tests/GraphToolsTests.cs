@@ -7,6 +7,7 @@ using CodebaseAnalysis.Core.Support;
 using CodebaseAnalysis.Core.Tests.Enrichment;
 using CodebaseAnalysis.Core.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using Xunit.Abstractions;
 
 namespace CodebaseAnalysis.Core.Tests;
@@ -14,7 +15,8 @@ namespace CodebaseAnalysis.Core.Tests;
 /// <summary>
 /// Las tools del grafo que ve el chat: <c>graph_neighbors</c> sobre el grafo sintético de <see cref="JavaGraphFixture"/>
 /// (con aristas del analizador y de Struts añadidas) y las propiedades de <c>graph_search</c>. El de extremo a extremo
-/// enriquece <see cref="JavaTestRepo"/> con el JDK de los tests.
+/// enriquece <see cref="JavaTestRepo"/> con el JDK de los tests y comprueba los criterios 1 y 6 del plan de referencias de
+/// tipos y campos (docs/plans/2026-09-29-referencias-tipos-campos-plan.md).
 /// </summary>
 public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
 {
@@ -33,6 +35,16 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
     private static readonly int LogLine = JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "log(\"x\")");
     private static readonly int TwoArgsLine = JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "1L)");
     private static readonly int OneArgLine = JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "d.consultar(new java.util.Hashtable());");
+    private static readonly int DaoLocalLine = JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "Dao d = new DaoImpl();");
+    private static readonly int BuscarLine = JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "public com.acme.Bean buscar");
+    private static readonly int CastLine = JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "return (com.acme.Bean) o;");
+    private static readonly int UsosWriteLine = JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "usos = LIMITE;");
+    private static readonly int UsosReadLine = JavaTestRepo.LineOf(JavaTestRepo.ServicioPath, "return usos;");
+
+    /// <summary>Propiedades de una arista USES_TYPE (con <paramref name="contexts"/>) o READS/WRITES del analizador Java.</summary>
+    private static string RefProperties(string[]? contexts, params int[] lines) =>
+        $"{{\"enriched_by\":[\"JavaAnalyzer\"],\"lines\":[{string.Join(',', lines)}],\"count\":{lines.Length}"
+        + (contexts == null ? "" : $",\"contexts\":[{string.Join(',', contexts.Select(c => $"\"{c}\""))}]") + "}";
 
     private static PipelineContext ContextFor(string databasePath)
     {
@@ -52,8 +64,9 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
 
     /// <summary>
     /// El grafo de cbm de <see cref="JavaGraphFixture"/> con lo que añaden el analizador (CALLS con líneas, una a un método de
-    /// interfaz, IMPLEMENTS, todas con su marca <c>enriched_by</c>) y el plugin Struts (Route, Jsp, TilesDefinition y sus
-    /// aristas). Las CALLS heurísticas de cbm del fixture siguen ahí, sin marca.
+    /// interfaz, IMPLEMENTS, USES_TYPE con sus contextos y READS/WRITES de los campos de Servicio, todas con su marca
+    /// <c>enriched_by</c>) y el plugin Struts (Route, Jsp, TilesDefinition y sus aristas). Las CALLS heurísticas de cbm del
+    /// fixture siguen ahí, sin marca.
     /// </summary>
     private async Task<CbmTestGraph> GraphAsync()
     {
@@ -69,6 +82,15 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
         // Una arista sin propiedades: sale sin detalle. (Una con JSON inválido no se puede insertar: la columna generada
         // url_path_gen de cbm la rechaza.)
         await g.EdgeAsync(await Id(Execute), await Id(BaseLog), "CALLS");
+
+        // Schema 2 del analizador (Q6): usos de tipo y accesos a campos, con sus líneas en Servicio.java.
+        var buscar = await Id(JavaGraphFixture.Buscar);
+        var usos = await Id(JavaGraphFixture.UsosField);
+        await g.EdgeAsync(ejecutar, await Id(DaoInterface), "USES_TYPE", RefProperties(["local"], DaoLocalLine));
+        await g.EdgeAsync(buscar, await Id(JavaGraphFixture.BeanQn), "USES_TYPE", RefProperties(["cast", "return"], BuscarLine, CastLine));
+        await g.EdgeAsync(buscar, await Id(JavaGraphFixture.LimiteField), "READS", RefProperties(null, UsosWriteLine));
+        await g.EdgeAsync(buscar, usos, "WRITES", RefProperties(null, UsosWriteLine));
+        await g.EdgeAsync(await Id(JavaGraphFixture.ContarUsos), usos, "READS", RefProperties(null, UsosReadLine));
 
         var route = await g.NodeAsync("Route", "/consultar", RouteQn, JavaTestRepo.StrutsConfigPath, 14, 17,
             "{\"framework\":\"struts\",\"route_path\":\"/consultar\",\"http_method\":\"ANY\",\"action_type\":\"com.acme.web.ConsultarAction\",\"form_bean\":\"consultaForm\"}");
@@ -240,7 +262,7 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
         Assert.Contains("| heurística cbm |  |", Row(execute, BaseLog));
         var members = await NeighborsAsync(g.DatabasePath, $"{{\"qualified_name\":\"{ServicioClass}\",\"direction\":\"out\",\"edge_types\":[\"DEFINES_METHOD\"]}}");
         Assert.Contains("| estructura cbm |", Row(members, JavaGraphFixture.Ejecutar));
-        Assert.Contains("- Procedencia: 2 de estructura de cbm.", members);
+        Assert.Contains("- Procedencia: 4 de estructura de cbm.", members);
         Assert.DoesNotContain("> Aviso", members);
 
         // Lo que escribió el fallback del LLM no pasa por resuelto.
@@ -328,6 +350,63 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
         Assert.Contains("| `RotoDiRegistration` | **Transient** |", di);
     }
 
+    /// <summary>
+    /// Q9: las aristas del analizador de schema 2 salen por defecto, con los contextos de <c>USES_TYPE</c> y el acceso de
+    /// <c>READS</c>/<c>WRITES</c>, en las dos direcciones: lo que usa un método y dónde se usan un tipo o un campo.
+    /// </summary>
+    [Fact]
+    public async Task Type_uses_and_field_accesses_come_by_default_with_their_contexts_and_access()
+    {
+        using var g = await GraphAsync();
+        const string servicio = JavaTestRepo.ServicioPath;
+
+        var buscar = await NeighborsAsync(g.DatabasePath, """{"qualified_name":"Servicio.buscar","direction":"out"}""");
+        Assert.Contains($"| resuelta · JavaAnalyzer | como `cast`, `return` · 2 referencias · líneas {BuscarLine}, {CastLine} de `{servicio}` |",
+            Row(Section(buscar, "## `USES_TYPE` salientes"), JavaGraphFixture.BeanQn));
+        Assert.Contains($"| resuelta · JavaAnalyzer | lectura · 1 acceso · línea {UsosWriteLine} de `{servicio}` |",
+            Row(Section(buscar, "## `READS` salientes"), JavaGraphFixture.LimiteField));
+        Assert.Contains($"| escritura · 1 acceso · línea {UsosWriteLine} de `{servicio}` |",
+            Row(Section(buscar, "## `WRITES` salientes"), JavaGraphFixture.UsosField));
+        Assert.Contains("- Procedencia: 3 resueltas por enriquecedor (JavaAnalyzer).", buscar);
+        Assert.DoesNotContain("> Aviso", buscar);
+
+        // Dónde se usan: el tipo por sus USES_TYPE entrantes y el campo por sus READS y WRITES entrantes.
+        var bean = await NeighborsAsync(g.DatabasePath, $"{{\"qualified_name\":\"{JavaGraphFixture.BeanQn}\",\"direction\":\"in\"}}");
+        Assert.Contains($"`{JavaGraphFixture.Buscar}`", Section(bean, "## `USES_TYPE` entrantes"));
+        var usos = await NeighborsAsync(g.DatabasePath, $"{{\"qualified_name\":\"{JavaGraphFixture.UsosField}\",\"direction\":\"in\"}}");
+        Assert.Contains($"| lectura · 1 acceso · línea {UsosReadLine} de `{servicio}` |", Row(Section(usos, "## `READS` entrantes"), JavaGraphFixture.ContarUsos));
+        Assert.Contains($"| escritura · 1 acceso · línea {UsosWriteLine} de `{servicio}` |", Row(Section(usos, "## `WRITES` entrantes"), JavaGraphFixture.Buscar));
+    }
+
+    /// <summary>
+    /// Criterio 6: con <c>line</c> solo quedan las aristas que tienen esa línea, que es del fichero de su origen. Vale para
+    /// cualquier arista con <c>lines</c>, también las llamadas, y admite el número como texto.
+    /// </summary>
+    [Fact]
+    public async Task The_line_filter_keeps_only_the_references_of_that_line()
+    {
+        using var g = await GraphAsync();
+
+        var text = await NeighborsAsync(g.DatabasePath, $"{{\"qualified_name\":\"Servicio.buscar\",\"direction\":\"out\",\"line\":{UsosWriteLine}}}");
+        Assert.Contains($"- Línea: {UsosWriteLine} del fichero de origen de cada arista (`{JavaTestRepo.ServicioPath}`).", text);
+        Assert.Contains(" · 2 aristas.", text);
+        Assert.Contains($"`{JavaGraphFixture.LimiteField}`", Section(text, "## `READS` salientes"));
+        Assert.Contains($"`{JavaGraphFixture.UsosField}`", Section(text, "## `WRITES` salientes"));
+        Assert.DoesNotContain("## `USES_TYPE`", text);
+
+        var cast = await NeighborsAsync(g.DatabasePath, $"{{\"qualified_name\":\"Servicio.buscar\",\"direction\":\"out\",\"line\":{CastLine}}}");
+        Assert.Contains($"`{JavaGraphFixture.BeanQn}`", Section(cast, "## `USES_TYPE` salientes"));
+        Assert.DoesNotContain("## `READS`", cast);
+
+        // Las CALLS heurísticas de cbm no tienen líneas: con el filtro solo queda la resuelta de esa línea.
+        var call = await NeighborsAsync(g.DatabasePath, $"{{\"qualified_name\":\"Servicio.ejecutar\",\"direction\":\"out\",\"line\":\"{LogLine}\"}}");
+        Assert.Contains($"`{BaseLog}`", Section(call, "## `CALLS` salientes"));
+        Assert.Contains(" · 1 arista.", call);
+
+        var none = await NeighborsAsync(g.DatabasePath, """{"qualified_name":"Servicio.buscar","direction":"out","line":1}""");
+        Assert.Contains("*(El nodo no tiene aristas de esos tipos en esa dirección con la línea 1)*", none);
+    }
+
     [Fact]
     public async Task Struts_edges_show_the_forward_and_the_role()
     {
@@ -388,8 +467,14 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
         Assert.True(new GraphNeighborsTool().IsReadOnly);
     }
 
+    /// <summary>
+    /// Sobre el grafo enriquecido por el analizador real: las CALLS resueltas y la herencia, y los criterios 1 y 6 del plan de
+    /// referencias: USES_TYPE de Servicio a Dao (local), a DaoImpl (new_implicit), a Bean (retorno y cast) y a Filtro
+    /// (parámetro); READS y WRITES con sus líneas, también con el filtro <c>line</c>; y el campo privado sin leer en
+    /// <c>UnreadFields</c>, sin la constante ni el campo que se lee.
+    /// </summary>
     [JdkFact]
-    public async Task After_the_java_enrichment_neighbors_show_the_resolved_calls_and_the_inheritance()
+    public async Task After_the_java_enrichment_neighbors_show_the_calls_the_inheritance_and_the_type_and_field_references()
     {
         var repo = JavaTestRepo.WriteTo(Path.Combine(_temp.Path, "repo"));
         Directory.CreateDirectory(Path.Combine(_temp.Path, "db"));
@@ -411,5 +496,41 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
         var incoming = await NeighborsAsync(graph.DatabasePath, """{"qualified_name":"Base","direction":"in"}""");
         Assert.StartsWith($"# Vecinos en el grafo de `{BaseClass}`", incoming);
         Assert.Contains($"`{ServicioClass}`", Section(incoming, "## `INHERITS` entrantes"));
+
+        // Criterio 1: USES_TYPE de Servicio a Dao (variable local) y a DaoImpl (new con constructor implícito)...
+        const string servicio = JavaTestRepo.ServicioPath;
+        var used = Section(outgoing, "## `USES_TYPE` salientes");
+        Assert.Contains($"| resuelta · JavaAnalyzer | como `local` · 1 referencia · línea {DaoLocalLine} de `{servicio}` |", Row(used, DaoInterface));
+        Assert.Contains($"| como `new_implicit` · 1 referencia · línea {DaoLocalLine} de `{servicio}` |",
+            Row(used, JavaGraphFixture.Qn(JavaTestRepo.DaoImplPath, "DaoImpl")));
+        // ... a Bean (retorno y cast) y a Filtro, el bean que solo se usa como parámetro.
+        var buscar = await NeighborsAsync(graph.DatabasePath, """{"qualified_name":"Servicio.buscar","direction":"out"}""");
+        var buscarUses = Section(buscar, "## `USES_TYPE` salientes");
+        Assert.Contains($"| como `cast`, `return` · 2 referencias · líneas {BuscarLine}, {CastLine} de `{servicio}` |", Row(buscarUses, JavaGraphFixture.BeanQn));
+        Assert.Contains($"| como `param` · 1 referencia · línea {BuscarLine} de `{servicio}` |", Row(buscarUses, JavaGraphFixture.FiltroQn));
+
+        // Criterios 1 y 6: la línea de «usos = LIMITE;» tiene la escritura de usos y la lectura de la constante, y nada más.
+        var atLine = await NeighborsAsync(graph.DatabasePath, $"{{\"qualified_name\":\"Servicio.buscar\",\"direction\":\"out\",\"line\":{UsosWriteLine}}}");
+        Assert.Contains($"| escritura · 1 acceso · línea {UsosWriteLine} de `{servicio}` |", Row(Section(atLine, "## `WRITES` salientes"), JavaGraphFixture.UsosField));
+        Assert.Contains($"| lectura · 1 acceso · línea {UsosWriteLine} de `{servicio}` |", Row(Section(atLine, "## `READS` salientes"), JavaGraphFixture.LimiteField));
+        Assert.Contains(" · 2 aristas.", atLine);
+        Assert.DoesNotContain("## `USES_TYPE`", atLine);
+        var usos = await NeighborsAsync(graph.DatabasePath, $"{{\"qualified_name\":\"{JavaGraphFixture.UsosField}\",\"direction\":\"in\"}}");
+        Assert.Contains($"| lectura · 1 acceso · línea {UsosReadLine} de `{servicio}` |", Row(Section(usos, "## `READS` entrantes"), JavaGraphFixture.ContarUsos));
+
+        // Criterio 1: el campo privado sin leer sale en UnreadFields; la constante static final y el campo que se lee, no.
+        var facetContext = new PipelineContext();
+        facetContext.Set(AnalysisContextKeys.PipelineInput, new AnalysisPipelineInput
+        {
+            RepositoryPath = repo, DatabasePath = graph.DatabasePath, OutputReportsPath = Path.Combine(_temp.Path, "reports")
+        });
+        facetContext.Set(AnalysisContextKeys.Reporter, new CapturingReporter());
+        var facets = await new SqlFacetExtractorStep().ExecuteAsync(new GraphStatusResult { DatabasePath = graph.DatabasePath }, facetContext, 1, null, CancellationToken.None);
+        output.WriteLine($"--- unread_fields\n{facets.UnreadFields}");
+        using var unread = JsonDocument.Parse(facets.UnreadFields);
+        var field = Assert.Single(unread.RootElement.EnumerateArray());
+        Assert.Equal(("pendiente", JavaGraphFixture.PendienteField, servicio, JavaTestRepo.LineOf(servicio, "private String pendiente;"), 0),
+            (field.GetProperty("field_name").GetString(), field.GetProperty("qualified_name").GetString(), field.GetProperty("file").GetString(),
+                field.GetProperty("start_line").GetInt32(), field.GetProperty("writes").GetInt32()));
     }
 }

@@ -203,6 +203,24 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
                               WHERE m.type_id = n.id AND (c.label = 'Constructor' OR json_extract(c.properties, '$.is_constructor') = 1)))
             ORDER BY loc_total DESC, n.qualified_name LIMIT 20;", cancellationToken, parameters: metricParameters);
 
+        // Campos privados que nada lee (sin READS entrante), de los que el analizador Java casó o creó (llevan field_name; pueden
+        // ser Field o, en las constantes de enum, Variable). Quedan fuera las static final: una constante sin leer no guarda
+        // estado. writes cuenta los métodos (o tipos, en inicializadores) que lo escriben. Punto ciego: la reflexión, la
+        // serialización y los frameworks que leen o escriben campos por nombre (ActionForm de Struts, beans) no dejan READS.
+        // Por fichero y línea.
+        facetResult.UnreadFields = await QueryToJsonAsync(conn, $@"
+            SELECT json_extract(n.properties, '$.field_name') AS field_name, n.qualified_name, n.label, n.file,
+                   {StartLineExpr} AS start_line,
+                   {EndLineExpr} AS end_line,
+                   json_extract(n.properties, '$.type_fqn') AS type_fqn,
+                   (SELECT COUNT(1) FROM edges w WHERE w.target_id = n.id AND w.type = 'WRITES') AS writes
+            FROM nodes n
+            WHERE n.label IN ('Field', 'Variable') AND json_extract({SafeJson("n.properties")}, '$.field_name') IS NOT NULL
+              AND json_extract(n.properties, '$.accessibility') = 'private'
+              AND NOT (coalesce(json_extract(n.properties, '$.is_static'), 0) = 1 AND coalesce(json_extract(n.properties, '$.is_final'), 0) = 1)
+              AND NOT EXISTS (SELECT 1 FROM edges r WHERE r.target_id = n.id AND r.type = 'READS')
+            ORDER BY n.file, start_line, n.qualified_name LIMIT 30;", cancellationToken);
+
         // Acciones Struts que ninguna clase del grafo atiende (sin HANDLES entrante), con el motivo que da el propio nodo.
         // Primero las que declaran una clase que no está en el grafo; después, por fichero y línea.
         facetResult.StrutsActionsWithoutHandler = await QueryToJsonAsync(conn, $@"
@@ -618,6 +636,12 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
     /// <summary>Procedencia de <c>fan_in</c>/<c>fan_out</c> calculados; <c>{0}</c> son los enriquecedores de las aristas.</summary>
     public const string SourceResolvedCallsFormat = "calculado: aristas CALLS resueltas por {0}";
 
+    /// <summary>
+    /// Procedencia del <c>fan_in</c> calculado de un tipo cuando el grafo tiene <c>USES_TYPE</c> resueltas; <c>{0}</c> son los
+    /// enriquecedores de las <c>CALLS</c>.
+    /// </summary>
+    public const string SourceResolvedCallsAndTypeUsesFormat = "calculado: aristas CALLS y USES_TYPE de otros tipos resueltas por {0}";
+
     /// <summary>Propiedades del nodo o <c>{}</c> si no son JSON válido, para <c>json_each</c>, que falla con JSON inválido.</summary>
     private static string SafeJson(string column) => $"(CASE WHEN json_valid({column}) THEN {column} ELSE '{{}}' END)";
 
@@ -630,7 +654,8 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
 
     // fan_in / fan_out / method_count / LOC / cyclomatic_total efectivos: la propiedad del grafo si existe; si no, el cálculo.
     private const string FanInExpr = "coalesce(CAST(json_extract(n.properties, '$.fan_in') AS INTEGER), fm.calc_fan_in)";
-    private const string FanInSourceExpr = "CASE WHEN json_extract(n.properties, '$.fan_in') IS NOT NULL THEN @src_graph WHEN fm.calc_fan_in IS NOT NULL THEN @src_calls END";
+    private const string FanInSourceExpr = "CASE WHEN json_extract(n.properties, '$.fan_in') IS NOT NULL THEN @src_graph " +
+        "WHEN fm.calc_fan_in IS NOT NULL THEN CASE WHEN n.label IN (" + TypeLabels + ") THEN @src_type_uses ELSE @src_calls END END";
     private const string FanOutExpr = "coalesce(CAST(json_extract(n.properties, '$.fan_out') AS INTEGER), fm.calc_fan_out)";
     private const string FanOutSourceExpr = "CASE WHEN json_extract(n.properties, '$.fan_out') IS NOT NULL THEN @src_graph WHEN fm.calc_fan_out IS NOT NULL THEN @src_calls END";
     private const string MethodCountExpr = "coalesce(CAST(json_extract(n.properties, '$.method_count') AS INTEGER), fm.calc_method_count)";
@@ -653,6 +678,8 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
     /// <c>method_count</c> por <c>DEFINES_METHOD</c> y <c>cyclomatic_total</c> como suma de los métodos, si todos la tienen.
     /// La LOC por rango de líneas se calcula en cada consulta. Devuelve los parámetros de procedencia de las facetas.
     /// Un tipo cuenta como llamante o llamado solo si el método es de otro tipo: sus llamadas internas no son acoplamiento.
+    /// El <c>fan_in</c> de un tipo cuenta además los orígenes de sus <c>USES_TYPE</c> resueltas entrantes (métodos, campos o
+    /// tipos) que no sean el propio tipo ni sus miembros, para que un bean usado solo como tipo no salga sin uso.
     /// </summary>
     internal static async Task<Dictionary<string, object>> PrepareDerivedMetricsAsync(SqliteConnection conn, CancellationToken ct)
     {
@@ -688,7 +715,17 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             CREATE TEMP TABLE facet_call_enrichers AS
                 SELECT DISTINCT m.value AS enricher FROM edges e, json_each({SafeJson("e.properties")}, '$.enriched_by') m
                 WHERE e.type = 'CALLS' AND m.value <> '{SemanticEnrichmentStep.EnricherName}';
+            DROP TABLE IF EXISTS temp.facet_type_uses;
+            CREATE TEMP TABLE facet_type_uses AS
+                SELECT DISTINCT e.source_id, e.target_id FROM edges e WHERE e.type = 'USES_TYPE' AND {ResolvedEdgePredicate("e.properties")};
+            CREATE INDEX temp.facet_type_uses_target ON facet_type_uses(target_id);
             """, ct);
+        bool typeUses;
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT EXISTS (SELECT 1 FROM temp.facet_type_uses);";
+            typeUses = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct)) == 1;
+        }
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = "SELECT enricher FROM temp.facet_call_enrichers ORDER BY enricher;";
@@ -716,8 +753,16 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
 
                 INSERT INTO facet_metrics(node_id, calc_fan_in, calc_fan_out)
                 SELECT c.id,
-                       (SELECT COUNT(DISTINCT f.source_id) FROM temp.facet_members m JOIN temp.facet_calls f ON f.target_id = m.method_id
-                        WHERE m.type_id = c.id AND f.source_id NOT IN (SELECT method_id FROM temp.facet_members WHERE type_id = c.id)),
+                       (SELECT COUNT(1) FROM (
+                            SELECT f.source_id FROM temp.facet_members m JOIN temp.facet_calls f ON f.target_id = m.method_id
+                            WHERE m.type_id = c.id AND f.source_id NOT IN (SELECT method_id FROM temp.facet_members WHERE type_id = c.id)
+                            UNION
+                            SELECT u.source_id FROM temp.facet_type_uses u
+                            WHERE u.target_id = c.id AND u.source_id <> c.id
+                              AND u.source_id NOT IN (SELECT method_id FROM temp.facet_members WHERE type_id = c.id)
+                              AND NOT EXISTS (SELECT 1 FROM edges d WHERE d.source_id = c.id AND d.target_id = u.source_id AND d.type = 'DEFINES')
+                              AND NOT EXISTS (SELECT 1 FROM nodes s JOIN nodes t ON t.id = c.id WHERE s.id = u.source_id
+                                              AND json_extract({SafeJson("s.properties")}, '$.parent_class') = t.qualified_name))),
                        (SELECT COUNT(DISTINCT f.target_id) FROM temp.facet_members m JOIN temp.facet_calls f ON f.source_id = m.method_id
                         WHERE m.type_id = c.id AND f.target_id NOT IN (SELECT method_id FROM temp.facet_members WHERE type_id = c.id))
                 FROM temp.facet_covered c WHERE c.label IN ({TypeLabels})
@@ -730,6 +775,8 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             ["@src_graph"] = SourceGraph,
             ["@src_calls"] = string.Format(System.Globalization.CultureInfo.InvariantCulture, SourceResolvedCallsFormat,
                 enrichers.Count > 0 ? string.Join(", ", enrichers) : "—"),
+            ["@src_type_uses"] = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                typeUses ? SourceResolvedCallsAndTypeUsesFormat : SourceResolvedCallsFormat, enrichers.Count > 0 ? string.Join(", ", enrichers) : "—"),
             ["@src_members"] = SourceDefinesMethod,
             ["@src_lines"] = SourceLineRange,
             ["@src_cyclomatic"] = SourceCyclomaticSum
