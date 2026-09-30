@@ -237,10 +237,11 @@ public sealed class ReasoningTagStreamParser
         var pending = ctx.MatchBuffer.ToString();
         ctx.MatchBuffer.Clear();
 
+        // Un cierre a medias ("</thi") sigue dentro del tag: es reasoning, no content.
         return ctx.State switch
         {
-            ParserState.InsideTag => new ChunkResult { Reasoning = pending },
-            _                      => new ChunkResult { Content   = pending }
+            ParserState.InsideTag or ParserState.CloseTagMatch => new ChunkResult { Reasoning = pending },
+            _                                                  => new ChunkResult { Content   = pending }
         };
     }
 

@@ -573,6 +573,13 @@ public class OpenAILlmService : ILlmService, IDisposable
     // InvokeStreamingAsync
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// <see cref="LlmStreamChunk.RawFinishReason"/> of a choice the provider never closed: the stream ended (end of the
+    /// body, <c>[DONE]</c> with no final chunk, a read error) before its <c>finish_reason</c>. It comes with
+    /// <see cref="FinishReason.Other"/>, so the answer is not taken for a normal <c>Stop</c>.
+    /// </summary>
+    public const string StreamClosedWithoutFinishReason = "stream_closed_without_finish_reason";
+
    public async IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(
     LlmRequest request,
     [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -663,8 +670,18 @@ public class OpenAILlmService : ILlmService, IDisposable
     // tool calls o ser texto normal ("[V] ...", "[link](...)"). Se decide con el siguiente chunk.
     var undecidedPrefixBuffers = new Dictionary<int, string>();
 
-    bool hasYieldedText      = false;
+    // Choices que ya han emitido texto: por choice, porque el texto de uno no dice nada del
+    // prefijo de otro (con n>1, un choice puede empezar con texto y otro con una tool call).
+    var textYieldedChoices   = new HashSet<int>();
     bool hasYieldedToolCalls = false;
+
+    // Choices cerrados por su finish_reason; los que no lo estén al acabar el stream se cierran después.
+    var finishedChoices = new HashSet<int>();
+
+    // Nombre y argumentos acumulados de las tool calls nativas, por choice e índice. El proveedor
+    // las reenvía según llegan y las ensambla el consumidor; esto solo sirve para avisar de las que
+    // quedan con los argumentos cortados si el stream se cierra sin finish_reason.
+    var nativeToolCalls = new Dictionary<int, Dictionary<int, (string? Name, StringBuilder Args)>>();
 
     // Decide el destino del content ya limpio de <think>: devuelve el texto a emitir ahora
     // (incluido el prefijo retenido, en orden) o null si queda retenido. Con endOfStream,
@@ -678,7 +695,7 @@ public class OpenAILlmService : ILlmService, IDisposable
             return null;
         }
 
-        if (hasYieldedText && !undecidedPrefixBuffers.ContainsKey(idx))
+        if (textYieldedChoices.Contains(idx) && !undecidedPrefixBuffers.ContainsKey(idx))
             return content;
 
         // Se decide por el prefijo acumulado, no por el chunk suelto (RF-111)
@@ -708,6 +725,117 @@ public class OpenAILlmService : ILlmService, IDisposable
     // True una vez que se emite un chunk con el contador de tokens, para no re-emitirlo
     // si el bloque `usage` llega en el mismo chunk que el finish_reason.
     bool tokensReported = false;
+
+    // Cierra un choice: vacía el PendingBuffer de <think>, resuelve el prefijo retenido, drena el
+    // buffer de tool calls embebidas y emite el chunk final. Lo usan su finish_reason y, con
+    // streamClosed, el fin del stream sin finish_reason; en ese caso una tool call embebida con el
+    // JSON cortado se descarta con aviso en lugar de salir como texto (no es una respuesta, es una
+    // llamada a medias), y se avisa de las tool calls nativas que quedaron con los argumentos cortados.
+    IEnumerable<LlmStreamChunk> CloseChoice(
+        int idx, FinishReason finishReason, string? rawFinishReason, bool streamClosed)
+    {
+        // Flush del PendingBuffer antes de cerrar — fix pérdida de contenido final
+        var flushed = OpenAiPluginRegistry.FlushStream(GetExtractorCtx(idx));
+
+        if (flushed.HasReasoning)
+        {
+            yield return new LlmStreamChunk
+            {
+                ChoiceIndex = idx,
+                Delta       = flushed.Reasoning,
+                IsThinking  = true
+            };
+        }
+
+        // Un prefijo indeterminado se resuelve aquí aunque el flush venga vacío
+        if (flushed.HasContent || undecidedPrefixBuffers.ContainsKey(idx))
+        {
+            var text = RouteContent(idx, flushed.Content, endOfStream: true);
+            if (!string.IsNullOrEmpty(text))
+            {
+                textYieldedChoices.Add(idx);
+                yield return new LlmStreamChunk
+                {
+                    ChoiceIndex = idx,
+                    Delta       = text,
+                    IsThinking  = false
+                };
+            }
+        }
+
+        // ── Drain buffer de tool calls embebidas en content (RF-111) ─────────
+        if (embeddedToolCallBuffers.Remove(idx, out var embeddedBuf) && embeddedBuf.Length > 0)
+        {
+            var bufferedContent = embeddedBuf.ToString();
+
+            var availableNames  = request.Tools?.Select(t => t.Name).ToHashSet() ?? [];
+            var embeddedCalls   = ToolCallXmlParser.ParseToolCalls(bufferedContent, availableNames);
+
+            if (embeddedCalls.Count > 0)
+            {
+                hasYieldedToolCalls = true;
+                yield return new LlmStreamChunk
+                {
+                    ChoiceIndex     = idx,
+                    Delta           = string.Empty,
+                    ToolCallUpdates = [.. embeddedCalls.Select((tc, i) => new ToolCallUpdate
+                    {
+                        Index                   = i,
+                        ToolCallId              = tc.Id,
+                        FunctionName            = tc.Name,
+                        FunctionArgumentsUpdate = tc.Arguments
+                    })]
+                };
+            }
+            else if (streamClosed && availableNames.Count > 0 && IsIncompleteToolCall(bufferedContent))
+            {
+                if (_logger.IsEnabled(LogLevel.Warning))
+                    _logger.LogWarning(
+                        "The stream from model {Model} ended in the middle of an embedded tool call of choice {Choice}: " +
+                        "its JSON is incomplete, so it was discarded instead of guessed. Content: {Content}",
+                        request.Model, idx, Truncate(bufferedContent, RawBodyLogLimit));
+            }
+            else
+            {
+                // No son tool calls — emitir como texto (fallback)
+                textYieldedChoices.Add(idx);
+                yield return new LlmStreamChunk
+                {
+                    ChoiceIndex = idx,
+                    Delta       = bufferedContent,
+                    IsThinking  = false
+                };
+            }
+        }
+
+        if (streamClosed && nativeToolCalls.TryGetValue(idx, out var calls))
+        {
+            foreach (var (callIndex, (name, args)) in calls)
+            {
+                if (args.Length > 0 && IsIncompleteToolCall(args.ToString()) && _logger.IsEnabled(LogLevel.Warning))
+                    _logger.LogWarning(
+                        "The stream from model {Model} ended while the arguments of tool call {CallIndex} ('{Tool}') of " +
+                        "choice {Choice} were incomplete: the step receives them cut, as they arrived. " +
+                        "Arguments: {Arguments}",
+                        request.Model, callIndex, name, idx, Truncate(args.ToString(), RawBodyLogLimit));
+            }
+        }
+
+        yield return new LlmStreamChunk
+        {
+            ChoiceIndex     = idx,
+            Delta           = string.Empty,
+            IsComplete      = true,
+            FinishReason    = finishReason,
+            RawFinishReason = rawFinishReason,
+            // Usa el acumulado del stream: el bloque `usage` puede venir en el mismo chunk del
+            // finish_reason (algunos proveedores) o haberse leído en un chunk previo.
+            TokensUsed       = totalTokens,
+            PromptTokens     = promptTokens,
+            CompletionTokens = completionTokens
+        };
+        if (totalTokens.HasValue) tokensReported = true;
+    }
 
     using var stream = await httpResponse.Content.ReadAsStreamAsync(cancellationToken);
     using var reader = new StreamReader(stream, Encoding.UTF8);
@@ -802,7 +930,7 @@ public class OpenAILlmService : ILlmService, IDisposable
                     var nativeText = undecidedPrefixBuffers.Remove(choiceIndex, out var pendingPrefix)
                         ? pendingPrefix + textDelta
                         : textDelta;
-                    hasYieldedText    = true;
+                    textYieldedChoices.Add(choiceIndex);
                     yield return new LlmStreamChunk
                     {
                         ChoiceIndex = choiceIndex,
@@ -833,7 +961,7 @@ public class OpenAILlmService : ILlmService, IDisposable
                         var text = RouteContent(choiceIndex, result.Content, endOfStream: false);
                         if (text != null)
                         {
-                            hasYieldedText = true;
+                            textYieldedChoices.Add(choiceIndex);
                             yield return new LlmStreamChunk
                             {
                                 ChoiceIndex = choiceIndex,
@@ -848,12 +976,24 @@ public class OpenAILlmService : ILlmService, IDisposable
             // ── Tool call deltas ──────────────────────────────────────────────
             if (delta?["tool_calls"] is JArray toolUpdates && toolUpdates.Count > 0)
             {
+                List<ToolCallUpdate> updates = [.. toolUpdates.Select(t => t.ToFrameworkToolCallUpdate())];
+
+                if (!nativeToolCalls.TryGetValue(choiceIndex, out var calls))
+                    nativeToolCalls[choiceIndex] = calls = [];
+                foreach (var update in updates)
+                {
+                    var call = calls.TryGetValue(update.Index, out var known) ? known : (null, new StringBuilder());
+                    if (update.FunctionName != null) call.Name = update.FunctionName;
+                    call.Args.Append(update.FunctionArgumentsUpdate);
+                    calls[update.Index] = call;
+                }
+
                 hasYieldedToolCalls = true;
                 yield return new LlmStreamChunk
                 {
                     ChoiceIndex     = choiceIndex,
                     Delta           = string.Empty,
-                    ToolCallUpdates = [.. toolUpdates.Select(t => t.ToFrameworkToolCallUpdate())]
+                    ToolCallUpdates = updates
                 };
             }
 
@@ -861,106 +1001,31 @@ public class OpenAILlmService : ILlmService, IDisposable
             var finishStr = choice["finish_reason"]?.Value<string>();
             if (!string.IsNullOrEmpty(finishStr))
             {
-                // Flush del PendingBuffer antes de cerrar — fix pérdida de contenido final
-                var flushed = OpenAiPluginRegistry.FlushStream(extractCtx);
-
-                if (flushed.HasReasoning)
-                {
-                    yield return new LlmStreamChunk
-                    {
-                        ChoiceIndex = choiceIndex,
-                        Delta       = flushed.Reasoning,
-                        IsThinking  = true
-                    };
-                }
-
-                // Un prefijo indeterminado se resuelve aquí aunque el flush venga vacío
-                if (flushed.HasContent || undecidedPrefixBuffers.ContainsKey(choiceIndex))
-                {
-                    var text = RouteContent(choiceIndex, flushed.Content, endOfStream: true);
-                    if (!string.IsNullOrEmpty(text))
-                    {
-                        hasYieldedText = true;
-                        yield return new LlmStreamChunk
-                        {
-                            ChoiceIndex = choiceIndex,
-                            Delta       = text,
-                            IsThinking  = false
-                        };
-                    }
-                }
-
-                // ── Drain buffer de tool calls embebidas en content (RF-111) ─────────
-                if (embeddedToolCallBuffers.TryGetValue(choiceIndex, out var embeddedBuf)
-                    && embeddedBuf.Length > 0)
-                {
-                    var bufferedContent = embeddedBuf.ToString();
-                    embeddedToolCallBuffers.Remove(choiceIndex);
-
-                    var availableNames  = request.Tools?.Select(t => t.Name).ToHashSet() ?? [];
-                    var embeddedCalls   = ToolCallXmlParser.ParseToolCalls(bufferedContent, availableNames);
-
-                    if (embeddedCalls.Count > 0)
-                    {
-                        hasYieldedToolCalls = true;
-                        yield return new LlmStreamChunk
-                        {
-                            ChoiceIndex     = choiceIndex,
-                            Delta           = string.Empty,
-                            ToolCallUpdates = [.. embeddedCalls.Select((tc, i) => new ToolCallUpdate
-                            {
-                                Index                   = i,
-                                ToolCallId              = tc.Id,
-                                FunctionName            = tc.Name,
-                                FunctionArgumentsUpdate = tc.Arguments
-                            })]
-                        };
-                    }
-                    else
-                    {
-                        // No son tool calls — emitir como texto (fallback)
-                        hasYieldedText = true;
-                        yield return new LlmStreamChunk
-                        {
-                            ChoiceIndex = choiceIndex,
-                            Delta       = bufferedContent,
-                            IsThinking  = false
-                        };
-                    }
-                }
-
+                finishedChoices.Add(choiceIndex);
                 (var finishReason, var rawFinishReason) = ParseFinishReasonSafe(finishStr);
-                yield return new LlmStreamChunk
-                {
-                    ChoiceIndex     = choiceIndex,
-                    Delta           = string.Empty,
-                    IsComplete      = true,
-                    FinishReason    = finishReason,
-                    RawFinishReason = rawFinishReason,
-                    // Usa el acumulado del stream. Puede venir en este mismo chunk
-                    // (algunos proveedores) o haberse leído en un chunk previo.
-                    TokensUsed       = totalTokens ?? usage?["total_tokens"]?.Value<int?>(),
-                    PromptTokens     = promptTokens,
-                    CompletionTokens = completionTokens
-                };
-                if (totalTokens.HasValue) tokensReported = true;
+                foreach (var closing in CloseChoice(choiceIndex, finishReason, rawFinishReason, streamClosed: false))
+                    yield return closing;
             }
         }
     }
 
-    // Stream cerrado ([DONE] o EOF) sin finish_reason para algún choice con prefijo aún
-    // indeterminado: se emite como texto — no perder contenido en ningún camino.
-    foreach (var (idx, pending) in undecidedPrefixBuffers)
+    // Una cancelación del llamante no vacía nada: sigue siendo cancelación, no un fin de stream.
+    cancellationToken.ThrowIfCancellationRequested();
+
+    // Stream cerrado (EOF, [DONE] sin chunk final o error de lectura) con choices sin finish_reason:
+    // se cierran como lo haría su finish_reason para no perder lo retenido (texto de un tag a medias,
+    // prefijo indeterminado, tool call embebida), pero con FinishReason.Other, porque el fin es anómalo.
+    foreach (var idx in extractorContexts.Keys.Where(k => !finishedChoices.Contains(k)).Order().ToList())
     {
-        hasYieldedText = true;
-        yield return new LlmStreamChunk
-        {
-            ChoiceIndex = idx,
-            Delta       = pending,
-            IsThinking  = false
-        };
+        if (_logger.IsEnabled(LogLevel.Warning))
+            _logger.LogWarning(
+                "The stream from model {Model} closed without a finish_reason for choice {Choice}: what it held is " +
+                "flushed and the choice ends with FinishReason.Other ('{RawFinishReason}').",
+                request.Model, idx, StreamClosedWithoutFinishReason);
+
+        foreach (var closing in CloseChoice(idx, FinishReason.Other, StreamClosedWithoutFinishReason, streamClosed: true))
+            yield return closing;
     }
-    undecidedPrefixBuffers.Clear();
 
     // Ollama (y otros) envían el bloque `usage` en un chunk final con `choices: []`,
     // posterior al chunk del finish_reason. En ese caso los tokens no se reportaron
@@ -982,7 +1047,7 @@ public class OpenAILlmService : ILlmService, IDisposable
     // consumió prompt y la salida fue ~0, lo más probable es que el prompt llenara la ventana
     // de contexto (p. ej. el cap de 32768 de Ollama por /v1) sin dejar hueco para generar.
     // Front-truncation de Ollama, además, descarta el system prompt y los mensajes antiguos.
-    if (!hasYieldedText && !hasYieldedToolCalls)
+    if (textYieldedChoices.Count == 0 && !hasYieldedToolCalls)
     {
         if ((completionTokens ?? 0) <= 1 && (promptTokens ?? 0) > 0 && _logger.IsEnabled(LogLevel.Warning))
             _logger.LogWarning(
@@ -1019,6 +1084,41 @@ public class OpenAILlmService : ILlmService, IDisposable
         var rest = t[1..].TrimStart();
         if (rest.Length == 0) return ContentPrefixKind.Undecided;
         return rest[0] == '{' ? ContentPrefixKind.ToolCall : ContentPrefixKind.Text;
+    }
+
+    /// <summary>
+    /// Si una tool call (embebida en content o los argumentos de una nativa) quedó cortada: un
+    /// &lt;tool_call&gt; sin su cierre, o un JSON con una cadena o un objeto/array sin cerrar. Solo
+    /// mira la estructura, no si el JSON es válido: un JSON completo pero mal formado no es un corte.
+    /// </summary>
+    internal static bool IsIncompleteToolCall(string content)
+    {
+        var t = content.AsSpan().Trim();
+        if (t.StartsWith("<tool_call", StringComparison.OrdinalIgnoreCase))
+            return t.IndexOf("</tool_call>", StringComparison.OrdinalIgnoreCase) < 0;
+
+        var depth    = 0;
+        var inString = false;
+        var escaped  = false;
+        foreach (var c in t)
+        {
+            if (inString)
+            {
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"':        inString = true; break;
+                case '{' or '[': depth++;         break;
+                case '}' or ']': depth--;         break;
+            }
+        }
+
+        return inString || depth > 0;
     }
 
     private (FinishReason Reason, string? Raw) ParseFinishReasonSafe(string rawFinish)

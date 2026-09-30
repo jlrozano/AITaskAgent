@@ -193,7 +193,18 @@ Mientras tanto se sigue con el código que no depende del LLM, por tandas:
   - `view_code_item` en Java: punto de extensión `ICodeItemLocator` en FileTools, localizador por grafo y, sin grafo, por llaves.
   Sobre la copia del repositorio objetivo, el recorrido encuentra los `Class.forName` de la factoría de DAO; falta ver qué
   grupo sale sobre su grafo enriquecido (hay que reindexar) y, con LLM, si el auditor sigue la regla.
-- **D. Streaming:** buffers perdidos sin `finish_reason` y `hasYieldedText` por choice.
+- **D. Streaming — hecha el 2026-09-29** (detalle en «Seguimiento» de la auditoría; OpenAILLmService 99, Core 540 con JDK,
+  Web 113). Solo `OpenAILLmService`; framework y `GeminiLlmService` sin tocar:
+  - un stream que se cierra sin `finish_reason` (fin del cuerpo, `[DONE]` sin chunk final o error de lectura) cierra cada
+    choice abierto como lo haría su `finish_reason`: vacía el lector de `<think>`, el prefijo retenido y el buffer de tool
+    calls embebidas, y emite el chunk final con `FinishReason.Other` y `RawFinishReason`
+    `stream_closed_without_finish_reason`, con aviso en log. Antes el consumidor lo daba por `Stop`;
+  - una tool call embebida con el JSON cortado se descarta con aviso; las nativas se reenvían según llegan y no se pueden
+    retirar, así que solo se avisa de las que quedan con los argumentos cortados;
+  - una cancelación del llamante a mitad de stream lanza `OperationCanceledException` y no vacía nada. Antes el bucle salía
+    sin excepción;
+  - `hasYieldedText` pasa a ser por choice (`textYieldedChoices`), y el `Flush` del lector de `<think>` deja como reasoning un
+    cierre a medias (`</thi`), que antes salía como content.
 - **E. Evaluación:** validador determinista de informes.
 
 Siguen fuera, pendientes de decisión del usuario:
@@ -219,8 +230,9 @@ Siguen fuera, pendientes de decisión del usuario:
    Completions, `gpt-5.4`/`gpt-5-mini` de este recurso sueltan la respuesta entera al final (filtro de contenido sobre
    la completion completa, medido fuera de la app); `gpt-4.1-mini` y la Responses API sí gotean. El usuario no tiene
    acceso a la configuración de Azure y probará con otro proveedor. Si hiciera falta Azure: proveedor sobre la
-   Responses API (contrato nuevo, pasa por `/brainstorm`). Sin tocar: si el stream se cierra sin `finish_reason` se
-   pierden `embeddedToolCallBuffers` y el `PendingBuffer` de `<think>`; `hasYieldedText` es global y no por choice.
+   Responses API (contrato nuevo, pasa por `/brainstorm`). Corregido en la tanda D (2026-09-29) lo que era del código: el
+   stream que se cierra sin `finish_reason` ya no pierde `embeddedToolCallBuffers` ni el `PendingBuffer` de `<think>`, y
+   `hasYieldedText` es por choice.
 3. **Después del analizador Java**, en este orden (fuera de la primera tanda según la spec): corregir los consumidores
    que leen propiedades que nadie escribe (`SqlFacetExtractorStep.cs:82,90,108,118,128,339`: `http_verb`,
    `entry_method`, `cyclomatic`, `loc_total`, `fan_in` en Class, `di_lifetime`); portar C# a Roslyn en proceso, con

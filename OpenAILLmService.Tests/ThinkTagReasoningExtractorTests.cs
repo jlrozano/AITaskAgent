@@ -65,4 +65,19 @@ public class ThinkTagReasoningExtractorTests
         Assert.Equal("<th", flushed.Content);
         Assert.Equal(string.Empty, flushed.Reasoning);
     }
+
+    [Fact]
+    public void Flush_keeps_an_incomplete_close_tag_at_stream_end_as_reasoning()
+    {
+        // Inside <think> a partial "</thi" is still reasoning: the stream was cut before the tag closed.
+        var extractor = new ThinkTagReasoningExtractor();
+        var ctx = new TagExtractionContext();
+
+        var chunk = extractor.ProcessChunk("<think>pienso</thi", ctx);
+        var flushed = extractor.Flush(ctx);
+
+        Assert.Equal("pienso", chunk.Reasoning);
+        Assert.Equal("</thi", flushed.Reasoning);
+        Assert.Equal(string.Empty, flushed.Content);
+    }
 }

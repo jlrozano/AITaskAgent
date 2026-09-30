@@ -774,3 +774,14 @@ siguen con Roslyn (`CORE/Hosting/AnalysisToolRegistration.cs:41-42`). Cada decla
 `FileTools.Tests/CodeItemLocatorTests.cs` y `CodebaseAnalysis.Core.Tests/JavaCodeItemLocatorTests.cs`. Límites: el localizador
 por llaves no reconoce campos ni métodos de clases anónimas, y los genéricos se comparan por su nombre escrito (`T`) y no por
 el borrado que usa el grafo (`Object`).
+
+**Streaming del proveedor OpenAI (tanda D, mismo día).** No era un hallazgo de esta auditoría, sino los dos defectos anotados
+en el punto de streaming del documento de estado; se registra aquí para seguir la serie. Suites al terminar: OpenAILLmService 99
+(80 antes), Core 540 con JDK y Web 113; framework sin tocar. Un stream que se cierra sin `finish_reason` cierra ahora cada
+choice abierto con el mismo código que su `finish_reason` (`CloseChoice`, `OpenAILLmService/OpenAILlmService.cs:734`, llamado en
+`:1006` y `:1026`), con `FinishReason.Other` y `RawFinishReason` `stream_closed_without_finish_reason` (`:581`) en lugar del
+`Stop` que ponía el consumidor por defecto (`Framework/LLM/Steps/BaseLlmStep.LlmInvocation.cs:669`). Una tool call embebida
+con el JSON cortado se descarta con aviso (`:790`, `IsIncompleteToolCall` en `:1094`), y una cancelación del llamante lanza
+en lugar de vaciar (`:1013`). `hasYieldedText` pasa a ser por choice (`:675`). Tests: `StreamingAbnormalEndTests.cs` y
+`ThinkTagReasoningExtractorTests.Flush_keeps_an_incomplete_close_tag_at_stream_end_as_reasoning`. Lo que depende de Azure
+(Responses API) sigue aparcado.
