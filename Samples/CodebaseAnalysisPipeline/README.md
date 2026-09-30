@@ -34,6 +34,9 @@ Los argumentos de línea de comandos se imponen a la configuración:
 | `--force-reindex true` | Parte de un grafo nuevo y guarda antes una copia de la ejecución anterior (apartado 3.1). |
 | `--reports <lista>` | Informes a ejecutar, separados por comas (alias en el apartado 5). Sin lista se ejecutan los de `RequestedReports`, y si esa lista está vacía, todos. |
 | `--log-level <nivel>`, `--debug`, `--trace` | Nivel de log (por defecto `Information`). |
+| `--validate-reports` | Valida los informes que hay en disco y termina, sin LLM ni pipeline (apartado 3.9). Usa `--repo`, `--output` y `--db`. |
+| `--validation-output <ruta>` | Con `--validate-reports`, carpeta donde se escribe `_validation.json`. Relativa al repositorio o absoluta; por defecto, la de informes. |
+| `--expected <fichero>` | Con `--validate-reports`, un `expected-findings.json` con los hallazgos esperados (apartado 3.9). Relativo al directorio actual. |
 
 Cualquier clave de configuración admite también la sintaxis estándar de .NET, por ejemplo `--AITaskAgent:Conversation:UseSlidingWindow true`.
 
@@ -177,6 +180,31 @@ Cada llamada al modelo deja en su evento final (`LlmResponseEvent`) los tokens d
 El mismo agregado queda en `reports/_run_meta.json` (`kind`, `runId`, `status`, `startedAt`, `finishedAt`, `durationMs`, `app` y `usage`, con `calls`, `promptTokens`, `completionTokens`, `totalTokens`, `costUsd`, `unpricedCalls` y `bySource`), que no es un informe del catálogo: ni se lista ni se copia a `backups/`. Va en un fichero y no en el `analysis-meta` del `00` porque es de la ejecución y no de un informe: una regeneración sin síntesis no reescribe el `00`, y la síntesis no puede contar su propia llamada antes de escribirlo.
 
 El coste sale de los precios por millón de tokens de `LlmConfiguration:Providers:<p>:Models`, una entrada por modelo con `Name`, `InputPricePerMillion` y `OutputPricePerMillion` en dólares, que es la forma que lee `LlmProvider.CalculateCost` en el framework. `Name` es el modelo del rol, en Azure el nombre del despliegue; si el servicio responde con el nombre versionado del modelo, el precio se busca también por el del despliegue. El JSON del sample declara `gpt-5.4` con los dos precios a `null` porque no se conoce la tarifa del contrato de Azure. Sin los dos precios el modelo no tiene precio, su coste es `null` y no 0, y al arrancar se avisa con «💲 Sin precio en 'AzureOpenAI' para gpt-5.4». Para tener coste hay que poner la tarifa del contrato: un precio de lista sería solo orientativo. Si unas llamadas tienen precio y otras no, el coste es un mínimo y lo dice (`unpricedCalls`).
+
+### 3.9 Validación de informes
+
+Al terminar el análisis, antes del resumen, `ReportValidator` comprueba sin LLM los informes del catálogo que hay en la carpeta (`00` a `09`) contra el formato que piden las plantillas, escribe `reports/_validation.json` y resume en la consola. No bloquea ni cambia el código de salida. Con `--validate-reports` hace solo eso sobre los informes que ya existen, sin construir roles, sin ejecutar el pipeline y sin crear `logs/`; con `--validation-output` fuera del repositorio no escribe nada en él:
+
+```powershell
+dotnet run --project Samples/CodebaseAnalysisPipeline/Samples.CodebaseAnalysisPipeline.csproj --no-build -- `
+    --validate-reports --repo "C:\ruta\al\repositorio" --validation-output "C:\tmp\eval" --expected "C:\eval\expected-findings.json"
+```
+
+Las comprobaciones, por informe:
+
+| Comprobación | Qué mira | Error o aviso |
+|---|---|---|
+| `citations` | cada `ruta:línea`, `ruta:ini-fin` o ruta con extensión entre comillas invertidas, fuera de bloques de código, existe y la línea está en rango. Se resuelve como el visor web, relativa a la raíz, y si no existe, por sufijo contra los ficheros del repositorio (`CGAR.bas:12` casa con `.codebase/access_export/modules/CGAR.bas`). Quedan fuera `.git`, `bin`, `obj`, `node_modules`, la carpeta de informes y `.codebase` salvo `access_export` | inexistente o fuera de rango, error; ambigua entre varios ficheros, aviso |
+| `source_references` | `nombre › sección` apunta a un informe, informe propio o documento con esa sección, y el nombre de fichero de un informe del catálogo existe | error |
+| `finding_ids` | los identificadores `PREFIJO-NNN` de `_common_rules.md`: casi bien formados (`SEC-01`, `SEC_001`) con el prefijo de un hallazgo definido, dos encabezados con el mismo identificador, el mismo identificador en dos filas de una tabla, y referencias a un identificador que nadie define (en el `00`, contra todos los informes) | formato y encabezado repetido, error; fila repetida y referencia sin definir, aviso |
+| `severe_findings` | cada hallazgo P0 o P1 (por su encabezado o por la columna de severidad de su fila) cita al menos una ubicación válida en su sección o sus filas. Solo `report_errores_prompt.md` define la escala P0-P3; en los demás informes se aplica si el informe la usa | error |
+| `graph_names` | con BD, un nombre con puntos (`Clase.metodo`) cuyo primer tramo es un nodo del grafo existe como nombre cualificado o sufijo de uno; los de fuera (`ADODB.Connection`) no se comprueban | aviso |
+| `metadata` | la última línea `analysis-meta`, con `health` Green, Amber o Red y la procedencia de la tanda B (`model`, `system_sha`, `prompt_sha`, `graph`) | error; que no sea la última línea, aviso |
+| `mermaid` | el tipo de cada bloque es uno de los de `_mermaid_guidelines.md` | prohibido o desconocido, error; `flowchart TB` o `graph TD`, aviso |
+
+`_validation.json` lleva, por informe, las cifras (`scores`: citas totales y válidas con su porcentaje, hallazgos, P0/P1 sin ubicación, identificadores duplicados y mal formados, nombres del grafo, bloques Mermaid, claves de procedencia que faltan), el estado de cada comprobación, los problemas con su línea, y cada cita, referencia, nombre y hallazgo; además los totales, los identificadores que definen varios informes (`crossReportIdCollisions`) y, con `--expected`, la comparación.
+
+**Hallazgos esperados.** `--expected` compara los hallazgos de los informes con una lista escrita a mano. La plantilla vacía y documentada está en `Samples/CodebaseAnalysis.Core/evaluation/expected-findings.template.json`, que también se copia junto al ejecutable; admite comentarios `//`. Cada esperado nombra el informe (fichero o alias) y casa con un hallazgo si este cita el fichero indicado (ruta o sufijo), con un rango de líneas que se solape si se da, y si su texto contiene todas las palabras clave, sin distinguir mayúsculas ni tildes. El resultado da la cobertura (esperados encontrados) y, por cada informe de la lista, los hallazgos que no casan con ninguno: los candidatos a falso positivo, que se revisan a mano. La lista de cada repositorio la decide quien evalúa.
 
 ## 4. Configuración
 

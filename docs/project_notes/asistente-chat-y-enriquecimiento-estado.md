@@ -205,7 +205,17 @@ Mientras tanto se sigue con el código que no depende del LLM, por tandas:
     sin excepción;
   - `hasYieldedText` pasa a ser por choice (`textYieldedChoices`), y el `Flush` del lector de `<think>` deja como reasoning un
     cierre a medias (`</thi`), que antes salía como content.
-- **E. Evaluación:** validador determinista de informes.
+- **E. Evaluación — hecha el 2026-09-30** (detalle y tests en «Seguimiento» de la auditoría, recomendación 13; Core 569 con
+  JDK, Web 116, Vitest 206). Sin LLM:
+  - `ReportValidator` comprueba citas `ruta:línea` (también por sufijo), citas `nombre › sección`, identificadores
+    `PREFIJO-NNN`, P0/P1 con ubicación, nombres del grafo, procedencia en `analysis-meta` y tipos Mermaid, y escribe
+    `reports/_validation.json`;
+  - corre al final del análisis (CLI) y de cada ejecución no cancelada (web: `run.completed` y celda «Citas válidas»), y a
+    demanda con `--validate-reports` y `GET /api/reports/validation`;
+  - `expected-findings.json`: formato, plantilla vacía en `CORE/evaluation/` y comparador (`--expected`). **Sin listas
+    rellenas: las decide el usuario**, igual que los repositorios fijos de evaluación;
+  - primera medida sobre TestAgenteAnalisis (guía, apartado 1.15): 164/164 citas válidas y ninguna procedencia (informes
+    anteriores a la tanda B); el 01 y el 04 no citan código, y `SEC-001`-`003` y `ARC-001`/`002` chocan entre informes.
 
 Siguen fuera, pendientes de decisión del usuario:
 - (a) fusionar informes;
@@ -224,9 +234,9 @@ Siguen fuera, pendientes de decisión del usuario:
    - 27 declaraciones sin nodo porque su QN lo ocupa un `Field` de cbm;
    - los `Function` gemelos de métodos de interfaz no se parchean;
    - un `struts-config` con XML inválido (`parametrizacion/markUp`).
-2. **Streaming del chat con Azure — aparcado.** El arreglo del proveedor está hecho y sin commitear
-   (`ClassifyContentPrefix`/`RouteContent` en `OpenAILLmService/OpenAILlmService.cs`, tests en
-   `OpenAILLmService.Tests/StreamingEmbeddedToolCallPrefixTests.cs`, 57/57). Lo que queda es de Azure: con Chat
+2. **Streaming del chat con Azure — aparcado.** El arreglo del proveedor está commiteado (`39c72f4` y anteriores:
+   `ClassifyContentPrefix`/`RouteContent` en `OpenAILLmService/OpenAILlmService.cs`, tests en
+   `OpenAILLmService.Tests/StreamingEmbeddedToolCallPrefixTests.cs`, y el cierre sin `finish_reason` de la tanda D). Lo que queda es de Azure: con Chat
    Completions, `gpt-5.4`/`gpt-5-mini` de este recurso sueltan la respuesta entera al final (filtro de contenido sobre
    la completion completa, medido fuera de la app); `gpt-4.1-mini` y la Responses API sí gotean. El usuario no tiene
    acceso a la configuración de Azure y probará con otro proveedor. Si hiciera falta Azure: proveedor sobre la

@@ -785,3 +785,25 @@ con el JSON cortado se descarta con aviso (`:790`, `IsIncompleteToolCall` en `:1
 en lugar de vaciar (`:1013`). `hasYieldedText` pasa a ser por choice (`:675`). Tests: `StreamingAbnormalEndTests.cs` y
 `ThinkTagReasoningExtractorTests.Flush_keeps_an_incomplete_close_tag_at_stream_end_as_reasoning`. Lo que depende de Azure
 (Responses API) sigue aparcado.
+
+**Recomendación 13, evaluación determinista (tanda E, 2026-09-30), hecha en la parte sin LLM.** Suites al terminar: Core 569
+con JDK (540 antes), Web 116 (113) y Vitest 206 (204). `ReportValidator` (`CORE/Reports/ReportValidator.cs`) valida los
+informes del catálogo contra las plantillas: citas `ruta:línea` que existen y están en rango, resueltas como el visor y, si
+la ruta viene incompleta, por sufijo sin las copias de `backups/`; citas `nombre › sección`; identificadores `PREFIJO-NNN`
+bien formados y únicos; P0/P1 con al menos una ubicación válida; nombres cualificados que están en el grafo; `analysis-meta`
+con semáforo y la procedencia de la recomendación 12; y tipos Mermaid de `_mermaid_guidelines.md` (un test comprueba que la
+lista del validador es la de la plantilla). Escribe `reports/_validation.json` y un resumen. Corre al final del análisis en la
+CLI y al cerrar cada ejecución no cancelada en la web (`CompleteRun`, con los totales en `run.completed` y la celda «Citas
+válidas» en el resumen), y a demanda con `--validate-reports` (con `--validation-output` para no escribir en el repositorio) y
+`GET /api/reports/validation`. La validación la hace el anfitrión y no un paso del pipeline porque el motor cierra el canal de
+eventos al terminar. Los hallazgos esperados tienen formato (`expected-findings.json`, plantilla vacía y documentada en
+`CORE/evaluation/`) y comparador de cobertura y no esperados (`CORE/Reports/ExpectedFindings.cs`, `--expected`); no hay
+ninguna lista rellena, porque la decide el usuario, y la recomendación pedía tres repositorios fijos que siguen sin elegir.
+Tests: `ReportValidatorTests.cs` (repo e informes sintéticos, una comprobación por test y el comparador) y
+`ReportValidationWebTests.cs`.
+
+Primera medida, sobre los nueve informes de TestAgenteAnalisis (guía, apartado 1.15): 164 de 164 citas válidas, 8 hallazgos
+P0/P1 y todos con ubicación, 137 nombres del grafo y todos presentes, y los nueve sin procedencia porque son anteriores a la
+tanda B. Lo que sí sale: el 01 y el 04 no citan ninguna línea de código, y `SEC-001` a `SEC-003` y `ARC-001`/`ARC-002` son
+hallazgos distintos en dos informes cada uno, que el 00 cita sin decir de cuál. El juez LLM, que la recomendación dejaba para
+después, sigue sin hacer.

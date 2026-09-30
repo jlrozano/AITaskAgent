@@ -340,6 +340,7 @@ grafo los informes del catálogo que estaban marcados.
 | `reports/01…09_*.md` | cada auditor al terminar | informe con la línea `<!-- analysis-meta: health=…; critical=…; generated_at=…; model=…; … -->` al final, con la procedencia del apartado 1.7 |
 | `reports/00_resumen_ejecutivo.md` | síntesis | resumen y dashboard, con la misma línea de procedencia |
 | `reports/_run_meta.json` | anfitrión (CLI o web) al terminar | consumo LLM de la ejecución: llamadas, tokens de entrada y salida y coste, en total y por paso (apartado 1.13) |
+| `reports/_validation.json` | anfitrión (CLI o web) al terminar, y `--validate-reports` | validación determinista de los informes: citas, identificadores, hallazgos graves, nombres del grafo, procedencia y Mermaid (apartado 1.15) |
 | `reports/custom/*.md` | chat (`create_report`) | informes propios; el pipeline no los toca ni los lee |
 | `.codebase/codebase.db` | detección, ingestas, enriquecedores | copia del grafo con `enrichment_runs` |
 | `.codebase/enrichment/java/` | analizador Java | `request.txt`, `java-analysis.jsonl` (1003 MB en el repositorio objetivo con las referencias y 744 MB sin ellas; no se borra) y `java-analyzer.log` |
@@ -487,6 +488,51 @@ facetas con un arnés de `SqlFacetExtractorStep` sobre la BD enriquecida. v1 es 
 | `SqlFacetExtractorStep` | 45,9 s con el índice por label y 46,7 s sin él; 24 s en `PrepareDerivedMetricsAsync` |
 | `ZeroFaninClasses` | 817 tipos (salen 20); 851 sin la exclusión de Struts y 638 con la regla anterior del constructor declarado. De 5 revisados leyendo la copia, 3 verdaderos (`DAOAgendaLiquidacionOracleImplOrig`, `GeneradorSaldosNaim`, `PaymentExcelExporter`), 1 falso (`DAOAgendaRenovacionInteresOracleImpl`, instanciado por la factoría de DAO) y 1 sin decidir (`InformeResultados`, que el `pom.xml` empaqueta en un jar propio) |
 | `UnreadFields` | 154 campos (salen 30); 5 de 5 revisados son verdaderos: 2 sin ninguna lectura, 1 leído solo dentro de un comentario de bloque y 2 que solo se escriben (sin getter) |
+
+
+## 1.15 Evaluación determinista de los informes
+
+`ReportValidator` (`CORE/Reports/ReportValidator.cs`) comprueba sin LLM que los informes del catálogo cumplen lo que piden
+las plantillas: que cada `ruta:línea` citada existe y está en rango, que las citas `nombre › sección` apuntan a algo que
+existe, que los identificadores siguen el formato `PREFIJO-NNN` de `_common_rules.md` y no se repiten, que cada hallazgo
+P0 o P1 cita al menos una ubicación real, que los nombres cualificados citados están en el grafo, que la línea
+`analysis-meta` lleva semáforo y procedencia (modelo, SHA de las plantillas y huella del grafo) y que los bloques Mermaid
+usan los tipos de `_mermaid_guidelines.md`. La tabla de comprobaciones, qué es error y qué aviso y el formato de
+`_validation.json` están en el apartado 3.9 del README de la CLI. Corre al final del análisis y de la regeneración, sin
+bloquear, y a demanda con `--validate-reports` en la CLI o `GET /api/reports/validation` en la web.
+
+Mide la forma del informe, no si sus hallazgos son ciertos: una cita válida dice que la línea existe, no que diga lo que el
+informe afirma. Para lo segundo está la lista de hallazgos esperados por repositorio (`expected-findings.json`, plantilla en
+`CORE/evaluation/expected-findings.template.json`), que da la cobertura y los hallazgos no esperados, a revisar a mano como
+posibles falsos positivos. La lista la escribe quien evalúa; no hay ninguna rellena. Dos limitaciones del diseño: la escala
+P0-P3 solo la define la plantilla de errores, así que en los demás informes la comprobación de hallazgos graves se aplica
+solo si el informe usa esa escala por su cuenta (el 08 la usa como prioridad del plan); y las citas se resuelven por sufijo
+cuando la ruta viene incompleta, que es lo que hacen los informes de Access (`CGAR.bas:12`), con una cita ambigua si el
+nombre casa con varios ficheros.
+
+**Primera medida (2026-09-30), informes de TestAgenteAnalisis del 28 y 29/09.** Los nueve informes que hay, sin el 02,
+son anteriores a la procedencia de la tanda B, así que los nueve fallan `metadata` por eso y solo por eso.
+
+| Informe | Citas válidas | Hallazgos (P0/P1) | Nombres del grafo encontrados | Problemas |
+|---|---|---|---|---|
+| 00 Resumen ejecutivo | 0 de 0 | 0 | 0 de 0 | `flowchart TB` |
+| 01 Análisis funcional | 0 de 0 | 10 (0) | 43 de 43 | `flowchart TB` |
+| 03 Código muerto | 29 de 29 | 6 (0) | 9 de 9 | — |
+| 04 Flujos end-to-end | 0 de 0 | 0 | 77 de 77 | — |
+| 05 Errores y bugs | 34 de 34 | 8 (4) | 0 de 0 | — |
+| 06 Arquitectura | 27 de 27 | 8 (0) | 3 de 3 | — |
+| 07 APIs y seguridad | 9 de 9 | 3 (0) | 0 de 0 | `SEC-002` en tres filas de una tabla |
+| 08 Deuda técnica | 40 de 40 | 10 (4) | 4 de 4 | — |
+| 09 Inyección de dependencias | 25 de 25 | 6 (0) | 1 de 1 | — |
+
+Las 164 citas existen y están en rango, y en las tres revisadas a mano la línea dice lo que afirma el informe: el `Const
+Password` literal de `SEC-001` en `MMapNetWorkDrive.bas:6`, el `set nocout on` de `BUG-003` en `CConnectionSQL.bas:22` y el
+`MontarFiltro` completo de `CGAR.bas:155-255`. Lo más grave está en otra parte. El 01 y el 04 no citan ni una línea de
+código, así que sus flujos y casos de uso solo se pueden contrastar por nombres del grafo, que existen todos. Y los
+identificadores chocan entre informes: `SEC-001` a `SEC-003` son hallazgos distintos en el 05 y en el 07 (`SEC-002` es una
+inyección SQL P0 en uno y tres consultas sin autenticación declarada en el otro), igual que `ARC-001` y `ARC-002` en el 06 y
+el 08, y el 00 los cita sin decir de qué informe son. `_common_rules.md` pide identificadores únicos dentro del informe y
+nada entre informes; si importa, la regla o un prefijo por informe tendrían que ir en la plantilla.
 
 ---
 
