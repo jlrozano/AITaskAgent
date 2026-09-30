@@ -34,12 +34,21 @@ internal static class Program
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ");
 
-        // 1. Cargar la configuración del proyecto (solo desde el directorio del ejecutable).
+        // 1. Cargar la configuración del proyecto (solo desde el directorio del ejecutable). --validate-reports se quita antes,
+        //    porque sin valor se comería el argumento siguiente.
+        args = AnalysisRunOptions.ExtractSwitch(args, AnalysisRunOptions.ValidateReportsSwitch, out var validateOnly);
         IConfiguration configuration = AnalysisConfiguration.Build(
             AnalysisConfiguration.DefaultConfigFilePath, args, AnalysisConfiguration.GetEnvVar, Console.WriteLine);
 
         // 2. Resolver ubicación del repositorio target y configurar Serilog
         var repoPath = AnalysisRunOptions.ResolveRepositoryPath(configuration);
+
+        // --validate-reports: valida los informes que ya hay y termina, sin LLM, sin pipeline y sin crear logs/ en el repositorio.
+        if (validateOnly)
+        {
+            Environment.ExitCode = ReportValidationCommand.Run(configuration, repoPath, ConsoleAnalysisReporter.Instance);
+            return;
+        }
 
         var logDir = AnalysisRunOptions.ResolveLogsPath(configuration, repoPath);
         Directory.CreateDirectory(logDir);
@@ -214,6 +223,10 @@ internal static class Program
             Environment.ExitCode = 130;
             return;
         }
+
+        // Validación determinista de los informes escritos (_validation.json): no bloquea ni cambia el código de salida.
+        Console.WriteLine();
+        ReportValidationSummary.RunAfterPipeline(input, ConsoleAnalysisReporter.Instance);
 
         Console.WriteLine();
         Console.WriteLine("══════════════════════════════════════════════════════════════════════════════");

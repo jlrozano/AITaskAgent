@@ -40,7 +40,7 @@ public static partial class ReportMarkdown
     public static int? CountCriticalFindings(string markdown)
     {
         var tables = ParseTables(markdown)
-            .Select(t => (Table: t, Severity: t.Header.FindIndex(h => SeverityHeaderRegex().IsMatch(CleanCell(h))), Id: t.Header.FindIndex(h => IdHeaderRegex().IsMatch(CleanCell(h)))))
+            .Select(t => (Table: t, Severity: t.SeverityColumn, Id: t.IdColumn))
             .Where(t => t.Severity >= 0)
             .ToList();
         if (tables.Count == 0)
@@ -161,9 +161,18 @@ public static partial class ReportMarkdown
         return string.Join('\n', lines.Take(first).Concat(lines.Skip(next)));
     }
 
-    private sealed record MarkdownTable(List<string> Header, List<List<string>> Rows);
+    /// <summary>Una tabla Markdown con el índice (desde 0) de la línea de su cabecera y de cada fila.</summary>
+    internal sealed record MarkdownTable(List<string> Header, List<List<string>> Rows, int HeaderLine, List<int> RowLines)
+    {
+        /// <summary>Columna de severidad (<c>Severidad</c>, <c>Prioridad</c>...), o -1.</summary>
+        public int SeverityColumn => Header.FindIndex(h => SeverityHeaderRegex().IsMatch(CleanCell(h)));
 
-    private static List<MarkdownTable> ParseTables(string markdown)
+        /// <summary>Columna de identificador (<c>ID</c>, <c>Hallazgo</c>...), o -1.</summary>
+        public int IdColumn => Header.FindIndex(h => IdHeaderRegex().IsMatch(CleanCell(h)));
+    }
+
+    /// <summary>Las tablas del Markdown fuera de bloques de código; también las usa <c>ReportValidator</c>.</summary>
+    internal static List<MarkdownTable> ParseTables(string markdown)
     {
         var tables = new List<MarkdownTable>();
         var lines = markdown.Split('\n').Select(l => l.TrimEnd('\r').Trim()).ToArray();
@@ -182,11 +191,15 @@ public static partial class ReportMarkdown
 
             var header = SplitRow(lines[i]);
             var rows = new List<List<string>>();
+            var rowLines = new List<int>();
             var j = i + 2;
             for (; j < lines.Length && lines[j].StartsWith('|'); j++)
+            {
                 rows.Add(SplitRow(lines[j]));
+                rowLines.Add(j);
+            }
 
-            tables.Add(new MarkdownTable(header, rows));
+            tables.Add(new MarkdownTable(header, rows, i, rowLines));
             i = j - 1;
         }
 
@@ -203,15 +216,18 @@ public static partial class ReportMarkdown
         return body.Split('|').Select(c => c.Trim()).ToList();
     }
 
-    private static string Cell(List<string> row, int index) => index < row.Count ? row[index] : string.Empty;
+    internal static string Cell(List<string> row, int index) => index < row.Count ? row[index] : string.Empty;
 
-    private static string CleanCell(string cell) => cell.Replace("*", "").Replace("`", "").Trim();
+    internal static string CleanCell(string cell) => cell.Replace("*", "").Replace("`", "").Trim();
 
     /// <summary>P0 o P1 en la celda; con varias (p. ej. "P1/P2") vale la más grave.</summary>
-    private static bool IsCritical(string cell)
+    private static bool IsCritical(string cell) => MinSeverity(cell) is <= 1;
+
+    /// <summary>El nivel más grave (0 a 3) de los <c>P0</c>-<c>P3</c> del texto, o null si no hay ninguno.</summary>
+    internal static int? MinSeverity(string text)
     {
-        var levels = SeverityValueRegex().Matches(cell).Select(m => m.Groups[1].Value[0] - '0').ToList();
-        return levels.Count > 0 && levels.Min() <= 1;
+        var levels = SeverityValueRegex().Matches(text).Select(m => m.Groups[1].Value[0] - '0').ToList();
+        return levels.Count > 0 ? levels.Min() : null;
     }
 
     private static string NormalizeId(string cell)

@@ -182,6 +182,12 @@ public static partial class ClaimAuditor
     [GeneratedRegex(@"^([-*+]\s|\d+[.)]\s|#{1,6}\s|\||>)")]
     private static partial Regex BlockStartPattern();
 
+    /// <summary>
+    /// <c>ruta:línea</c>, <c>ruta:ini-fin</c> o, sin línea, una ruta con separador: la misma sintaxis que la auditoría del chat y
+    /// <c>claims.ts</c>. La usa también <c>ReportValidator</c>. Null si el texto no es una referencia al código.
+    /// </summary>
+    internal static (string Path, int? Start, int? End)? ParseCodeReference(string text) => ReferenceResolver.CodeReference(text);
+
     /// <summary>Un span de código (que se come las marcas de dentro) o una marca.</summary>
     [GeneratedRegex(@"`(?<code>[^`\n]+)`|(?<mark>\[(?<k>[VDI])\])")]
     private static partial Regex TokenPattern();
@@ -205,7 +211,7 @@ public static partial class ClaimAuditor
         /// <summary>El destino de una referencia a un documento es su id en el visor: <c>doc/&lt;id&gt;</c>.</summary>
         private const string DocumentTargetPrefix = "doc/";
 
-        private static (string Path, int? Start, int? End)? CodeReference(string text)
+        internal static (string Path, int? Start, int? End)? CodeReference(string text)
         {
             var m = CodeReferencePattern().Match(text.Trim());
             if (!m.Success)

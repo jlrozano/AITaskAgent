@@ -1,0 +1,30 @@
+// Hallazgos esperados de un repositorio de evaluación, para `--validate-reports --expected <fichero>`.
+// Copia este fichero fuera del repositorio analizado (por ejemplo, junto a tus notas de evaluación) y rellena `findings`.
+// Se admiten comentarios // y comas finales. La lista la decide quien evalúa: el comparador no inventa hallazgos.
+//
+// Cada hallazgo esperado casa con un hallazgo del informe (un encabezado `PREFIJO-NNN` o una fila de tabla con columna de
+// identificador) si se cumplen TODAS las condiciones que tenga:
+//   - "report": fichero del informe ("05_errores_y_bugs.md") o alias ("errores", "deadcode", "apis"...). Obligatorio.
+//   - "file": ruta relativa al repositorio del fichero que el hallazgo debe citar; vale un sufijo ("CGAR.bas").
+//   - "startLine" / "endLine": la cita a ese fichero tiene que solaparse con el rango (sin "endLine", una sola línea).
+//   - "keywords": palabras que el texto del hallazgo (encabezado, sección y filas) tiene que contener todas, sin distinguir
+//     mayúsculas ni tildes.
+// Hace falta al menos "file" o "keywords". "id" y "note" son para ti; "id" sale en el resultado.
+//
+// El resultado (en `_validation.json`, sección `expected`) da la cobertura (esperados encontrados) y, por cada informe
+// nombrado en la lista, los hallazgos que no casan con ningún esperado: los candidatos a falso positivo, que se revisan a mano.
+{
+  "repository": "",
+  "description": "",
+  "findings": [
+    // {
+    //   "id": "EXP-001",
+    //   "report": "errores",
+    //   "file": "src/Orders/OrderRepository.cs",
+    //   "startLine": 40,
+    //   "endLine": 60,
+    //   "keywords": ["inyección", "concatena"],
+    //   "note": "SQL construido con la entrada del formulario"
+    // }
+  ]
+}

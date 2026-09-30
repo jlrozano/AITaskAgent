@@ -94,6 +94,38 @@ public static class AnalysisRunOptions
         return Path.IsPathRooted(rawOutput) ? rawOutput : Path.GetFullPath(rawOutput, repositoryPath);
     }
 
+    /// <summary>Conmutador de la CLI que valida los informes que hay en disco sin ejecutar el pipeline.</summary>
+    public const string ValidateReportsSwitch = "--validate-reports";
+
+    /// <summary>
+    /// Quita <paramref name="name"/> (sin valor, o con <c>=true</c>/<c>=false</c>) de los argumentos antes de pasarlos a la
+    /// configuración: el proveedor de línea de comandos toma el argumento siguiente como valor de un <c>--clave</c> suelto, así
+    /// que <c>--validate-reports --repo X</c> se comería el <c>--repo</c>.
+    /// </summary>
+    public static string[] ExtractSwitch(string[] args, string name, out bool present)
+    {
+        present = false;
+        var rest = new List<string>(args.Length);
+        foreach (var arg in args)
+        {
+            if (arg.Equals(name, StringComparison.OrdinalIgnoreCase) || arg.Equals(name + "=true", StringComparison.OrdinalIgnoreCase))
+                present = true;
+            else if (!arg.Equals(name + "=false", StringComparison.OrdinalIgnoreCase))
+                rest.Add(arg);
+        }
+        return [.. rest];
+    }
+
+    /// <summary>
+    /// <c>--validation-output</c>: carpeta donde se escribe <c>_validation.json</c>, relativa al repositorio o absoluta; por
+    /// defecto, la de informes. Sirve para validar un repositorio sin escribir en él. No crea nada en disco.
+    /// </summary>
+    public static string ResolveValidationOutputPath(IConfiguration configuration, string repositoryPath, string reportsPath)
+    {
+        var raw = configuration["validation-output"];
+        return string.IsNullOrWhiteSpace(raw) ? reportsPath : Path.IsPathRooted(raw) ? raw : Path.GetFullPath(raw, repositoryPath);
+    }
+
     /// <summary>
     /// <c>CodebaseAnalysis:LogsPath</c> (por defecto <c>logs</c>), relativa al repositorio o absoluta: la carpeta del log de
     /// cada análisis. Con una absoluta la salida no cae dentro del repositorio analizado. No crea nada en disco.

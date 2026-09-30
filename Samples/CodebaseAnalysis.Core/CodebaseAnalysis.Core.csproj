@@ -31,6 +31,10 @@
     <None Update="templates\**\*.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- Plantilla vacía de hallazgos esperados para la validación de informes (recomendación 13 de la auditoría). -->
+    <None Update="evaluation\expected-findings.template.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <!-- El analizador Java se ejecuta como fuente con el source launcher del JDK (D13): viaja como contenido. -->
     <None Update="Enrichment\Java\JavaAnalyzer.java">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
