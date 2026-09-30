@@ -1,9 +1,88 @@
-# Asistente web: vista de tres paneles, chat auditado y enriquecimiento nativo (estado 2026-09-28, cierre de sesión)
+# App de análisis de código: estado y retomada (actualizado el 2026-09-30, cierre de sesión)
 
-Rama `consolidation`, **nada commiteado**. Este documento recoge solo lo de la sesión del 2026-09-28 sobre la web del
-análisis de código; el estado general del pipeline sigue en `codebase-analysis-pipeline-estado.md`.
+Rama `consolidation`, **todo commiteado y sin push**. Fuera quedan `.claude/settings.local.json` y el `AITaskAgent.sln`
+antiguo sin versionar. La sección «Para retomar» es lo único que hace falta leer para seguir; el resto es historial.
 
-## Hecho y verificado
+## Para retomar (2026-09-30)
+
+**Dónde estamos.** El pipeline completo funciona de extremo a extremo con Azure `gpt-5.4`, que volvió a responder el
+2026-09-30 a las 13:49 tras el `404 DeploymentNotFound` del 29/09.
+- **Primera prueba real:** dos repos pequeños con fallos sembrados.
+  - Repos: `C:\Users\juan.rozano\eval-repos\java-simple` (Struts, 25 `.java`) y `…\csharp-simple` (ASP.NET, 24 `.cs`).
+  - Listas de respuestas: `…\eval-repos\answers\*.expected-findings.json`.
+  - Evidencias (logs, `_validation.json`): `…\eval-repos\results\2026-09-30\`.
+  - Los repos de evaluación no están versionados; conviene decidir si se versionan.
+- **Resultado de la prueba:**
+
+  | | Java | C# |
+  |---|---|---|
+  | Tiempo | 144 s | 160 s |
+  | Tokens | 613.000 | 669.000 |
+  | Citas válidas | 98 % | 99 % |
+  | Sembrados encontrados | 16/18 a mano (10/18 según el comparador) | 18/22 |
+
+  Las trampas de reflexión no salen como código muerto. El analizador aportó hallazgos reales no sembrados: IDOR,
+  `TrustServerCertificate` y falta de `AddAuthentication`.
+- **Fallos vistos en la prueba:**
+  - Afirmaciones falsas:
+    - el 05 de Java dice que `findByStatus` cierra en `finally`, y es la fuga sembrada;
+    - el 06 cita `jsonExporterImplImpl`;
+    - el 05 de C# afirma que falta el rollback, y lo hay.
+  - Los bugs de lógica de Java salen en el 02 y el 08, no en el 05.
+  - Nadie detecta los métodos privados muertos, los campos solo escritos en C# ni los registros DI que nunca se resuelven.
+
+**Siguiente, en este orden** (propuesto al usuario el 2026-09-30; falta que elija por dónde empezar):
+1. **Bug de `BdpEnricherStep`.**
+   - Pasa como `--project` el nombre de la carpeta de la solución y no el proyecto de cbm (`BdpEnricherStep.cs:107-112`).
+     BdpGraphEnricher falla con FK y el pipeline aborta (`:221`) en vez de caer al fallback LLM.
+   - En la prueba se sorteó con `--BdpEnricher:ProjectName`.
+   - Arreglo: `GraphProject.ResolveAsync` y degradar al fallback si falla.
+2. **Ruido del validador y del comparador.**
+   - Citas a directorios y a URLs `.do` que se dan por rotas (`ReportValidator.cs:817-838`, solo mira `File.Exists`).
+   - Hallazgos de informes sin tabla ni IDs (el 06) que el comparador no lee.
+   - Opción de buscar un esperado en cualquier informe.
+   - Soporte de `notExpected` para medir falsos positivos.
+3. **Verificador de informes.** Plan cerrado con el usuario, pendiente de su «adelante»:
+   `docs/plans/2026-09-30-verificador-informes-plan.md`.
+   - Estructura: detección de lenguaje → `SwitchStep` a los enriquecedores → facetas.
+   - Cada rama de informe es un `GroupStep[Auditor*, Preparación, Verificador*]`. El verificador corrige contra el código
+     y cierra el informe con «Cambios de la verificación».
+   - Los IDs pasan a `NN-CAT-nnn` y todos los informes citan.
+   - Framework: F1 (warning por placeholder sin resolver) y F2 (`@[ruta]` relativa al directorio de trabajo).
+   - Los `@[` del borrador se neutralizan en la preparación.
+   - Estimación: 2-2,5 h de agentes, en versión comprimida.
+   - Las tres afirmaciones falsas de la prueba son su caso de prueba real.
+4. **Facetas que faltan:** métodos privados sin llamadas, campos solo escritos en C# (Roslyn) y registros DI nunca
+   resueltos.
+5. **Análisis completo del repo Java grande** sobre `C:\Users\juan.rozano\m\Online`. Hay que reindexar con cbm antes.
+   Estimación: ~20-25 min y 3-4 M tokens de entrada; subir `AuditorMinutes` a 25-30 para la primera vez.
+
+**Decisiones del usuario vigentes** (detalle en la memoria `project_report_catalog_decisions`):
+- no fusionar informes todavía;
+- IDs únicos con prefijo por informe;
+- verificación en cada rama;
+- entrada del verificador como un único texto por `{{ input }}` (el placeholder es `{{ input }}`, no `{{ value }}`:
+  `PromptTemplateResolver.cs:49-53`);
+- la síntesis se hace sobre los informes verificados;
+- anotado para después: enriquecedores JSP y React/TS, y un paso que cree pasos según lo detectado.
+
+**Pendiente de decisión del usuario:**
+- la fusión de informes. Dato de la prueba: las fronteras entre 02, 05 y 08 están difusas;
+- R3/R6/R7/R8;
+- los valores por defecto de tiempos del framework;
+- las columnas duplicadas del esquema;
+- (b) detectores tipo PMD;
+- versionar los repos de evaluación;
+- la tarifa de Azure en `LlmConfiguration:Providers:<p>:Models`, para que salga el coste.
+
+**Entorno.**
+- JDK 17 en `%LOCALAPPDATA%\Programs\jdk-17.0.20.1+1` y jars *provided* en `…\java-provided`. Los dos van en los user
+  secrets (`JavaAnalyzer:JdkPath`, `ProvidedClasspath:0`), y los tests `[JdkFact]` ya lo encuentran solos.
+- BdpGraphEnricher.CLI está instalado y se usó en la prueba C#.
+- La SPA está compilada en `wwwroot`. Para ver la UI nueva hay que reiniciar el backend del 5180.
+- `Samples/TextToTemplateDemo` es la demo, sin LLM, de cómo llega el texto de un paso a la plantilla del siguiente.
+
+## Hecho y verificado (sesión del 2026-09-28)
 
 **Vista Asistente (SPA).** Las pestañas pasan de Análisis / Informes / Chat a **Análisis / Asistente**. Asistente tiene tres
 paneles redimensionables y plegables (react-resizable-panels 4.14.1): biblioteca (la `LibraryList` de siempre), chat y
@@ -37,7 +116,7 @@ visor del fichero seleccionado, sin solapas.
   `unchecked` legítimas.
 - Tests: Core 257, Web 99, Vitest 174 en verde. README del sample actualizado (§4, §8, §9).
 
-## Hecho el 2026-09-29 (sin commitear)
+## Historial: hecho el 2026-09-29 (ya commiteado)
 
 **Analizador Java nativo y plugin Struts/JSP.** Spec `docs/plans/2026-09-28-enriquecimiento-nativo-java-design.md`
 (con su Change Log) y plan `docs/plans/2026-09-28-enriquecimiento-nativo-java-plan.md` (P1-P16). Paso
@@ -56,7 +135,7 @@ Configuración nueva: secciones `JavaAnalyzer` y `StrutsJsp` de `appsettings.ana
 - configuración en los user secrets de la app (id `3e60cd17-…`): `JavaAnalyzer:JdkPath` y
   `JavaAnalyzer:ProvidedClasspath:0`.
 
-En el repo no hay ninguna ruta de máquina. Los tests con JDK siguen necesitando `CODEBASE_ANALYSIS_TEST_JDK`.
+En el repo no hay ninguna ruta de máquina. Desde la tanda A, los tests con JDK lo encuentran sin `CODEBASE_ANALYSIS_TEST_JDK`.
 
 **Timeouts configurables y «Regenerar informe».** Diseño `docs/plans/2026-09-29-regenerar-informe-design.md`,
 decidido sin preguntas por petición del usuario. Hay que revisar R1-R8 con él.
@@ -223,12 +302,20 @@ Siguen fuera, pendientes de decisión del usuario:
 - los valores por defecto de tiempos del framework;
 - las columnas duplicadas del esquema.
 
-## Pendiente (en orden)
+**Diseñado el 2026-09-30, pendiente del gate: verificación de informes.** Plan en
+`docs/plans/2026-09-30-verificador-informes-plan.md`.
+- Pipeline: detección de lenguaje → `SwitchStep` hacia los enriquecedores → facetas.
+- Cada rama de informe es un `GroupStep` con auditor*, preparación y verificador*. El verificador corrige contra el código
+  y lista los cambios.
+- Los IDs pasan a `NN-CAT-nnn` y todos los informes citan el código.
+- Arreglos del framework: F1 (aviso al no resolver un placeholder) y F2 (base de `@[ruta]`).
+- Anotado para después: enriquecedores JSP y React/TS, y un paso que cree pasos según lo detectado.
+
+## Historial: pendientes anteriores (lo vigente está en «Para retomar»)
 
 1. **Validadas por el usuario el 2026-09-29** las decisiones R1-R8 y C1-C7 de la regeneración y el Change Log de la spec
    Java. Sigue en pie una objeción escrita en la auditoría (R3/R6/R7: la regeneración depende de la ejecución en memoria
-   y no rehace informes correctos); su daño práctico, H-7, se corrige. Queda pendiente commitear.
-   Para ver la SPA nueva en el backend del 5180 hace falta `npm run build` de `ClientApp` y reiniciar ese backend.
+   y no rehace informes correctos); su daño práctico, H-7, está corregido. Todo commiteado.
    Incidencias abiertas del analizador Java, menores:
    - 914 docstrings heredados de cbm con U+FFFD, en comentarios `//`;
    - 27 declaraciones sin nodo porque su QN lo ocupa un `Field` de cbm;
@@ -247,8 +334,8 @@ Siguen fuera, pendientes de decisión del usuario:
    que leen propiedades que nadie escribe (`SqlFacetExtractorStep.cs:82,90,108,118,128,339`: `http_verb`,
    `entry_method`, `cyclomatic`, `loc_total`, `fan_in` en Class, `di_lifetime`); portar C# a Roslyn en proceso, con
    paridad contra la BD de este repo enriquecida por BdpGraphEnricher; JSP con Jasper; nodos `Flow` end to end;
-   `view_code_item` para Java (`FileTools/Tools/ViewCodeItemTool.cs:94` solo entiende C#); enriquecedor LLM para
-   repos sin lenguaje soportado.
+   enriquecedor LLM para repos sin lenguaje soportado. (`view_code_item` para Java ya está hecho, en la tanda C, y los
+   consumidores de propiedades ya no inventan datos, desde la tanda K.)
 
 ## Cómo se prueba (para repetirlo)
 
@@ -270,7 +357,8 @@ Siguen fuera, pendientes de decisión del usuario:
 
 ## Prompt de arranque
 
-> Retomamos la app de análisis de código. Lee `docs/project_notes/asistente-chat-y-enriquecimiento-estado.md` entero y
-> preséntame para revisar las decisiones R1-R8 de `docs/plans/2026-09-29-regenerar-informe-design.md` y el Change Log de
-> `docs/plans/2026-09-28-enriquecimiento-nativo-java-design.md`, que se tomaron sin preguntarme. No commitees hasta que
-> las confirme.
+> Retomamos la app de análisis de código. Lee la sección «Para retomar» de
+> `docs/project_notes/asistente-chat-y-enriquecimiento-estado.md` y la memoria `project_report_catalog_decisions`. Dime
+> en tres líneas dónde estamos y pregúntame por cuál de los cinco puntos de «Siguiente» empezamos. No toques código
+> hasta que te lo diga. Antes de ejecutar el plan del verificador, espera mi «adelante». Usa agentes para lo largo y lee
+> tú lo que esté en uno o dos ficheros. Pon la hora al principio de cada mensaje de avance.
