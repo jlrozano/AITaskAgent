@@ -37,6 +37,20 @@ public static class ReportsEndpoints
             return Results.Ok(result);
         });
 
+        // Validación determinista de los informes del catálogo (ReportValidator), calculada al pedirla: los informes cambian
+        // también desde el chat, así que el _validation.json del último análisis puede estar viejo. No escribe nada. El literal
+        // gana a la ruta {fileName} de abajo.
+        app.MapGet("/api/reports/validation", (WorkspaceState workspace) =>
+        {
+            var active = workspace.Current;
+            if (active == null)
+                return ApiErrorsFactory.NoWorkspace().ToResult(StatusCodes.Status409Conflict);
+
+            var result = ReportValidator.Validate(new ReportValidationRequest(active.RepositoryPath, active.ReportsPath,
+                File.Exists(active.DatabasePath) ? active.DatabasePath : null));
+            return Results.Json(result, ReportValidationFile.Json);
+        });
+
         // Solo nombres del catálogo: cualquier otro (incluido "..%2F...") es 404 sin tocar el disco.
         app.MapGet("/api/reports/{fileName}", (string fileName, WorkspaceState workspace, CancellationToken ct) =>
             ReadAsync(workspace, SourceRef.ReportKindName, fileName, ct));

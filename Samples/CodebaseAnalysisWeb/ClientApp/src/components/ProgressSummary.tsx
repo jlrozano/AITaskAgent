@@ -40,11 +40,18 @@ export function ProgressSummary({ state, connection, now }: Props) {
     ? `${formatNumber(usage.promptTokens)} de entrada · ${formatNumber(usage.completionTokens)} de salida · ${formatNumber(usage.calls)} ${usage.calls === 1 ? 'llamada' : 'llamadas'}`
     : '';
 
+  // Validación determinista de los informes al terminar (`_validation.json`): citas de código que existen y P0/P1 sin ubicación.
+  const validation = state.validation;
+  const validationProblems = validation ? validation.brokenCitations + validation.severeFindingsWithoutLocation : 0;
+  const validationDetail = validation
+    ? `${formatNumber(validation.brokenCitations)} rotas · ${formatNumber(validation.severeFindingsWithoutLocation)} P0/P1 sin ubicación · ${formatNumber(validation.reports)} informes`
+    : '';
+
   return (
     <section
       className={`summary summary--${status ?? 'none'}`}
       aria-label="Resumen de la ejecución"
-      style={{ '--summary-cells': 4 + (usage ? 1 : 0) + (usage?.costUsd != null ? 1 : 0) } as CSSProperties}
+      style={{ '--summary-cells': 4 + (usage ? 1 : 0) + (usage?.costUsd != null ? 1 : 0) + (validation ? 1 : 0) } as CSSProperties}
     >
       <div className="summary__status">
         <span className="summary__label">Estado</span>
@@ -83,6 +90,15 @@ export function ProgressSummary({ state, connection, now }: Props) {
             {formatCost(usage.costUsd)}
             {usage.unpricedCalls > 0 ? ' (mínimo)' : ''}
           </span>
+        </div>
+      )}
+      {validation && (
+        <div className="summary__cell" title="Validación de los informes: detalle en _validation.json y en GET /api/reports/validation">
+          <span className="summary__label">Citas válidas</span>
+          <span className={`num${validationProblems > 0 ? ' text-warning' : ''}`}>
+            {formatNumber(validation.citationsValid)}/{formatNumber(validation.citationsTotal)}
+          </span>
+          <span className="summary__detail">{validationDetail}</span>
         </div>
       )}
       <div className="summary__progress">

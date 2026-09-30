@@ -444,6 +444,13 @@ public sealed class AnalysisRunManager(
                 _logger.LogWarning("{Warning}", metaWarning);
             }
 
+            // Validación determinista de los informes (_validation.json), no bloqueante: su resumen va al log de la ejecución y
+            // a run.completed. No va dentro del pipeline porque el motor cierra el canal de eventos al terminar. Una ejecución
+            // cancelada no se valida: sus informes están a medias.
+            var validation = status == RunStatuses.Cancelled
+                ? null
+                : ReportValidationSummary.RunAfterPipeline(run.Input, new EventLogReporter(run, clock, _logger));
+
             run.Finish(status, failedReports, error, finishedAt);
 
             var exitCode = status == RunStatuses.Succeeded ? 0 : 1;
@@ -478,7 +485,9 @@ public sealed class AnalysisRunManager(
                     ["executiveReportPath"] = string.IsNullOrEmpty(executiveReportPath) ? null : executiveReportPath,
                     ["error"] = error,
                     // Acumulado de la ejecución y sus regeneraciones (AnalysisRun.Usage).
-                    ["usage"] = usage.ToData()
+                    ["usage"] = usage.ToData(),
+                    // Totales de _validation.json; null si no se validó (cancelada o fallo de la validación).
+                    ["validation"] = validation == null ? null : ReportValidationSummary.ToData(validation)
                 }
             });
 
@@ -537,5 +546,31 @@ public sealed class AnalysisRunManager(
         catch (OperationCanceledException)
         {
         }
+    }
+}
+
+/// <summary>
+/// Reporter de lo que ocurre tras el pipeline (la validación de informes). Todo va al logger del servidor; al log de la
+/// ejecución (el SSE y la pestaña Análisis) solo el resumen y los avisos, porque las líneas informativas (una por informe)
+/// son detalle que ya está en <c>_validation.json</c> y en <c>GET /api/reports/validation</c>.
+/// </summary>
+internal sealed class EventLogReporter(AnalysisRun run, TimeProvider clock, ILogger logger) : IAnalysisReporter
+{
+    public void Report(AnalysisLogLevel level, string source, string message)
+    {
+        logger.Log(level is AnalysisLogLevel.Warning or AnalysisLogLevel.Error ? LogLevel.Warning : LogLevel.Information,
+            "[{Source}] {Message}", source, message);
+        if (level == AnalysisLogLevel.Info)
+            return;
+
+        run.EventLog.Append(new AnalysisEventDto
+        {
+            RunId = run.RunId,
+            Ts = clock.GetUtcNow(),
+            Type = AnalysisEventDtoTypes.Log,
+            Source = source,
+            Level = level.ToWireName(),
+            Message = message
+        });
     }
 }

@@ -144,6 +144,17 @@ export interface RunUsage {
   unpricedCalls: number;
 }
 
+/** `data.validation` de `run.completed`: los totales de `_validation.json` (`ReportValidationSummary.ToData`). */
+export interface RunValidation {
+  reports: number;
+  citationsTotal: number;
+  citationsValid: number;
+  brokenCitations: number;
+  severeFindingsWithoutLocation: number;
+  errors: number;
+  warnings: number;
+}
+
 export interface RunState {
   runId: string | null;
   repositoryPath: string | null;
@@ -177,6 +188,8 @@ export interface RunState {
   pendingToolArgs: Record<string, { name: string; arguments: string }[]>;
   /** Null hasta la primera llamada con reparto de tokens o el `usage` de un `run.completed`. */
   usage: RunUsage | null;
+  /** Totales de la validación de informes del último `run.completed` (`data.validation`); null si no se validó. */
+  validation: RunValidation | null;
 }
 
 export type RunAction =
@@ -242,6 +255,7 @@ export function createRunState(status: RunStatusDto | null): RunState {
     reportsVersion: 0,
     pendingToolArgs: {},
     usage: null,
+    validation: null,
   };
   for (const report of state.requestedReports) addAuditor(state, report);
   return state;
@@ -322,6 +336,23 @@ function usageOf(value: unknown): RunUsage | null {
     totalTokens: num(u.totalTokens) ?? 0,
     costUsd: num(u.costUsd),
     unpricedCalls: num(u.unpricedCalls) ?? 0,
+  };
+}
+
+/** El `validation` de `run.completed`; null si no viene o no tiene la forma esperada. */
+function validationOf(value: unknown): RunValidation | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  const total = num(v.citationsTotal);
+  if (total === null) return null;
+  return {
+    reports: num(v.reports) ?? 0,
+    citationsTotal: total,
+    citationsValid: num(v.citationsValid) ?? 0,
+    brokenCitations: num(v.brokenCitations) ?? 0,
+    severeFindingsWithoutLocation: num(v.severeFindingsWithoutLocation) ?? 0,
+    errors: num(v.errors) ?? 0,
+    warnings: num(v.warnings) ?? 0,
   };
 }
 
@@ -572,6 +603,7 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
       state.error = str(data.error);
       // El total del servidor manda sobre lo sumado en vivo (que pierde lo descartado por log.truncated).
       state.usage = usageOf(data.usage) ?? state.usage;
+      state.validation = validationOf(data.validation);
       const interrupted: PhaseStatus = status === 'cancelled' ? 'cancelled' : 'failed';
       for (const phase of PHASES) {
         const current = state.phases[phase].status;

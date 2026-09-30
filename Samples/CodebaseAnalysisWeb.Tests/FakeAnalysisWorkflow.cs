@@ -42,7 +42,9 @@ public sealed class FakeAnalysisWorkflow : IAnalysisWorkflow
         "report.written", "step.completed", "branch.completed",
         "step.completed",
         "step.started", "report.written", "step.completed",
-        "pipeline.completed", "run.completed"
+        "pipeline.completed",
+        // El resumen de la validación de informes (ReportValidationSummary), que añade el runner antes de run.completed.
+        "log", "run.completed"
     ];
 
     /// <summary>Eventos emitidos hasta la pausa (incluido <c>run.started</c>).</summary>

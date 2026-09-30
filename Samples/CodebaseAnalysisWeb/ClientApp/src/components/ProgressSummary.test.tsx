@@ -42,3 +42,25 @@ describe('ProgressSummary: consumo LLM', () => {
     expect(screen.queryByText('Tokens')).not.toBeInTheDocument();
   });
 });
+
+/** El `run.completed` de `successfulRun` con un `validation`. */
+function withValidation(validation: Record<string, unknown> | undefined): AnalysisEventDto[] {
+  return successfulRun.map((e) => (e.type === 'run.completed' ? { ...e, data: { ...e.data, validation } } : e));
+}
+
+describe('ProgressSummary: validación de informes', () => {
+  it('muestra las citas válidas y avisa si hay rotas o P0/P1 sin ubicación', () => {
+    const validation = { reports: 9, citationsTotal: 164, citationsValid: 160, brokenCitations: 4, severeFindingsWithoutLocation: 1, errors: 5, warnings: 2 };
+    render(<ProgressSummary state={replay(withValidation(validation))} connection="closed" now={now} />);
+
+    expect(screen.getByText('Citas válidas')).toBeInTheDocument();
+    const value = screen.getByText('160/164');
+    expect(value).toHaveClass('text-warning');
+    expect(screen.getByText('4 rotas · 1 P0/P1 sin ubicación · 9 informes')).toBeInTheDocument();
+  });
+
+  it('sin validación en run.completed no hay celda', () => {
+    render(<ProgressSummary state={replay(withValidation(undefined))} connection="closed" now={now} />);
+    expect(screen.queryByText('Citas válidas')).not.toBeInTheDocument();
+  });
+});

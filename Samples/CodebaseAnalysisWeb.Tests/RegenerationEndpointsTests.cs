@@ -178,7 +178,7 @@ public sealed class RegenerationEndpointsTests : IDisposable
                 "step.started", "branch.started", "step.started",
                 "report.written", "step.completed", "branch.completed", "step.completed",
                 "step.started", "report.written", "step.completed",
-                "pipeline.completed", "run.completed"
+                "pipeline.completed", "log", "run.completed"
             ],
             events.Skip(firstLastSeq).Select(TypeOf));
 
