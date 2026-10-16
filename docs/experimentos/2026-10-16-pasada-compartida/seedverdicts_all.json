@@ -1,0 +1,1040 @@
+[
+ {
+  "seed": "PipelineContext.SendEventAsync ISSUE[empty-catch linea 185]",
+  "verdict": "confirmed",
+  "reason": "El catch sin filtro devuelve false sin log ni distincion de cancelacion (ver F14); el comentario lo presenta como intencionado.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? FileConversationStorage (clase)",
+  "verdict": "needs_context",
+  "reason": "Tipo publico de libreria sin referencias en el lote ni registro DI visible; depende de consumidores externos.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? FileConversationStorage.FileConversationStorage(string basePath)",
+  "verdict": "needs_context",
+  "reason": "Constructor publico; la instanciacion puede estar fuera del lote.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? FileConversationStorage.SaveConversationAsync",
+  "verdict": "needs_context",
+  "reason": "Implementacion publica de IConversationStorage; llamadas desde el contrato no visibles (fan_in 0 en la interfaz).",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? FileConversationStorage.GetConversationAsync",
+  "verdict": "needs_context",
+  "reason": "Implementacion publica de IConversationStorage; consumidores externos no visibles.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? FileConversationStorage.DeleteConversationAsync",
+  "verdict": "needs_context",
+  "reason": "Metodo publico fuera del contrato de la interfaz; solo utilizable por referencias a la clase concreta.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? FileConversationStorage.ListConversationsAsync",
+  "verdict": "needs_context",
+  "reason": "Metodo publico fuera del contrato de la interfaz; solo utilizable por referencias a la clase concreta.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? FileConversationStorage.GetFilePath (private)",
+  "verdict": "false_positive",
+  "reason": "Se invoca en SaveConversationAsync (linea 49), GetConversationAsync (59) y DeleteConversationAsync (96).",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? ConversationSnapshot",
+  "verdict": "false_positive",
+  "reason": "Se instancia en SaveConversationAsync (linea 41) y se deserializa en GetConversationAsync (linea 67).",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? InMemoryConversationStorage (clase)",
+  "verdict": "false_positive",
+  "reason": "El grafo la registra como singleton de IConversationStorage (DI), por lo que se instancia por el contenedor.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? InMemoryConversationStorage.SaveConversationAsync",
+  "verdict": "needs_context",
+  "reason": "Implementacion de interfaz registrada en DI; las llamadas via IConversationStorage no aparecen en el lote.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? InMemoryConversationStorage.GetConversationAsync",
+  "verdict": "needs_context",
+  "reason": "Implementacion de interfaz registrada en DI; las llamadas via IConversationStorage no aparecen en el lote.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage (clase)",
+  "verdict": "needs_context",
+  "reason": "Tipo publico sin referencias ni registro DI en el lote; depende de consumidores externos.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.YamlFileConversationStorage(string basePath)",
+  "verdict": "needs_context",
+  "reason": "Constructor publico; instanciacion externa al lote.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.SaveConversationAsync",
+  "verdict": "needs_context",
+  "reason": "Implementacion publica de IConversationStorage; consumidores no visibles.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.GetConversationAsync",
+  "verdict": "needs_context",
+  "reason": "Implementacion publica de IConversationStorage; consumidores no visibles.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.EnsureSessionPrefix (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en lineas 59 y 152 de la misma clase.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.NormalizeConversationId (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en lineas 45 y 87.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.GetFilePath (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en lineas 46 y 88.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.ToLegacyMessage (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en SaveConversationAsync (linea 71).",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.FromLegacyMessage (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en GetConversationAsync (linea 123).",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.TryParseUtcTimestamp (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en lineas 102, 103 y 131.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.FormatUtcTimestamp (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en lineas 63, 64 y 180.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.GetMetadataString (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en linea 60.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? YamlFileConversationStorage.GetMetadataStringList (private)",
+  "verdict": "false_positive",
+  "reason": "Llamado en linea 61.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? LegacySessionDocument",
+  "verdict": "false_positive",
+  "reason": "Se instancia y deserializa en SaveConversationAsync y GetConversationAsync.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? LegacySessionMessage",
+  "verdict": "false_positive",
+  "reason": "Se crea en ToLegacyMessage y se lee en FromLegacyMessage.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "DEAD? LegacyToolCall",
+  "verdict": "false_positive",
+  "reason": "Se instancia en ToLegacyMessage (linea 183) y se tipa en LegacySessionMessage.ToolCalls; el grafo con Ca=0 no registra esos usos.",
+  "batch": "conversation"
+ },
+ {
+  "seed": "ServiceCollectionConfigurationExtensions DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Clase pública de extensiones; sus llamadores (Program/composición) están fuera del lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "ServiceCollectionConfigurationExtensions.ConfigureEx(IConfigurationSection) DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadas dentro del lote; AddAITaskAgent usa BindEx, no ConfigureEx.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepResultFactory.BuildJsonSchema ISSUE[empty-catch línea 223]",
+  "verdict": "confirmed",
+  "reason": "El catch de las líneas 223-226 devuelve null sin registrar la excepción (ver F3).",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "ValidatorTagAttribute DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Ningún código del lote lo lee; su XML-doc indica que lo consume la fábrica YAML externa.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepResultFactory.StepActivatorInfo DEAD?(medium)",
+  "verdict": "false_positive",
+  "reason": "Se instancia en BuildInfo (L123, L174) y los consumidores del grafo llaman a CreateInstance.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepActivatorInfo.CreateInstance DEAD?(medium)",
+  "verdict": "false_positive",
+  "reason": "Se invoca desde CreateStepResult (L83, L90) y desde StepBase, TypedStep, Factory según las relaciones entrantes.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepDescription DEAD?(medium)",
+  "verdict": "false_positive",
+  "reason": "StepManager.GetStepDescription la construye y devuelve (L160-166).",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "DefaultStepActivator DEAD?(medium)",
+  "verdict": "false_positive",
+  "reason": "StepManager la instancia en L25 y hay llamadores externos entrantes.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "DefaultStepActivator.Create DEAD?(medium)",
+  "verdict": "false_positive",
+  "reason": "StepManager.CreateStep la llama en L108 y L112 y las relaciones entrantes la listan.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "DefaultStepActivator.Create ISSUE[empty-catch línea 20]",
+  "verdict": "confirmed",
+  "reason": "El catch vacío de las líneas 20-22 descarta la excepción de ActivatorUtilities (ver F1).",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Clase pública estática sin referencias dentro del lote; puede usarse desde YamlPipelineFactory u otros subsistemas.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.SetServiceProvider DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadas en el lote; _serviceProvider se lee en L107, por lo que depende de que un host lo invoque.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.AddStep DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Solo la llama RegisterStepsFromAssembly en el lote; su raíz pública no tiene llamadores visibles.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.RegisterStepsFromAssembly DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadores en el lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.GetRegisteredTypes DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadores en el lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.TryGetStepType DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadores en el lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.CreateStep DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadores entrantes en las relaciones; es el punto de entrada natural de tags YAML.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.GetStepDescription DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadores entrantes en el lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.GetDescriptionFromClass DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "La llama GetStepDescription en L157; su vitalidad depende de ese método público.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.BuildSchema DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "La llama GetStepDescription en L158; su vitalidad depende de ese método público.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "StepManager.IsEnumerableType DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "La llama BuildSchema en L240.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "FinishReasonExtensions DEAD?(medium)",
+  "verdict": "false_positive",
+  "reason": "Las relaciones entrantes muestran llamadas a Parse desde LlmHelpers y ToolCallXmlParser.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "FinishReasonExtensions.Parse DEAD?(medium)",
+  "verdict": "false_positive",
+  "reason": "Tiene tres llamadores externos en las relaciones entrantes.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "FinishReasonExtensions.ToLlmString DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Ninguna relación entrante la referencia; extensión pública posiblemente usada por serialización externa.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "LlmConstants.MessageRoles DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Las relaciones entrantes referencian LlmConstants desde MessageHistory y YamlFileConversationStorage, probablemente a MessageRoles, pero el grafo no lo atribuye a la clase anidada.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "MemoryCacheService DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "El grafo la registra como singleton de ICacheService; los consumidores están fuera del lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "MemoryCacheService.MemoryCacheService DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Constructor para el registro DI; sin visibilidad de la composición.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "MemoryCacheService.Get DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Implementación de interfaz pública; llamadores fuera del lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "MemoryCacheService.Set DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "La llama GetOrCreateAsync (L67); la raíz pública no tiene llamadores visibles.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "MemoryCacheService.Remove DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Implementación de interfaz; las aristas del grafo hacia Remove desde StepResultFactory son colisiones de nombre con HashSet.Remove.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "MemoryCacheService.Clear DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Implementación de interfaz; llamadores fuera del lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "MemoryCacheService.GetOrCreateAsync DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Implementación de interfaz; llamadores fuera del lote.",
+  "batch": "core-attributes"
+ },
+ {
+  "seed": "DEAD? Factory<T> (clase, medium)",
+  "verdict": "needs_context",
+  "reason": "Ca=0 en el lote; probable registro DI de genérico abierto o uso por reflexión no visible en el paquete.",
+  "batch": "core-steps"
+ },
+ {
+  "seed": "DEAD? Factory.BuildCache (private, high)",
+  "verdict": "false_positive",
+  "reason": "Se invoca en GetService (Factory.cs:38) con `_cache ??= BuildCache()`.",
+  "batch": "core-steps"
+ },
+ {
+  "seed": "DEAD? Factory.GetServiceName (private, high)",
+  "verdict": "false_positive",
+  "reason": "Se invoca desde la lambda de ToDictionary en BuildCache (Factory.cs:15).",
+  "batch": "core-steps"
+ },
+ {
+  "seed": "DEAD? Factory.GetService (public, low)",
+  "verdict": "false_positive",
+  "reason": "Implementa IFactory<T>.GetService; se llama por interfaz y es virtual.",
+  "batch": "core-steps"
+ },
+ {
+  "seed": "DEAD? EventEnrichmentResult<TEvent> (clase, medium)",
+  "verdict": "confirmed",
+  "reason": "Ca=0 y ninguna relación entrante en el paquete; solo podría ser API pública consumida externamente.",
+  "batch": "core-steps"
+ },
+ {
+  "seed": "ISSUE undisposed-resource CancellationTokenSource Pipeline.ExecuteAsync L134",
+  "verdict": "confirmed",
+  "reason": "timeoutCts (línea 134) no se libera; solo se libera linkedCts en el finally (línea 210).",
+  "batch": "execution"
+ },
+ {
+  "seed": "ISSUE empty-catch SchemaCompiler.GetRequiredReferences L215",
+  "verdict": "confirmed",
+  "reason": "El catch vacío de la línea 215 descarta cualquier excepción sin registro; ver F20.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class EventTypes (AITaskAgentConstants.EventTypes.cs)",
+  "verdict": "false_positive",
+  "reason": "El grafo registra uso entrante desde Core.Base.Metrics y Core.Base.Telemetry; es una clase de constantes.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class AITaskAgentConstants (TelemetryTags.cs)",
+  "verdict": "false_positive",
+  "reason": "Contenedor de TelemetryTags, usado en ObservabilityMiddleware (línea 32) y Pipeline (línea 151).",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class TelemetryTags",
+  "verdict": "false_positive",
+  "reason": "Usada en ObservabilityMiddleware, Pipeline y RetryMiddleware (p. ej. línea 89).",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class AITaskAgentConstants (ValidationTypes.cs)",
+  "verdict": "false_positive",
+  "reason": "Contenedor de ValidationTypes, usado en RetryMiddleware (líneas 109 y 137).",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class ValidationTypes",
+  "verdict": "false_positive",
+  "reason": "Usada en RetryMiddleware líneas 109 y 137.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class ServiceProviderPipelineMiddlewareExtensions",
+  "verdict": "needs_context",
+  "reason": "Extensión pública sin llamadores en el lote; podría ser API para aplicaciones externas.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method ServiceProviderPipelineMiddlewareExtensions.RegisterPipelineMiddleware",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadores dentro del lote.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method ServiceProviderPipelineMiddlewareExtensions.RegisterPipelineMiddlewares",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadores dentro del lote.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class SchemaCompiler",
+  "verdict": "false_positive",
+  "reason": "Recibido por el constructor de YamlPipelineFactory (línea 54) y usado en CreateFromYaml.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method SchemaCompiler.CompileFromFolderAsync",
+  "verdict": "needs_context",
+  "reason": "Entrada pública sin llamadores en el lote.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method SchemaCompiler.CompileAsync",
+  "verdict": "false_positive",
+  "reason": "Llamado desde CompileFromFolderAsync (línea 34); además es API pública.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method SchemaCompiler.GetCompiledType",
+  "verdict": "false_positive",
+  "reason": "Llamado en YamlPipelineFactory líneas 88 y 89.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method SchemaCompiler.BuildValidationMethod",
+  "verdict": "false_positive",
+  "reason": "Llamado en CompileAsync línea 61.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method SchemaCompiler.EnrichGeneratedCode",
+  "verdict": "false_positive",
+  "reason": "Llamado en CompileAsync línea 62.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method SchemaCompiler.RenameGeneratedClass",
+  "verdict": "false_positive",
+  "reason": "Llamado en EnrichGeneratedCode línea 105.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method SchemaCompiler.CompileAndLoadAsync",
+  "verdict": "false_positive",
+  "reason": "Llamado en CompileAsync línea 64.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method SchemaCompiler.GetRequiredReferences",
+  "verdict": "false_positive",
+  "reason": "Llamado en CompileAndLoadAsync línea 164.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class YamlPipelineDocument",
+  "verdict": "false_positive",
+  "reason": "Tipo destino de Deserialize en CreateFromYaml (línea 74).",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class YamlPipeline",
+  "verdict": "false_positive",
+  "reason": "Tipo de retorno de la factoría (líneas 59, 71, 97).",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method YamlPipeline.ExecuteAsync",
+  "verdict": "needs_context",
+  "reason": "API pública del resultado de la factoría; sin llamadores en el lote.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Class YamlPipelineFactory",
+  "verdict": "needs_context",
+  "reason": "Punto de entrada público, presumiblemente registrado en DI fuera del lote.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method YamlPipelineFactory.CreateFromFolderAsync",
+  "verdict": "needs_context",
+  "reason": "API pública sin llamadores en el lote.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method YamlPipelineFactory.CreateFromYaml",
+  "verdict": "false_positive",
+  "reason": "Llamado en CreateFromFolderAsync línea 67.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method YamlPipelineFactory.BuildDeserializer",
+  "verdict": "false_positive",
+  "reason": "Llamado en CreateFromYaml línea 73.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method YamlPipelineFactory.SafeGetTypes",
+  "verdict": "false_positive",
+  "reason": "Usado como selector en BuildDeserializer línea 114.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method YamlPipelineFactory.RequireSchema",
+  "verdict": "false_positive",
+  "reason": "Llamado en CreateFromYaml líneas 88 y 89.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method YamlPipelineFactory.ResolveRole",
+  "verdict": "false_positive",
+  "reason": "Llamado en CreateFromYaml línea 80.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? Method YamlPipelineFactory.ValidateAndOrder",
+  "verdict": "false_positive",
+  "reason": "Llamado en CreateFromYaml línea 95.",
+  "batch": "execution"
+ },
+ {
+  "seed": "DEAD? NewtonsoftJsonDataConverter (clase)",
+  "verdict": "false_positive",
+  "reason": "Las relaciones entrantes muestran cuatro llamadas desde StepResultFactory a Convert.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? NewtonsoftJsonDataConverter.Convert",
+  "verdict": "false_positive",
+  "reason": "Llamado desde StepResultFactory.CompileCtor y tres variantes segun las relaciones entrantes; fan_in=0 es artefacto del indexador.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser (clase)",
+  "verdict": "needs_context",
+  "reason": "Ca=1 y una relacion saliente a DefaultStepActivator.Create sugiere instanciacion por DI/activador; no hay llamadores directos visibles.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.JsonResponseParser (constructor)",
+  "verdict": "needs_context",
+  "reason": "Publico, sin llamadas en el lote; probable resolucion por DI o activador externo.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.Parse",
+  "verdict": "needs_context",
+  "reason": "Metodo publico sin llamadores en el lote; el uso depende de codigo externo.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.TryDirectParse",
+  "verdict": "false_positive",
+  "reason": "Invocado desde Parse en la linea 35.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.TryExtractFromCodeBlock",
+  "verdict": "false_positive",
+  "reason": "Invocado desde Parse en la linea 42.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.TryExtractJsonFromText",
+  "verdict": "false_positive",
+  "reason": "Invocado desde Parse en la linea 49.",
+  "batch": "json"
+ },
+ {
+  "seed": "ISSUE[empty-catch] JsonResponseParser.TryExtractJsonFromText linea 113",
+  "verdict": "confirmed",
+  "reason": "catch (JsonException) { } descarta la excepcion sin registro.",
+  "batch": "json"
+ },
+ {
+  "seed": "ISSUE[empty-catch] JsonResponseParser.TryExtractJsonFromText linea 125",
+  "verdict": "confirmed",
+  "reason": "Mismo patron en la rama de array.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.TryCleanAndParse",
+  "verdict": "false_positive",
+  "reason": "Invocado desde Parse en la linea 56.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.MarkDownCodeBlockRegEx",
+  "verdict": "false_positive",
+  "reason": "Usado en TryExtractFromCodeBlock (linea 82); es un regex generado.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.JsonObjectRegEx",
+  "verdict": "false_positive",
+  "reason": "Usado en TryExtractJsonFromText (linea 105).",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonResponseParser.JsonArrayRegEx",
+  "verdict": "false_positive",
+  "reason": "Usado en TryExtractJsonFromText (linea 117).",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonSchemaValidator (clase)",
+  "verdict": "needs_context",
+  "reason": "Ca=0 y sin relaciones entrantes; parece sin uso dentro del grafo, pero puede ser API publica.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonSchemaValidator.ValidateRequiredProperties",
+  "verdict": "needs_context",
+  "reason": "Publico sin llamadores visibles; requiere busqueda de uso externo.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? JsonSchemaValidator.ValidateStructure",
+  "verdict": "needs_context",
+  "reason": "Publico sin llamadores visibles; requiere busqueda de uso externo.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? Serializations.IgnoreExceptionContractResolver (clase)",
+  "verdict": "false_positive",
+  "reason": "Instanciada en _safeSettings (linea 29).",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? IgnoreExceptionContractResolver.CreateProperty",
+  "verdict": "false_positive",
+  "reason": "Override invocado por Newtonsoft al construir contratos; fan_in=1 en el grafo.",
+  "batch": "json"
+ },
+ {
+  "seed": "DEAD? ServiceCollectionExtensions (clase)",
+  "verdict": "false_positive",
+  "reason": "Clase estática de extensiones públicas (AddAITaskAgent/UseAITaskAgent) invocada por los hosts, no por entradas internas.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? ServiceCollectionExtensions.AddAITaskAgent",
+  "verdict": "false_positive",
+  "reason": "API pública de registro; sin llamadores en el lote pero es el punto de entrada de DI.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? ServiceCollectionExtensions.UseAITaskAgent",
+  "verdict": "false_positive",
+  "reason": "API pública que el host llama tras construir el provider (L100-114).",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? ServiceCollectionExtensions.AddToolDiscovery",
+  "verdict": "confirmed",
+  "reason": "Su única llamada está comentada (L80) y es private.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? ServiceCollectionExtensions.SafeGetTypes",
+  "verdict": "confirmed",
+  "reason": "Solo la usa AddToolDiscovery, que no se invoca.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? ConfigureLlmEnvironmentOptions (clase)",
+  "verdict": "false_positive",
+  "reason": "Se instancia en AddAITaskAgent (L43) y se registra como IConfigureOptions.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? ConfigureLlmEnvironmentOptions.Configure",
+  "verdict": "false_positive",
+  "reason": "Implementación de IConfigureOptions invocada por el sistema de opciones.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? ConfigureLlmEnvironmentOptions.BuildFallback",
+  "verdict": "false_positive",
+  "reason": "Llamada en L199 y L238 dentro de Configure.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? LlmEnvironmentRaw (clase)",
+  "verdict": "false_positive",
+  "reason": "Se usa como tipo de enlace en section.GetEx<LlmEnvironmentRaw>() (L146).",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? LlmProviderRaw (clase)",
+  "verdict": "false_positive",
+  "reason": "Tipo de valor de LlmEnvironmentRaw.Providers, rellenado por el binder.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? LlmRoleRaw (clase)",
+  "verdict": "false_positive",
+  "reason": "Tipo de valor de LlmEnvironmentRaw.Roles, rellenado por el binder.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? LlmResponseEmptyException (clase)",
+  "verdict": "needs_context",
+  "reason": "Nada en el lote la lanza ni captura; probablemente la lanza un ILlmService externo.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? LlmResponseEmptyException.LlmResponseEmptyException(model, provider, innerException)",
+  "verdict": "needs_context",
+  "reason": "Constructor sin llamadores visibles; depende de servicios fuera del lote.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? ResumeRequest (clase)",
+  "verdict": "needs_context",
+  "reason": "DTO público sin usos en el lote; podría consumirlo el motor de pipeline externo.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? StepValidationException (clase)",
+  "verdict": "needs_context",
+  "reason": "No se lanza en el lote; puede usarla un paso de validación externo.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? StepValidationException.StepValidationException(stepName, validationError, innerException)",
+  "verdict": "needs_context",
+  "reason": "Constructor sin llamadores en el lote.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? LlmHttpResponse (clase)",
+  "verdict": "needs_context",
+  "reason": "Record genérico sin usos en el lote; descrito para lógica de reintento de servicios externos.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? BaseLlmStep.InvocationState (clase)",
+  "verdict": "false_positive",
+  "reason": "Se instancia en GetState (L151) y se guarda en StepState.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "DEAD? FileTemplateProvider.CachedTemplate (clase)",
+  "verdict": "false_positive",
+  "reason": "Se instancia en AddToCache (L97) y es el valor del diccionario _cache.",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "ISSUE[empty-catch] LlmHelpers.NormalizeToolCallKey (catch JsonException L76)",
+  "verdict": "false_positive",
+  "reason": "Fallback intencionado y comentado: usa los argumentos en bruto cuando no son JSON; no pierde información relevante (ver F33 para otra limitación de la clave).",
+  "batch": "llm-configuration"
+ },
+ {
+  "seed": "ConsoleStepTracer (clase) DEAD?",
+  "verdict": "needs_context",
+  "reason": "Ningún tipo del lote ni relación entrante la usa; puede instanciarse desde código externo o por reflexión.",
+  "batch": "observability"
+ },
+ {
+  "seed": "ConsoleStepTracer.OnTraceEventAsync DEAD?",
+  "verdict": "needs_context",
+  "reason": "Implementa IStepTracer y solo se invocaría vía la interfaz, de la que no se ven llamadores en el lote.",
+  "batch": "observability"
+ },
+ {
+  "seed": "NullStepTracer (clase) DEAD?",
+  "verdict": "needs_context",
+  "reason": "Null Object sin referencias visibles; su uso depende de registros DI o código externo.",
+  "batch": "observability"
+ },
+ {
+  "seed": "NullStepTracer.OnTraceEventAsync DEAD?",
+  "verdict": "needs_context",
+  "reason": "Igual que la clase: método de interfaz sin llamadores visibles en el lote.",
+  "batch": "observability"
+ },
+ {
+  "seed": "StepTraceEvent (clase) DEAD?",
+  "verdict": "needs_context",
+  "reason": "Ca=3 corresponde a IStepTracer y sus dos implementaciones; no hay productores del evento en el lote.",
+  "batch": "observability"
+ },
+ {
+  "seed": "LlmIntentionResult.ValidateAsync ISSUE blocking-async .Result (L14)",
+  "verdict": "confirmed",
+  "reason": "L14 usa .Result sobre base.ValidateAsync; el riesgo depende de si la base devuelve una tarea ya completada, no visible en el lote.",
+  "batch": "option"
+ },
+ {
+  "seed": "LlmOptions DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Record publico sin consumidores en el lote; no se puede descartar uso externo o por reflexion.",
+  "batch": "option"
+ },
+ {
+  "seed": "CircuitBreaker DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Ningun otro tipo del lote lo instancia; el grafo no muestra entradas, pero puede ser API publica.",
+  "batch": "option"
+ },
+ {
+  "seed": "CircuitBreaker.ExecuteAsync DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Metodo publico sin llamadores en el lote; puede ser API publica.",
+  "batch": "option"
+ },
+ {
+  "seed": "CircuitBreaker.EnsureCircuitClosed DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "Lo llama ExecuteAsync en la linea 38.",
+  "batch": "option"
+ },
+ {
+  "seed": "CircuitBreaker.OnSuccess DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "Lo llama ExecuteAsync en la linea 43.",
+  "batch": "option"
+ },
+ {
+  "seed": "CircuitBreaker.OnFailure DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "Lo llama ExecuteAsync en la linea 48.",
+  "batch": "option"
+ },
+ {
+  "seed": "CircuitBreaker.Reset DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Metodo publico sin llamadores en el lote; puede ser API publica.",
+  "batch": "option"
+ },
+ {
+  "seed": "CircuitBreakerOpenException DEAD?(medium)",
+  "verdict": "false_positive",
+  "reason": "CircuitBreaker la instancia en la linea 66; solo seria muerta si lo fuera CircuitBreaker.",
+  "batch": "option"
+ },
+ {
+  "seed": "RateLimiter DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Sin instanciaciones en el lote; puede ser API publica o registrarse por DI externa.",
+  "batch": "option"
+ },
+ {
+  "seed": "RateLimiter.RateLimiter ctor DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Constructor publico sin llamadores en el lote.",
+  "batch": "option"
+ },
+ {
+  "seed": "RateLimiter.RefillTimerCallback DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "Se registra como callback del Timer en la linea 38.",
+  "batch": "option"
+ },
+ {
+  "seed": "RateLimiter.WaitAsync DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Metodo publico sin llamadores en el lote.",
+  "batch": "option"
+ },
+ {
+  "seed": "RateLimiter.TryAcquire DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Metodo publico sin llamadores en el lote.",
+  "batch": "option"
+ },
+ {
+  "seed": "RateLimiter.RefillTokens DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "Se llama en las lineas 80, 126 y 172.",
+  "batch": "option"
+ },
+ {
+  "seed": "RateLimiter.Dispose DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Implementacion de IDisposable; la invoca el propietario de la instancia, fuera del lote.",
+  "batch": "option"
+ },
+ {
+  "seed": "RetryPolicy DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Sin usos en el lote; puede ser API publica.",
+  "batch": "option"
+ },
+ {
+  "seed": "RetryPolicy.ExecuteAsync DEAD?(medium)",
+  "verdict": "needs_context",
+  "reason": "Metodo publico sin llamadores en el lote.",
+  "batch": "option"
+ },
+ {
+  "seed": "RetryPolicy.ShouldRetryException DEAD?(high)",
+  "verdict": "false_positive",
+  "reason": "Se invoca en el filtro del catch de la linea 57.",
+  "batch": "option"
+ },
+ {
+  "seed": "DEAD?(medium) ToolCallXmlParser (clase)",
+  "verdict": "needs_context",
+  "reason": "Clase estatica publica sin llamadores en el lote; el consumidor esperable estaria en codigo de proveedor fuera del lote",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(medium) ToolCallXmlParser.ParseToolCalls",
+  "verdict": "needs_context",
+  "reason": "Punto de entrada publico sin llamadores en el lote; no se puede descartar uso externo",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(medium) ToolCallXmlParser.ParseJsonInContentToolCalls",
+  "verdict": "false_positive",
+  "reason": "Se invoca desde ParseToolCalls (L103); alcanzable si ParseToolCalls lo es",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(high) ToolCallXmlParser.TryParseJsonToolCallToken",
+  "verdict": "false_positive",
+  "reason": "Llamado en L124 y L129; privado y alcanzable desde la API publica",
+  "batch": "tool"
+ },
+ {
+  "seed": "ISSUE[empty-catch L157] ToolCallXmlParser.TryParseJsonToolCallToken",
+  "verdict": "confirmed",
+  "reason": "catch vacio en L157 que ademas oculta excepciones de ParseSingleJsonToolCall (F1)",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(high) ToolCallXmlParser.ParseSingleJsonToolCall",
+  "verdict": "false_positive",
+  "reason": "Llamado en L145 y L153 desde TryParseJsonToolCallToken",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(high) ToolCallXmlParser.ParseGlmWrapperToolCalls",
+  "verdict": "false_positive",
+  "reason": "Llamado en L58 desde ParseToolCalls",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(high) ToolCallXmlParser.ParseGlmToolCalls",
+  "verdict": "false_positive",
+  "reason": "Llamado en L50 desde ParseToolCalls",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(high) ToolCallXmlParser.ParseGlmArguments",
+  "verdict": "false_positive",
+  "reason": "Llamado en L212 y L240",
+  "batch": "tool"
+ },
+ {
+  "seed": "ISSUE[empty-catch L264] ToolCallXmlParser.ParseGlmArguments",
+  "verdict": "confirmed",
+  "reason": "catch vacio en L264; fallback deliberado pero sin traza (F5)",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(high) ToolCallXmlParser.FindBestToolMatch",
+  "verdict": "false_positive",
+  "reason": "Llamado en L85, L174, L206, L234 y en RemoveToolCallTags",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(medium) ToolCallXmlParser.RemoveToolCallTags",
+  "verdict": "needs_context",
+  "reason": "Publico sin llamadores en el lote; el uso depende de codigo externo",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(high) ToolCallXmlParser.BuildArgumentsJson",
+  "verdict": "false_positive",
+  "reason": "Llamado en L74 y L90 desde ParseToolCalls",
+  "batch": "tool"
+ },
+ {
+  "seed": "ISSUE[empty-catch L334] ToolCallXmlParser.BuildArgumentsJson",
+  "verdict": "confirmed",
+  "reason": "catch vacio en L334; fallback deliberado pero sin traza (F5)",
+  "batch": "tool"
+ },
+ {
+  "seed": "DEAD?(high) ToolCallXmlParser.ParseAttributes",
+  "verdict": "false_positive",
+  "reason": "Llamado en L324 desde BuildArgumentsJson",
+  "batch": "tool"
+ }
+]

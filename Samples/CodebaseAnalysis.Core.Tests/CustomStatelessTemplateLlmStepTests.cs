@@ -63,7 +63,8 @@ public sealed class CustomStatelessTemplateLlmStepTests
 
         public async Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken cancellationToken = default)
         {
-            var withTools = request.Tools is { Count: > 0 };
+            // El intento final conserva las tools (caché de prefijo) y las prohíbe con tool_choice: none.
+            var withTools = request.Tools is { Count: > 0 } && !FinalAnswerRequests.ForbidsTools(request);
             var lastUser = request.Conversation.History.Messages.LastOrDefault(m => m.Role == LlmConstants.MessageRoles.User)?.Content;
             bool firstFinal;
             lock (_lock)

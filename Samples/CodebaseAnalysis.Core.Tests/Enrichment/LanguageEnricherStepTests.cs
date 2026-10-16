@@ -431,6 +431,40 @@ public class LanguageEnricherStepTests(ITestOutputHelper output)
             (await RunsAsync(graph)).Select(r => r.Enricher));
         Assert.Equal(1, await graph.CountAsync("SELECT COUNT(1) FROM edges WHERE type = 'HANDLES'"));
     }
+
+    [JdkFact]
+    public async Task The_step_ends_with_the_reachability_pass_and_the_schema_3_findings_reach_the_graph()
+    {
+        using var setup = await CreateAsync();
+        var graph = setup.Graph;
+
+        var (_, reporter, _) = await RunAsync(setup, JdkConfig());
+        Dump(reporter);
+
+        var messages = reporter.Entries.Where(e => e.Source == LanguageEnricherStep.StepName).Select(e => e.Message).ToList();
+        var reachability = Assert.Single(messages, m => m.StartsWith("✅ Código muerto de Java:", StringComparison.Ordinal));
+        // Va después del plugin Struts/JSP: necesita su HANDLES y sus rutas.
+        Assert.True(messages.IndexOf(reachability) > messages.FindIndex(m => m.StartsWith("✅ Struts/JSP:", StringComparison.Ordinal)));
+
+        // La acción la atiende una ruta: es raíz, y Servicio, que ella crea, está vivo aunque nadie más lo nombre.
+        Assert.True((await PropertiesAsync(graph, JavaGraphFixture.Qn(JavaTestRepo.ConsultarActionPath, "ConsultarAction")))["is_reachable"]!.GetValue<bool>());
+        Assert.True((await PropertiesAsync(graph, JavaGraphFixture.ServicioQn))["is_reachable"]!.GetValue<bool>());
+        Assert.Equal(0, await graph.CountAsync("SELECT COUNT(1) FROM nodes WHERE json_extract(properties, '$.dead_code_candidate') = 1"));
+
+        // fan_in exacto, OVERRIDES de la implementación a la interfaz y la codificación de cada fichero.
+        Assert.Equal(1, (await PropertiesAsync(graph, JavaGraphFixture.Qn(JavaTestRepo.BasePath, "Base.log")))["fan_in"]!.GetValue<int>());
+        Assert.Equal(2, await graph.CountAsync("SELECT COUNT(1) FROM edges WHERE type = 'OVERRIDES'"));
+        Assert.Equal("iso-8859-1", (await PropertiesAsync(graph, JavaGraphFixture.Qn(JavaTestRepo.ServicioPath, "__file__")))["encoding"]!.GetValue<string>());
+        // El docstring que cbm leyó mal (U+FFFD) lo sustituye el del analizador, con la codificación del fichero.
+        Assert.Equal("Añade la acción.", (await PropertiesAsync(graph, JavaGraphFixture.Ejecutar))["docstring"]!.GetValue<string>());
+        Assert.Equal("javadoc", (await PropertiesAsync(graph, JavaGraphFixture.Ejecutar))["docstring_source"]!.GetValue<string>());
+        // Servicio.ejecutar asigna null a un String local, pero eso no es ninguna de las reglas.
+        Assert.Equal(0, await graph.CountAsync("SELECT COUNT(1) FROM nodes WHERE json_extract(properties, '$.detected_issues') IS NOT NULL"));
+
+        // Una segunda pasada con la misma indexación se omite y no vuelve a calcular la alcanzabilidad.
+        var (_, second, _) = await RunAsync(setup, JdkConfig());
+        Assert.DoesNotContain(second.Entries, e => e.Message.StartsWith("✅ Código muerto de Java:", StringComparison.Ordinal));
+    }
 }
 
 public class JavaAnalyzerRunnerTests
@@ -544,8 +578,8 @@ public class JavaAnalyzerRunnerTests
     }
 }
 
-/// <summary>P2: con Java y sin C#, <see cref="BdpEnricherStep"/> no llama al CLI ni al fallback del LLM.</summary>
-public class BdpEnricherLanguageTests
+/// <summary>P2: con Java y sin C#, <see cref="DotNetEnricherStep"/> no llama al CLI ni al fallback del LLM.</summary>
+public class DotNetEnricherLanguageTests
 {
     private sealed class CountingStep : IStep<GraphStatusResult, GraphStatusResult>
     {
@@ -568,14 +602,14 @@ public class BdpEnricherLanguageTests
     {
         using var temp = new TempDirectory();
         var reporter = new CapturingReporter();
-        // Con BdpEnricher desactivado el camino de siempre va directo al fallback: así se ve si se toma o no.
-        var context = EnrichmentStepContext.Create(TestConfig.FromPairs(("BdpEnricher:Enabled", "false")), reporter, temp.Path,
+        // Con DotNetEnricher desactivado el camino de siempre va directo al fallback: así se ve si se toma o no.
+        var context = EnrichmentStepContext.Create(TestConfig.FromPairs(("DotNetEnricher:Enabled", "false")), reporter, temp.Path,
             Path.Combine(temp.Path, "codebase.db"));
         if (languages is { } detected)
             context.Set(AnalysisContextKeys.DetectedLanguages, detected);
         var fallback = new CountingStep();
         var input = new GraphStatusResult { DatabasePath = Path.Combine(temp.Path, "codebase.db") };
-        var result = await new BdpEnricherStep(fallback).ExecuteAsync(input, context, 1, null, CancellationToken.None);
+        var result = await new DotNetEnricherStep(fallback).ExecuteAsync(input, context, 1, null, CancellationToken.None);
         return (input, result, reporter, fallback);
     }
 
@@ -587,8 +621,8 @@ public class BdpEnricherLanguageTests
         Assert.Same(input, result);
         Assert.Equal(0, fallback.Calls);
         var entry = Assert.Single(reporter.Entries);
-        Assert.Equal(BdpEnricherStep.StepName, entry.Source);
-        Assert.Equal("ℹ️ Repositorio Java sin C#: el enriquecimiento es el del analizador Java; se omiten BdpGraphEnricher y el fallback del LLM.",
+        Assert.Equal(DotNetEnricherStep.StepName, entry.Source);
+        Assert.Equal("ℹ️ Repositorio Java sin C#: el enriquecimiento es el del analizador Java; se omiten DotNetEnricher y el fallback del LLM.",
             entry.Message);
     }
 

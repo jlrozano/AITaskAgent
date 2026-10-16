@@ -23,8 +23,15 @@ public sealed record StartAnalysisRequest(bool ForceReindex = false, List<string
 public sealed record RegenerateReportsRequest(List<string>? Reports = null, bool Synthesis = true);
 
 /// <summary>
-/// Resultado de <see cref="AnalysisRunManager.Start"/> y <see cref="AnalysisRunManager.Regenerate"/>: la ejecución o el
-/// error con su código HTTP.
+/// Cuerpo de <c>POST /api/analysis/{runId}/verify</c>: los informes que se verifican (tipos o alias) y si, después, se
+/// regenera el resumen ejecutivo. Por defecto no: la verificación toca pocas líneas y la síntesis cuesta una llamada grande,
+/// así que la SPA avisa de que puede quedar desfasado en lugar de rehacerlo sola.
+/// </summary>
+public sealed record VerifyReportsRequest(List<string>? Reports = null, bool Synthesis = false);
+
+/// <summary>
+/// Resultado de <see cref="AnalysisRunManager.Start"/>, <see cref="AnalysisRunManager.Regenerate"/> y
+/// <see cref="AnalysisRunManager.Verify"/>: la ejecución o el error con su código HTTP.
 /// </summary>
 public sealed record StartAnalysisResult(AnalysisRun? Run, ApiError? Error, int StatusCode);
 
@@ -117,16 +124,32 @@ public sealed class AnalysisRunManager(
     /// misma ejecución pasa otra vez a <c>running</c>, emite <c>run.regeneration_started</c> y sigue con el mismo log y
     /// <c>seq</c> hasta un segundo <c>run.completed</c>. Solo sirve para la ejecución que el servidor tiene en memoria.
     /// </summary>
-    public StartAnalysisResult Regenerate(string runId, RegenerateReportsRequest request)
+    public StartAnalysisResult Regenerate(string runId, RegenerateReportsRequest request) =>
+        StartReportsOperation(runId, request.Reports, request.Synthesis, verification: false);
+
+    /// <summary>
+    /// Verifica informes de la última ejecución, ya terminada, contra el código: lo mismo que <see cref="Regenerate"/> en
+    /// reglas, exclusiones y registro de eventos (emite <c>run.verification_started</c>), pero ejecuta el pipeline de
+    /// verificación sobre los informes que ya están en disco. Cada informe verificado pasa por <c>report.verified</c>.
+    /// </summary>
+    public StartAnalysisResult Verify(string runId, VerifyReportsRequest request) =>
+        StartReportsOperation(runId, request.Reports, request.Synthesis, verification: true);
+
+    /// <summary>Lo común de regenerar y verificar informes: la ejecución que se reabre, las exclusiones y la tarea de fondo.</summary>
+    private StartAnalysisResult StartReportsOperation(string runId, List<string>? requestedReports, bool synthesis, bool verification)
     {
         var run = Find(runId);
         if (run == null)
             return new StartAnalysisResult(null, ApiErrorsFactory.NotFound($"No existe la ejecución '{runId}'."), StatusCodes.Status404NotFound);
 
-        if (!TryParseReports(request.Reports, out var reports, out var invalid))
+        if (!TryParseReports(requestedReports, out var reports, out var invalid))
             return new StartAnalysisResult(null, invalid, StatusCodes.Status400BadRequest);
         if (reports.Count == 0)
-            return new StartAnalysisResult(null, new ApiError(ApiErrorCodes.InvalidRequest, "Indica al menos un informe que regenerar."), StatusCodes.Status400BadRequest);
+        {
+            return new StartAnalysisResult(null,
+                new ApiError(ApiErrorCodes.InvalidRequest, verification ? "Indica al menos un informe que verificar." : "Indica al menos un informe que regenerar."),
+                StatusCodes.Status400BadRequest);
+        }
 
         lock (workspace.Gate)
         {
@@ -134,11 +157,11 @@ public sealed class AnalysisRunManager(
             if (!ReferenceEquals(_last, run))
                 return new StartAnalysisResult(null, ApiErrorsFactory.NotFound($"No existe la ejecución '{runId}'."), StatusCodes.Status404NotFound);
 
-            // Las mismas reglas que al lanzar: la regeneración escribe en el grafo y en los informes.
+            // Las mismas reglas que al lanzar: regenerar y verificar escriben en el grafo y en los informes.
             if (run.IsRunning)
                 return new StartAnalysisResult(null, ApiErrorsFactory.AnalysisRunning(run.RunId), StatusCodes.Status409Conflict);
 
-            // Cambiar de repositorio no borra la última ejecución, y regenerarla reapuntaría el sandbox de FileTools y las
+            // Cambiar de repositorio no borra la última ejecución, y operar sobre ella reapuntaría el sandbox de FileTools y las
             // tools del grafo al repositorio de la ejecución: el chat del abierto leería otro (auditoría, H-7).
             var active = workspace.Current;
             if (active == null)
@@ -154,21 +177,23 @@ public sealed class AnalysisRunManager(
                 return new StartAnalysisResult(null, ApiErrorsFactory.KnowledgeOperationRunning(), StatusCodes.Status409Conflict);
 
             run.BeginRegeneration();
-            // Dentro del cerrojo y antes de la tarea: es el primer evento de la regeneración, antes que los del pipeline.
+            // Dentro del cerrojo y antes de la tarea: es el primer evento de la operación, antes que los del pipeline.
             run.EventLog.Append(new AnalysisEventDto
             {
                 RunId = run.RunId,
                 Ts = clock.GetUtcNow(),
-                Type = AnalysisEventDtoTypes.RunRegenerationStarted,
+                Type = verification ? AnalysisEventDtoTypes.RunVerificationStarted : AnalysisEventDtoTypes.RunRegenerationStarted,
                 Level = AnalysisEventLevels.Info,
-                Message = $"Regenerando {string.Join(", ", reports)}{(request.Synthesis ? " y el resumen ejecutivo" : "")}.",
+                Message = $"{(verification ? "Verificando" : "Regenerando")} {string.Join(", ", reports)}{(synthesis ? " y el resumen ejecutivo" : "")}.",
                 Data = new Dictionary<string, object?>
                 {
                     ["reports"] = reports.Select(r => r.ToString()).ToList(),
-                    ["synthesis"] = request.Synthesis
+                    ["synthesis"] = synthesis
                 }
             });
-            run.Completion = Task.Run(() => ExecuteRegenerationAsync(run, reports, request.Synthesis));
+            run.Completion = verification
+                ? Task.Run(() => ExecuteVerificationAsync(run, reports, synthesis))
+                : Task.Run(() => ExecuteRegenerationAsync(run, reports, synthesis));
         }
 
         return new StartAnalysisResult(run, null, StatusCodes.Status202Accepted);
@@ -376,6 +401,68 @@ public sealed class AnalysisRunManager(
     }
 
     /// <summary>
+    /// La verificación de <see cref="Verify"/>: como <see cref="ExecuteRegenerationAsync"/>, pero con el pipeline de verificación.
+    /// Verificar no cambia qué informes se generaron, así que <c>failedReports</c> se queda como estaba; un informe que no se
+    /// pudo verificar no hace fallar la ejecución (su informe sigue siendo el de antes) y se cuenta aparte en el mensaje final.
+    /// </summary>
+    private async Task ExecuteVerificationAsync(AnalysisRun run, IReadOnlyList<ReportType> reports, bool synthesis)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var failedReports = run.FailedReports;
+        var unverified = 0;
+        AnalysisPipelineFinalResult? final = null;
+
+        var status = RunStatuses.Failed;
+        string? error = null;
+
+        using (LogContext.PushProperty(LogDirProperty, run.LogsPath))
+        {
+            try
+            {
+                _logger.LogInformation("Análisis {RunId}: verificando {Reports} (síntesis={Synthesis})",
+                    run.RunId, string.Join(", ", reports), synthesis);
+
+                var (result, failure) = await RunWorkflowAsync(run,
+                    (channel, reporter, ct) => workflow.VerifyAsync(run.Input, reports, synthesis, channel, reporter, ct),
+                    dto =>
+                    {
+                        if (dto.Type == AnalysisEventDtoTypes.ReportVerified && dto.Data?.GetValueOrDefault("outcome") as string == "failed")
+                            Interlocked.Increment(ref unverified);
+                    });
+
+                final = result as AnalysisPipelineFinalResult;
+                if (run.Cancellation.IsCancellationRequested)
+                {
+                    status = RunStatuses.Cancelled;
+                    error = "Verificación cancelada.";
+                }
+                else if (failure == null && (final is { HasError: false, Success: true } || result is ParallelResult { HasError: false }))
+                {
+                    // Verificar no regenera nada: si la ejecución tenía informes sin generar, los sigue teniendo.
+                    status = failedReports.Count > 0 ? RunStatuses.CompletedWithFailures : RunStatuses.Succeeded;
+                }
+                else
+                {
+                    status = RunStatuses.Failed;
+                    error = failure?.Message ?? result?.Error?.Message ?? $"Resultado inesperado: {result?.GetType().Name ?? "null"}";
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "La verificación de {RunId} falló fuera del pipeline", run.RunId);
+                status = run.Cancellation.IsCancellationRequested ? RunStatuses.Cancelled : RunStatuses.Failed;
+                error = status == RunStatuses.Cancelled ? "Verificación cancelada." : ex.Message;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                CompleteRun(run, status, failedReports, error, final?.ExecutiveReportPath, stopwatch.ElapsedMilliseconds,
+                    kind: RunMetaFile.KindVerification, unverified: Volatile.Read(ref unverified));
+            }
+        }
+    }
+
+    /// <summary>
     /// Ejecuta el workflow con un canal propio cuyos eventos pasan por el mapper al log de la ejecución (y a
     /// <paramref name="observe"/>). Devuelve el resultado o la excepción; la cancelación la decide el llamante por el token.
     /// </summary>
@@ -428,17 +515,19 @@ public sealed class AnalysisRunManager(
     /// añadir el evento deja la ejecución en <c>running</c> ni el SSE abierto.
     /// </summary>
     private void CompleteRun(AnalysisRun run, string status, IReadOnlyList<string> failedReports, string? error, string? executiveReportPath, long durationMs,
-        bool regeneration = false)
+        bool regeneration = false, string? kind = null, int unverified = 0)
     {
         try
         {
             // Antes del estado final: quien ve la ejecución terminada ya encuentra el fichero, y entre el estado final y el
             // run.completed no se hace nada lento. Tras una regeneración describe la ejecución entera, desde el análisis, con
             // el consumo acumulado, igual que el usage del evento.
+            kind ??= regeneration ? RunMetaFile.KindRegeneration : RunMetaFile.KindAnalysis;
+            var verification = kind == RunMetaFile.KindVerification;
             var finishedAt = clock.GetUtcNow();
             var usage = run.Usage.Snapshot();
             if (RunMetaFile.TryWrite(run.Input.OutputReportsPath, RunMetaFile.Build(
-                    regeneration ? RunMetaFile.KindRegeneration : RunMetaFile.KindAnalysis, run.RunId, status,
+                    kind, run.RunId, status,
                     run.StartedAt, finishedAt, usage)) is { } metaWarning)
             {
                 _logger.LogWarning("{Warning}", metaWarning);
@@ -461,11 +550,12 @@ public sealed class AnalysisRunManager(
                 Type = AnalysisEventDtoTypes.RunCompleted,
                 Level = status switch
                 {
+                    RunStatuses.Succeeded when unverified > 0 => AnalysisEventLevels.Warning,
                     RunStatuses.Succeeded => AnalysisEventLevels.Success,
                     RunStatuses.CompletedWithFailures or RunStatuses.Cancelled => AnalysisEventLevels.Warning,
                     _ => AnalysisEventLevels.Error
                 },
-                Message = (status, regeneration) switch
+                Message = verification ? VerificationMessage(status, unverified, error) : (status, regeneration) switch
                 {
                     (RunStatuses.Succeeded, false) => "Análisis completado.",
                     (RunStatuses.CompletedWithFailures, false) => $"Análisis completado con {failedReports.Count} informe(s) sin generar.",
@@ -482,6 +572,8 @@ public sealed class AnalysisRunManager(
                     ["exitCode"] = exitCode,
                     ["durationMs"] = durationMs,
                     ["failedReports"] = failedReports,
+                    // Solo tras verificar: informes que el verificador no pudo comprobar (siguen como estaban).
+                    ["unverifiedReports"] = verification ? unverified : null,
                     ["executiveReportPath"] = string.IsNullOrEmpty(executiveReportPath) ? null : executiveReportPath,
                     ["error"] = error,
                     // Acumulado de la ejecución y sus regeneraciones (AnalysisRun.Usage).
@@ -505,6 +597,15 @@ public sealed class AnalysisRunManager(
             run.EventLog.Complete();
         }
     }
+
+    private static string VerificationMessage(string status, int unverified, string? error) => status switch
+    {
+        RunStatuses.Succeeded or RunStatuses.CompletedWithFailures when unverified > 0 =>
+            $"Verificación completada; {unverified} informe(s) no se pudieron verificar y siguen como estaban.",
+        RunStatuses.Succeeded or RunStatuses.CompletedWithFailures => "Verificación completada.",
+        RunStatuses.Cancelled => "Verificación cancelada.",
+        _ => $"Verificación terminada con errores: {error}"
+    };
 
     /// <summary>
     /// La cancelación se engancha a <see cref="IHostApplicationLifetime.ApplicationStopping"/>, que llega antes

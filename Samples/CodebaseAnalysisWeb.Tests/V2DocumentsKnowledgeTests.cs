@@ -161,7 +161,7 @@ public sealed class V2DocumentsKnowledgeTests : IDisposable
         using var factory = new WebTestFactory
         {
             CustomLlm = new DescribingLlm("Mitad roja y mitad azul."),
-            ExtraConfiguration = { ["LlmConfiguration:Providers:Fake:ApiKey"] = "k" }
+            ExtraConfiguration = { [$"{CodebaseAnalysis.Core.Hosting.LlmRoleFactory.SectionName}:Providers:Fake:ApiKey"] = "k" }
         };
         var client = factory.CreateClient();
         await client.OpenWorkspaceAsync(_repo.Path);

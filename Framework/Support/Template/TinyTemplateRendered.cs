@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -31,7 +32,15 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
         ReferenceLoopHandling = ReferenceLoopHandling.Ignore
     });
 
-    public static string Render(string template, object obj, bool strictMode = false, string? baseDirectory = null)
+    /// <param name="template">Template text.</param>
+    /// <param name="obj">Model; properties are lowercased, dictionary keys stay literal.</param>
+    /// <param name="strictMode">Throw on a missing include instead of leaving it in place.</param>
+    /// <param name="baseDirectory">Base for relative includes; null means the working directory.</param>
+    /// <param name="logger">
+    /// Optional. When supplied, a <c>{{ placeholder }}</c> that resolves to nothing (and has no
+    /// <c>??</c> default) leaves a warning with its name; the rendered text is unchanged.
+    /// </param>
+    public static string Render(string template, object obj, bool strictMode = false, string? baseDirectory = null, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(template))
         {
@@ -42,12 +51,12 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
 
         // Propiedades C# → lowercase. Keys de diccionario → literales.
         var jToken = JToken.FromObject(obj, LowercaseSerializer);
-        return RenderInternal(template, jToken, strictMode, baseDirectory);
+        return RenderInternal(template, jToken, strictMode, baseDirectory, logger);
     }
 
     string ITemplateRendered.Render(string template, object obj) => Render(template, obj, false);
 
-    private static string RenderInternal(string template, JToken rootToken, bool strictMode, string? baseDirectory = null)
+    private static string RenderInternal(string template, JToken rootToken, bool strictMode, string? baseDirectory = null, ILogger? logger = null)
     {
         if (string.IsNullOrEmpty(template) || template.Length > 2_000_000)
         {
@@ -61,7 +70,7 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
         result = ScribanIncludePattern.Replace(result, match =>
         {
             var rawPath = match.Groups[1].Value.Trim();
-            return ResolveFileInclude(rawPath, match.Value, rootToken, strictMode, baseDirectory);
+            return ResolveFileInclude(rawPath, match.Value, rootToken, strictMode, baseDirectory, logger);
         });
 
         // Pass 2: Interpolación {{ property }} / {{ property | filter }} / {{ dict['Key'] }}
@@ -82,6 +91,11 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
                 var jpath = ToJPath(expr);
                 var token = rootToken.SelectToken(jpath) ?? SelectTokenIgnoreCase(rootToken, jpath);
 
+                if (token is null && defaultVal is null)
+                {
+                    logger?.LogWarning("Template placeholder '{Placeholder}' did not resolve to a value and was rendered empty.", expr);
+                }
+
                 return token is null or { Type: JTokenType.Null }
                     ? defaultVal ?? string.Empty
                     : pipeExpr is not null ? ApplyPipeFilter(token, pipeExpr) ?? token.ToString() : token.ToString();
@@ -97,7 +111,7 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
         {
             var rawPath = match.Groups[1].Value.Trim();
             var cleanPath = rawPath.Trim('[', ']', '@', ' ', '\t', '\r', '\n');
-            return ResolveFileInclude(cleanPath, match.Value, rootToken, strictMode, baseDirectory);
+            return ResolveFileInclude(cleanPath, match.Value, rootToken, strictMode, baseDirectory, logger);
         });
 
         return result;
@@ -219,7 +233,7 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
 
     private static string ResolveFileInclude(
         string rawPath, string originalMatch,
-        JToken rootToken, bool strictMode, string? baseDirectory)
+        JToken rootToken, bool strictMode, string? baseDirectory, ILogger? logger = null)
     {
         var filePath = rawPath;
         try
@@ -252,7 +266,7 @@ public sealed partial class TinyTemplateRendered : ITemplateRendered
             }
 
             return File.Exists(filePath)
-                ? RenderInternal(File.ReadAllText(filePath), rootToken, strictMode, baseDirectory)
+                ? RenderInternal(File.ReadAllText(filePath), rootToken, strictMode, baseDirectory, logger)
                 : strictMode ? throw new FileNotFoundException($"Included template file not found: {filePath}", filePath) : originalMatch;
         }
         catch (Exception ex)

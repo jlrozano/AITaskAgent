@@ -4,6 +4,7 @@
 
 import type {
   AnalysisEventDto,
+  ChatModelsDto,
   ChatStreamEvent,
   ChatTurn,
   DocumentDetailDto,
@@ -138,9 +139,9 @@ export const successfulRun: AnalysisEventDto[] = build([
   ev('step.started', 'LanguageEnricherStep', 'enrich', { stepPath: 'x', attempt: 1 }),
   ev('log', 'LanguageEnricherStep', 'enrich', { channel: 'pipeline' }, { message: '🔎 Lenguajes detectados en disco: C# (12 ficheros .cs).' }),
   ev('step.completed', 'LanguageEnricherStep', 'enrich', { stepPath: 'x', success: true, durationMs: 200, error: null }, { level: 'success' }),
-  ev('step.started', 'BdpEnricherStep', 'enrich', { stepPath: 'x', attempt: 1 }),
-  ev('log', 'BdpEnricherStep', 'enrich', { channel: 'pipeline' }, { message: 'Grafo ya enriquecido: se omite' }),
-  ev('step.completed', 'BdpEnricherStep', 'enrich', { stepPath: 'x', success: true, durationMs: 50, error: null }, { level: 'success' }),
+  ev('step.started', 'DotNetEnricherStep', 'enrich', { stepPath: 'x', attempt: 1 }),
+  ev('log', 'DotNetEnricherStep', 'enrich', { channel: 'pipeline' }, { message: 'Grafo ya enriquecido: se omite' }),
+  ev('step.completed', 'DotNetEnricherStep', 'enrich', { stepPath: 'x', success: true, durationMs: 50, error: null }, { level: 'success' }),
   ev('step.started', 'SqlFacetExtractorStep', 'facets', { stepPath: 'x', attempt: 1 }),
   ev('step.completed', 'SqlFacetExtractorStep', 'facets', { stepPath: 'x', success: true, durationMs: 300, error: null }, { level: 'success' }),
   ev('step.started', 'ParallelReportsExecution', 'reports', { stepPath: 'x', attempt: 1 }),
@@ -304,8 +305,8 @@ export const cancelledDuringReports: AnalysisEventDto[] = build([
   ev('step.completed', 'DetectAndIndexGraphStep', 'detect', { stepPath: '', success: true, durationMs: 4000, error: null }, { level: 'success' }),
   ev('step.started', 'LanguageEnricherStep', 'enrich', { stepPath: '', attempt: 1 }),
   ev('step.completed', 'LanguageEnricherStep', 'enrich', { stepPath: '', success: true, durationMs: 20, error: null }, { level: 'success' }),
-  ev('step.started', 'BdpEnricherStep', 'enrich', { stepPath: '', attempt: 1 }),
-  ev('step.completed', 'BdpEnricherStep', 'enrich', { stepPath: '', success: true, durationMs: 50, error: null }, { level: 'success' }),
+  ev('step.started', 'DotNetEnricherStep', 'enrich', { stepPath: '', attempt: 1 }),
+  ev('step.completed', 'DotNetEnricherStep', 'enrich', { stepPath: '', success: true, durationMs: 50, error: null }, { level: 'success' }),
   ev('step.started', 'SqlFacetExtractorStep', 'facets', { stepPath: '', attempt: 1 }),
   ev('step.completed', 'SqlFacetExtractorStep', 'facets', { stepPath: '', success: true, durationMs: 300, error: null }, { level: 'success' }),
   ev('step.started', 'ParallelReportsExecution', 'reports', { stepPath: '', attempt: 1 }),
@@ -412,6 +413,84 @@ export function regenerationAfter(
   return drafts.map((d, i) => ({ seq: last.seq + i + 1, runId: last.runId, ts: new Date(base + i * 1000).toISOString(), ...d }));
 }
 
+/** Resultado de verificar un informe, como lo manda `report.verified`. */
+export interface VerificationOutcomeFixture {
+  outcome: 'verified' | 'corrected' | 'warnings' | 'failed';
+  changes?: number;
+  previousVersionId?: string | null;
+  versionId?: string | null;
+  error?: string | null;
+}
+
+/**
+ * Verificación que continúa `previous` con el mismo `runId` y el `seq` siguiente, en el orden de tipos que emite
+ * `FakeAnalysisWorkflow.VerifyAsync` (CodebaseAnalysisWeb.Tests): `run.verification_started`, preparación, un `Verify_*` por
+ * informe con las tools de su verificador, `report.verified`, la síntesis si se pide y otro `run.completed`. Sus eventos llevan
+ * `phase: 'facets'` (la del último step de primer nivel, como los manda el servidor) para comprobar que no mueven las fases.
+ */
+export function verificationAfter(
+  previous: AnalysisEventDto[],
+  reports: string[],
+  options: { synthesis?: boolean; outcomes?: Record<string, VerificationOutcomeFixture>; failedReports?: string[]; status?: string } = {},
+): AnalysisEventDto[] {
+  const { synthesis = false, outcomes = {}, failedReports = [], status = 'succeeded' } = options;
+  const last = previous[previous.length - 1];
+  const unverified = reports.filter((r) => outcomes[r]?.outcome === 'failed').length;
+  const drafts: EventDraft[] = [
+    ev('run.verification_started', null, null, { reports, synthesis }),
+    ev('pipeline.started', 'CodebaseAnalysisVerification', null, { totalSteps: synthesis ? 3 : 2 }),
+    ev('step.started', 'PrepareRegenerationStep', 'facets', { stepPath: '', attempt: 1 }),
+    ev('step.completed', 'PrepareRegenerationStep', 'facets', { stepPath: '', success: true, durationMs: 40, error: null }, { level: 'success' }),
+    ev('step.started', 'ParallelVerificationExecution', 'facets', { stepPath: '', attempt: 1 }),
+  ];
+  for (const r of reports) {
+    drafts.push(ev('branch.started', 'ParallelVerificationExecution', 'facets', { branch: `Verify_${r}` }, { report: r }));
+    drafts.push(ev('step.started', `Verify_${r}`, 'facets', { stepPath: '', attempt: 1 }, { report: r }));
+  }
+  for (const r of reports) {
+    drafts.push(ev('tool.started', `Verifier_${r}`, 'facets', { tool: 'view_file' }, { report: r }));
+    drafts.push(ev('tool.completed', `Verifier_${r}`, 'facets', { tool: 'view_file', success: true, durationMs: 12 }, { report: r }));
+    drafts.push(ev('llm.response', `Verifier_${r}`, 'facets', { finishReason: 'Stop', tokens: 6000, promptTokens: 5000, completionTokens: 1000, costUsd: 0.02 }, { report: r }));
+    const result = outcomes[r] ?? { outcome: 'corrected', changes: 2, previousVersionId: 'v0001', versionId: 'v0002' };
+    drafts.push(ev('report.verified', `Verify_${r}`, 'facets', {
+      fileName: (REPORT_FILE_NAMES as Record<string, string>)[r] ?? `${r}.md`,
+      reportType: r,
+      outcome: result.outcome,
+      changes: result.changes ?? 0,
+      previousVersionId: result.previousVersionId ?? null,
+      versionId: result.versionId ?? null,
+      error: result.error ?? null,
+    }, { report: r, level: result.outcome === 'failed' ? 'error' : result.outcome === 'warnings' ? 'warning' : 'success', message: `${r} verificado` }));
+    drafts.push(ev('step.completed', `Verify_${r}`, 'facets', { stepPath: '', success: true, durationMs: 90000, error: null }, { report: r, level: 'success' }));
+    drafts.push(ev('branch.completed', 'ParallelVerificationExecution', 'facets', { branch: `Verify_${r}`, success: true, durationMs: 90000, error: null }, { report: r, level: 'success' }));
+  }
+  drafts.push(ev('step.completed', 'ParallelVerificationExecution', 'facets', { stepPath: '', success: true, durationMs: 91000, error: null }, { level: 'success' }));
+  if (synthesis) {
+    drafts.push(ev('step.started', 'ExecutiveSynthesizerStep', 'synthesis', { stepPath: '', attempt: 1 }));
+    drafts.push(ev('report.written', 'ExecutiveSynthesizerStep', 'synthesis', {
+      fileName: '00_resumen_ejecutivo.md',
+      reportType: null,
+      health: 'Green',
+      criticalFindings: 0,
+      truncated: false,
+    }, { level: 'success' }));
+    drafts.push(ev('step.completed', 'ExecutiveSynthesizerStep', 'synthesis', { stepPath: '', success: true, durationMs: 1200, error: null }, { level: 'success' }));
+  }
+  drafts.push(ev('pipeline.completed', 'CodebaseAnalysisVerification', null, { success: true, durationMs: 92000, error: null }));
+  drafts.push(ev('run.completed', null, null, {
+    status,
+    exitCode: status === 'succeeded' ? 0 : 1,
+    durationMs: 92100,
+    failedReports,
+    unverifiedReports: unverified,
+    executiveReportPath: synthesis ? 'C:\\repos\\miapp\\reports\\00_resumen_ejecutivo.md' : null,
+    error: null,
+  }, { level: unverified > 0 ? 'warning' : 'success', message: 'Verificación completada.' }));
+
+  const base = Date.parse(last.ts) + 60_000;
+  return drafts.map((d, i) => ({ seq: last.seq + i + 1, runId: last.runId, ts: new Date(base + i * 1000).toISOString(), ...d }));
+}
+
 // ── Chat ────────────────────────────────────────────────────────────────
 
 export const completedTurn: ChatTurn = {
@@ -426,6 +505,15 @@ export const completedTurn: ChatTurn = {
   costUsd: 0.004,
   durationMs: 2143,
   toolCalls: [{ name: 'list_reports', arguments: '{}', success: true, durationMs: 12 }],
+};
+
+/** `GET /api/chat/models`: dos modelos, el segundo sin streaming real. */
+export const chatModels: ChatModelsDto = {
+  defaultId: 'gpt-6-sol',
+  models: [
+    { id: 'gpt-6-sol', label: 'GPT-6 Sol', provider: 'azure-openai', model: 'gpt-6-sol', streaming: true, inputPricePerMillion: 2, outputPricePerMillion: 10 },
+    { id: 'gpt-5.4', label: 'GPT-5.4', provider: 'azure-openai', model: 'gpt-5.4', streaming: false, inputPricePerMillion: 2.5, outputPricePerMillion: 15 },
+  ],
 };
 
 /** Turno con una iteración de tools (`list_reports`) y la respuesta en la segunda iteración (§4.4). */

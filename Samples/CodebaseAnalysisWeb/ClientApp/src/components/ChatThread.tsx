@@ -1,12 +1,50 @@
-import { useEffect, useRef } from 'react';
-import type { ChatSession, ChatTurn } from '../api/types';
+import { useEffect, useRef, useState } from 'react';
+import type { ChatModelDto, ChatSession, ChatToolCall, ChatTurn } from '../api/types';
 import { formatCost, formatDuration, formatNumber, formatTime } from '../format';
 import type { ReportChange } from '../api/types';
-import { openSegmentText, turnReportChanges, USER_STOPPED_MESSAGE, type LiveTurn } from '../state/chatReducer';
+import { openSegmentText, turnReportChanges, USER_STOPPED_MESSAGE, type LiveTool, type LiveTurn } from '../state/chatReducer';
 import { AuditSummary, ChatAnswer } from './ChatAnswer';
 import { MarkdownView } from './MarkdownView';
 import { ReportChangeChip } from './ReportChangeChip';
 import { ToolCallChip, type ToolChipStatus } from './ToolCallChip';
+import { ToolCallDetail, type ToolCallView } from './ToolCallDetail';
+
+/**
+ * La llamada abierta en el detalle, que navega entre las de su turno. Del turno en curso se vuelve a leer a cada render, para que la
+ * salida aparezca al llegar; `views` es la foto del momento de abrirla, que se sigue enseñando cuando el turno termina (el historial
+ * no guarda las salidas).
+ */
+interface OpenTools {
+  live: boolean;
+  views: ToolCallView[];
+  index: number;
+}
+
+type OpenTool = (views: ToolCallView[], index: number, live?: boolean) => void;
+
+/** Una llamada de un turno guardado: el historial no guarda la salida. */
+function savedView(t: ChatToolCall): ToolCallView {
+  return {
+    name: t.name,
+    durationMs: t.durationMs,
+    status: chipStatus(t.success),
+    arguments: t.arguments,
+    outputNote: 'El historial del chat no guarda la salida de las herramientas: solo se ve mientras llega la respuesta.',
+  };
+}
+
+function liveView(t: LiveTool): ToolCallView {
+  return {
+    name: t.name,
+    durationMs: t.durationMs,
+    status: t.status,
+    error: t.error,
+    arguments: t.arguments,
+    output: t.output ?? null,
+    outputTruncated: t.outputTruncated,
+    outputBytes: t.outputBytes,
+  };
+}
 
 /** Acciones de los chips de informe (V2-B) y de las referencias de las respuestas. */
 export interface ReportChipHandlers {
@@ -44,7 +82,22 @@ function chipStatus(success: boolean | null | undefined): ToolChipStatus {
   return success === true ? 'ok' : success === false ? 'error' : 'unknown';
 }
 
-function TurnView({ turn, handlers }: { turn: ChatTurn; handlers: ReportChipHandlers }) {
+/** Etiqueta del modelo que dio la respuesta: la del catálogo si sigue ahí; si no, el deployment que guardó el turno. */
+function modelLabel(turn: ChatTurn, models: ChatModelDto[]): string | null | undefined {
+  return models.find((m) => m.id === turn.modelId)?.label ?? turn.model;
+}
+
+function TurnView({
+  turn,
+  handlers,
+  models,
+  onOpenTool,
+}: {
+  turn: ChatTurn;
+  handlers: ReportChipHandlers;
+  models: ChatModelDto[];
+  onOpenTool: OpenTool;
+}) {
   const tools = turn.toolCalls ?? [];
   const truncated = (turn.finishReason ?? '').toLowerCase() === 'length';
   return (
@@ -56,7 +109,14 @@ function TurnView({ turn, handlers }: { turn: ChatTurn; handlers: ReportChipHand
         {tools.length > 0 && (
           <div className="turn__tools" aria-label="Herramientas usadas">
             {tools.map((t, i) => (
-              <ToolCallChip key={i} name={t.name} arguments={t.arguments} status={chipStatus(t.success)} durationMs={t.durationMs} />
+              <ToolCallChip
+                key={i}
+                name={t.name}
+                arguments={t.arguments}
+                status={chipStatus(t.success)}
+                durationMs={t.durationMs}
+                onOpen={() => onOpenTool(tools.map(savedView), i)}
+              />
             ))}
           </div>
         )}
@@ -76,7 +136,7 @@ function TurnView({ turn, handlers }: { turn: ChatTurn; handlers: ReportChipHand
         {turn.status === 'completed' && (
           <p className="turn__meta">
             {[
-              turn.model,
+              modelLabel(turn, models),
               turn.tokens != null ? `${formatNumber(turn.tokens)} tokens` : null,
               // Coste 0 = el proveedor no lo informa (D8): se omite en vez de mostrar «0,000 $».
               turn.costUsd != null && turn.costUsd > 0 ? formatCost(turn.costUsd) : null,
@@ -91,7 +151,7 @@ function TurnView({ turn, handlers }: { turn: ChatTurn; handlers: ReportChipHand
   );
 }
 
-function LiveTurnView({ live, handlers }: { live: LiveTurn; handlers: ReportChipHandlers }) {
+function LiveTurnView({ live, handlers, onOpenTool }: { live: LiveTurn; handlers: ReportChipHandlers; onOpenTool: OpenTool }) {
   const closed = live.segments.filter((s) => s.closed);
   const final = openSegmentText(live);
   const toolsAfter = (n: number) => live.tools.filter((t) => t.afterSegment === n);
@@ -107,7 +167,7 @@ function LiveTurnView({ live, handlers }: { live: LiveTurn; handlers: ReportChip
             <p>{live.thinking}</p>
           </details>
         )}
-        {toolsAfter(0).length > 0 && <ToolRow tools={toolsAfter(0)} />}
+        {toolsAfter(0).length > 0 && <ToolRow live={live} tools={toolsAfter(0)} onOpenTool={onOpenTool} />}
         {closed.map((segment, i) => (
           <div key={i}>
             {segment.text.trim() && (
@@ -116,7 +176,7 @@ function LiveTurnView({ live, handlers }: { live: LiveTurn; handlers: ReportChip
                 <MarkdownView source={segment.text} />
               </div>
             )}
-            {toolsAfter(i + 1).length > 0 && <ToolRow tools={toolsAfter(i + 1)} />}
+            {toolsAfter(i + 1).length > 0 && <ToolRow live={live} tools={toolsAfter(i + 1)} onOpenTool={onOpenTool} />}
           </div>
         ))}
         <ReportChanges changes={live.reports} handlers={handlers} disabledReason="Podrás deshacerlo cuando termine la respuesta." />
@@ -137,11 +197,19 @@ function LiveTurnView({ live, handlers }: { live: LiveTurn; handlers: ReportChip
   );
 }
 
-function ToolRow({ tools }: { tools: LiveTurn['tools'] }) {
+function ToolRow({ live, tools, onOpenTool }: { live: LiveTurn; tools: LiveTurn['tools']; onOpenTool: OpenTool }) {
   return (
     <div className="turn__tools" aria-label="Herramientas">
       {tools.map((t) => (
-        <ToolCallChip key={t.key} name={t.name} arguments={t.arguments} status={t.status} durationMs={t.durationMs} error={t.error} />
+        <ToolCallChip
+          key={t.key}
+          name={t.name}
+          arguments={t.arguments}
+          status={t.status}
+          durationMs={t.durationMs}
+          error={t.error}
+          onOpen={() => onOpenTool(live.tools.map(liveView), live.tools.indexOf(t), true)}
+        />
       ))}
     </div>
   );
@@ -152,8 +220,12 @@ export function ChatThread({
   live,
   onOpenReport,
   onReportChanged,
-}: { session: ChatSession | null; live: LiveTurn | null } & ReportChipHandlers) {
+  models = [],
+}: { session: ChatSession | null; live: LiveTurn | null; models?: ChatModelDto[] } & ReportChipHandlers) {
   const handlers: ReportChipHandlers = { onOpenReport, onReportChanged };
+  const [openTools, setOpenTools] = useState<OpenTools | null>(null);
+  const onOpenTool: OpenTool = (views, index, isLive = false) => setOpenTools({ live: isLive, views, index });
+  const toolViews = openTools ? (openTools.live && live ? live.tools.map(liveView) : openTools.views) : [];
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const turns = session?.turns ?? [];
@@ -183,9 +255,23 @@ export function ChatThread({
         </div>
       )}
       {turns.map((t) => (
-        <TurnView key={t.id} turn={t} handlers={handlers} />
+        <TurnView key={t.id} turn={t} handlers={handlers} models={models} onOpenTool={onOpenTool} />
       ))}
-      {live && <LiveTurnView live={live} handlers={handlers} />}
+      {live && <LiveTurnView live={live} handlers={handlers} onOpenTool={onOpenTool} />}
+      <ToolCallDetail
+        call={openTools ? (toolViews[openTools.index] ?? null) : null}
+        onClose={() => setOpenTools(null)}
+        position={
+          openTools
+            ? {
+                index: openTools.index,
+                total: toolViews.length,
+                onPrev: () => setOpenTools((o) => (o ? { ...o, index: Math.max(0, o.index - 1) } : o)),
+                onNext: () => setOpenTools((o) => (o ? { ...o, index: Math.min(toolViews.length - 1, o.index + 1) } : o)),
+              }
+            : undefined
+        }
+      />
       <p className="visually-hidden" role="status">
         {live ? (live.status === 'sending' ? 'Enviando pregunta' : 'Recibiendo respuesta') : ''}
       </p>

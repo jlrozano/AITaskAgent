@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Enriquecedor Roslyn del grafo de codebase-memory-mcp. Es un ejecutable aparte que la app lanza como proceso
+       (ver Program.cs y README.md): no lo referencia nadie como ensamblado. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>DotNetEnricher</RootNamespace>
+    <AssemblyName>DotNetEnricher</AssemblyName>
+    <!-- CS1574: los ficheros enlazados de CodebaseAnalysis.Core citan en su documentación tipos de Core que aquí no existen. -->
+    <NoWarn>$(NoWarn);NU1903;CS1574</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- La misma versión de Roslyn que el Framework y FileTools. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.0.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="5.0.0" />
+    <PackageReference Include="Microsoft.Build.Locator" Version="1.7.8" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.1" />
+    <PackageReference Include="Dapper" Version="2.1.66" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.1" />
+    <PackageReference Include="System.CommandLine" Version="2.0.1" />
+  </ItemGroup>
+
+  <!-- Marcas de origen, registro de pasadas y proyecto del grafo: el mismo código que usa el enriquecedor Java de la app.
+       Se enlazan los ficheros en lugar de referenciar CodebaseAnalysis.Core, que traería al proceso el Framework y el
+       cliente del LLM; solo dependen de Microsoft.Data.Sqlite. DotNetEnricherIdentity fija el nombre y la versión de la
+       pasada que consulta DotNetEnricherStep. -->
+  <ItemGroup>
+    <Compile Include="..\CodebaseAnalysis.Core\Enrichment\EnrichmentMarks.cs" Link="Shared\EnrichmentMarks.cs" />
+    <Compile Include="..\CodebaseAnalysis.Core\Enrichment\EnrichmentRuns.cs" Link="Shared\EnrichmentRuns.cs" />
+    <Compile Include="..\CodebaseAnalysis.Core\Enrichment\GeneratedArtifacts.cs" Link="Shared\GeneratedArtifacts.cs" />
+    <Compile Include="..\CodebaseAnalysis.Core\Support\GraphProject.cs" Link="Shared\GraphProject.cs" />
+    <Compile Include="..\CodebaseAnalysis.Core\Enrichment\DotNetEnricherIdentity.cs" Link="Shared\DotNetEnricherIdentity.cs" />
+    <Compile Include="..\CodebaseAnalysis.Core\Enrichment\DotNetRestoreMode.cs" Link="Shared\DotNetRestoreMode.cs" />
+    <Compile Include="..\CodebaseAnalysis.Core\Support\CredentialNames.cs" Link="Shared\CredentialNames.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DotNetEnricher.Tests" />
+  </ItemGroup>
+
+</Project>

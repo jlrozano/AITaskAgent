@@ -48,15 +48,20 @@ public sealed class WebTestFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
-        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        // El framework elige el servicio de un proveedor por su Name: el del falso es el ServiceType del proveedor «Fake».
+        const string llm = CodebaseAnalysis.Core.Hosting.LlmRoleFactory.SectionName;
+        // La web carga appsettings.analysis.json del sample, con sus once modelos de chat y su rol de visión; los tests solo
+        // tienen el proveedor falso: las entradas de la lista se anulan (rol vacío = se omiten) y la visión vuelve al rol del chat.
+        var noChatModels = Enumerable.Range(0, 11).ToDictionary(i => $"CodebaseAnalysis:Chat:Models:{i}:Role", _ => (string?)"");
+        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(noChatModels).AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["LlmConfiguration:DefaultProvider"] = "Fake",
-            ["LlmConfiguration:Providers:Fake:ServiceType"] = "fake",
-            ["LlmConfiguration:Providers:Fake:BaseUrl"] = "http://fake.invalid/",
-            ["LlmConfiguration:Providers:Fake:Model"] = "fake-model",
-            ["LlmConfiguration:Roles:ChatAssistant:Provider"] = "Fake",
-            ["LlmConfiguration:Roles:ChatAssistant:Model"] = "fake-model",
-            ["LlmConfiguration:Roles:ChatAssistant:UseStreaming"] = "true",
+            ["CodebaseAnalysis:Chat:DefaultModel"] = "",
+            ["CodebaseAnalysis:Documents:VisionRole"] = "ChatAssistant",
+            [$"{llm}:Providers:Fake:ServiceType"] = (CustomLlm ?? Llm).Name,
+            [$"{llm}:Providers:Fake:BaseUrl"] = "http://fake.invalid/",
+            [$"{llm}:Roles:ChatAssistant:Provider"] = "Fake",
+            [$"{llm}:Roles:ChatAssistant:Model"] = "fake-model",
+            [$"{llm}:Roles:ChatAssistant:Inference:UseStreaming"] = "true",
             // Por si la máquina tiene la variable: los tests no deben ver la clave real.
             ["Asistente:ApiKey"] = "test-key",
             ["CodebaseAnalysis:Web:SettingsPath"] = SettingsPath,
@@ -65,7 +70,7 @@ public sealed class WebTestFactory : WebApplicationFactory<Program>
         }).AddInMemoryCollection(ExtraConfiguration));
         builder.ConfigureTestServices(services =>
         {
-            services.AddKeyedSingleton<ILlmService>("fake", (_, _) => CustomLlm ?? Llm);
+            services.AddSingleton<ILlmService>(_ => CustomLlm ?? Llm);
             services.RemoveAll<IAnalysisWorkflow>();
             services.AddSingleton<IAnalysisWorkflow>(sp =>
             {

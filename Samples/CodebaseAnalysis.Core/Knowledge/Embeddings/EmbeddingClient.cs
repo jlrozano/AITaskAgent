@@ -16,7 +16,7 @@ public sealed record EmbeddingOptions
 
     public bool Enabled { get; init; } = true;
 
-    /// <summary>Nombre del proveedor en <c>LlmConfiguration:Providers</c>; por defecto, <c>LlmConfiguration:DefaultProvider</c>.</summary>
+    /// <summary>Nombre del proveedor en <c>AITaskAgent:LlmProviders:Providers</c>; por defecto, el del <c>DefaultRole</c>.</summary>
     public string? Provider { get; init; }
 
     /// <summary>Despliegue en Azure o modelo en OpenAI.</summary>
@@ -71,7 +71,7 @@ public sealed record EmbeddingsRuntime(EmbeddingOptions Options, IEmbeddingClien
     public KnowledgeEmbeddingService For(KnowledgePaths paths) => new(paths, Options, Client);
 
     /// <summary>
-    /// Resuelve el proveedor con las mismas reglas de clave que <see cref="LlmRoleFactory.BuildProviders"/>. Sin
+    /// Resuelve el proveedor con las mismas reglas de clave que <see cref="LlmRoleFactory.BuildRoles"/>. Sin
     /// <c>Enabled</c>, sin proveedor o sin clave, queda desactivado con el motivo.
     /// </summary>
     public static EmbeddingsRuntime FromConfiguration(IConfiguration configuration, Func<string, string?> getEnvVar, HttpClient? httpClient = null)
@@ -80,19 +80,24 @@ public sealed record EmbeddingsRuntime(EmbeddingOptions Options, IEmbeddingClien
         if (!options.Enabled)
             return new EmbeddingsRuntime(options, null, "Los embeddings están desactivados en la configuración (CodebaseAnalysis:Embeddings:Enabled).");
 
-        var providerName = options.Provider ?? configuration["LlmConfiguration:DefaultProvider"];
-        var section = providerName == null ? null : configuration.GetSection($"LlmConfiguration:Providers:{providerName}");
+        // Los embeddings no pasan por el framework: se leen del proveedor las mismas claves que enlaza él, y ServiceType, como
+        // en el framework, es por defecto el nombre del proveedor.
+        var llm = configuration.GetSection(LlmRoleFactory.SectionName);
+        var providerName = options.Provider ?? llm[$"Roles:{llm["DefaultRole"] ?? "default"}:Provider"];
+        var section = providerName == null ? null : llm.GetSection($"Providers:{providerName}");
         if (section == null || !section.Exists())
-            return new EmbeddingsRuntime(options, null, $"No hay proveedor '{providerName}' en LlmConfiguration:Providers para los embeddings.");
+            return new EmbeddingsRuntime(options, null, $"No hay proveedor '{providerName}' en {LlmRoleFactory.SectionName}:Providers para los embeddings.");
 
-        var endpoint = LlmRoleFactory.ResolveEndpoint(configuration, section, getEnvVar);
-        if (endpoint.ServiceType is not (LlmServiceTypes.AzureOpenAI or "openai" or "openrouter"))
-            return new EmbeddingsRuntime(options, null, $"El proveedor '{providerName}' ({endpoint.ServiceType}) no admite embeddings en este sample.");
+        var serviceType = (section["ServiceType"] ?? providerName!).ToLowerInvariant();
+        if (serviceType is not (LlmServiceTypes.AzureOpenAI or LlmServiceTypes.OpenAI or LlmServiceTypes.OpenRouter))
+            return new EmbeddingsRuntime(options, null, $"El proveedor '{providerName}' ({serviceType}) no admite embeddings en este sample.");
+        var endpoint = LlmRoleFactory.ResolveEndpoint(configuration, serviceType == LlmServiceTypes.AzureOpenAI,
+            section["BaseUrl"], section["ApiKey"], section["ApiVersion"], getEnvVar);
         if (string.IsNullOrEmpty(endpoint.ApiKey) || string.IsNullOrEmpty(endpoint.BaseUrl))
             return new EmbeddingsRuntime(options, null, $"El proveedor '{providerName}' no tiene clave o URL: los embeddings quedan desactivados.");
 
         var client = new OpenAICompatibleEmbeddingClient(httpClient ?? new HttpClient(),
-            new EmbeddingEndpoint(endpoint.ServiceType, endpoint.BaseUrl, endpoint.ApiKey, endpoint.ApiVersion ?? "2024-08-01-preview"), options);
+            new EmbeddingEndpoint(serviceType, endpoint.BaseUrl, endpoint.ApiKey, endpoint.ApiVersion ?? "2024-08-01-preview"), options);
         return new EmbeddingsRuntime(options, client, null);
     }
 }

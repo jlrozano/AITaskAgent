@@ -1,0 +1,15 @@
+- ¿Qué entrada externa llega al subsistema (peticiones, parámetros, ficheros, mensajes) y hasta qué consulta, comando, deserialización o pantalla llega sin transformar?
+- ¿Se construyen consultas o comandos por concatenación de cadenas con datos que no están validados?
+- ¿Qué excepciones o errores de retorno se capturan, qué se hace con ellos (registrar, propagar, descartar, sustituir por un valor por defecto) y qué estado queda tras el fallo?
+- ¿Hay capturas vacías o demasiado amplias que oculten fallos en procesos que modifican datos?
+- ¿Qué recursos (conexiones, cursores, ficheros, transmisiones, objetos externos) se abren y se cierran en todos los caminos, incluidos los de error?
+- ¿Qué operaciones modifican varios datos a la vez y qué ocurre si fallan a la mitad (transacción, retroceso, estado a medias)?
+- ¿Qué rutas, acciones o consultas gestionan datos sensibles, y cómo comprueban la autenticación y la autorización?
+- ¿Hay credenciales, claves o cadenas de conexión con contraseña escritas en el código o en configuración versionada? Indica solo el lugar, nunca el valor.
+- ¿Hay estado compartido mutable, llamadas asíncronas que nadie espera, bloqueos sobre código asíncrono o condiciones de carrera?
+- ¿Qué referencias nulas, valores vacíos, límites o conversiones de tipo no se contemplan en el código que procesa datos?
+- ¿Qué candidatos a defecto se descartan tras leer el código y por qué (la captura sí registra, el recurso sí se cierra, la entrada sí se valida)?
+- ¿Hay código que compile, interprete o ejecute un texto que llega de datos o de configuración (compiladores en memoria, motores de scripts o de expresiones, plantillas con código, reflexión por nombre, carga de ensamblados, procesos externos, deserialización con tipos arbitrarios)? Para cada uno: quién escribe ese texto, cómo se escapa o valida al incrustarlo (todos los caracteres especiales del lenguaje destino, no solo las comillas) y si un fallo de la validación deja pasar la entrada o la rechaza.
+- ¿Qué identificadores externos se convierten en rutas, nombres de fichero o claves (saneado, colisión entre dos identificadores distintos que producen el mismo nombre, recorrido de directorios, sobrescritura)?
+- ¿Qué se cuenta como fallo en los mecanismos de resiliencia (reintentos, interruptores, limitadores): las cancelaciones, los tiempos de espera o los errores del llamador entran en la cuenta?
+- ¿Qué valores de configuración con marcadores o variables sin resolver se usan tal cual, y qué ocurre cuando falta un valor obligatorio?

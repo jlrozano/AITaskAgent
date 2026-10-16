@@ -253,7 +253,7 @@ public sealed class DocumentTests
         var provider = AnalysisPipelineFactory.CreateDefaultTemplateProvider();
         var templatesDir = Path.Combine(AppContext.BaseDirectory, "templates");
         var rule = provider.Render("_provided_documentation", new Dictionary<string, object?> { ["provided_documentation"] = "[]" })!;
-        foreach (var prompt in Directory.GetFiles(templatesDir, "report_*_prompt.md").Where(f => !f.Contains("sintesis")))
+        foreach (var prompt in Directory.GetFiles(templatesDir, "report_*_prompt.md").Where(f => !f.Contains("sintesis") && !f.Contains("verifier") && !f.Contains("investigacion")))
         {
             var name = Path.GetFileNameWithoutExtension(prompt);
             var withDocs = provider.Render(name, new Dictionary<string, object?> { ["provided_documentation"] = "[{\"id\":\"doc-1\"}]" })!;
@@ -278,7 +278,9 @@ public sealed class DocumentTests
         var provider = AnalysisPipelineFactory.CreateDefaultTemplateProvider();
         var templatesDir = Path.Combine(AppContext.BaseDirectory, "templates");
         var model = new Dictionary<string, object?> { ["provided_documentation"] = "[]", ["detected_languages"] = "Java" };
-        var prompts = Directory.GetFiles(templatesDir, "report_*_prompt.md");
+        // El verificador no es un auditor: tiene su propio prompt de sistema y no lleva las reglas comunes. Las investigaciones
+        // por subsistema (report_*_investigacion_prompt.md) tampoco: son un paso previo al informe, con su propio contrato.
+        var prompts = Directory.GetFiles(templatesDir, "report_*_prompt.md").Where(f => !f.Contains("verifier") && !f.Contains("investigacion")).ToArray();
         Assert.Equal(10, prompts.Length);
         foreach (var prompt in prompts)
         {

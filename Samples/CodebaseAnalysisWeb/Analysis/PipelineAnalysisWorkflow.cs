@@ -39,4 +39,19 @@ public sealed class PipelineAnalysisWorkflow(IServiceProvider serviceProvider, A
         return AnalysisRunner.RegenerateAsync(
             input, reports, synthesis, host.Roles, serviceProvider, eventChannel, reporter, cancellationToken, host.TemplateProvider);
     }
+
+    public Task<IStepResult> VerifyAsync(
+        AnalysisPipelineInput input,
+        IReadOnlyList<ReportType> reports,
+        bool synthesis,
+        IEventChannel eventChannel,
+        IAnalysisReporter reporter,
+        CancellationToken cancellationToken)
+    {
+        // Como al regenerar: la verificación retira y reincorpora los informes del grafo que el chat puede tener abierto con pool.
+        SqliteConnection.ClearAllPools();
+
+        return AnalysisRunner.VerifyAsync(
+            input, reports, synthesis, host.Roles, serviceProvider, eventChannel, reporter, cancellationToken, host.TemplateProvider);
+    }
 }

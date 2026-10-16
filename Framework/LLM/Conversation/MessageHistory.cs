@@ -66,6 +66,24 @@ public sealed class MessageHistory(int maxTokens = 4000, Func<string, int>? toke
     }
 
     /// <summary>
+    /// Replaces the message at <paramref name="index"/> in place. The count and the bookmarks do not
+    /// change: it is a data operation on one message (e.g. swapping an already consumed tool result
+    /// for a summary), not a change to the shape of the history.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The index is outside the history.</exception>
+    public void ReplaceMessage(int index, Message message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        if (index < 0 || index >= _messages.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), index,
+                $"Index must be between 0 and {_messages.Count - 1}.");
+        }
+
+        _messages[index] = message;
+    }
+
+    /// <summary>
     /// Gets messages from a bookmark to the end.
     /// </summary>
     public List<Message> GetMessagesFromBookmark(string bookmarkName)

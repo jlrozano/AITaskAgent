@@ -162,6 +162,15 @@ export interface RegenerateReportsRequest {
   synthesis: boolean;
 }
 
+/**
+ * Cuerpo de `POST /api/analysis/{runId}/verify`: comprueba esos informes ya escritos contra el código y reescribe los que
+ * corrige (la versión anterior queda en el historial). `synthesis` regenera después el resumen ejecutivo; por defecto no.
+ */
+export interface VerifyReportsRequest {
+  reports: string[];
+  synthesis: boolean;
+}
+
 /** `catalog`: el 00 y los nueve de los auditores. `custom`: los de `reports/custom/`. */
 export type ReportKind = 'catalog' | 'custom';
 
@@ -390,6 +399,8 @@ export interface ChatTurn {
   status: ChatTurnStatus;
   error: string | null;
   model?: string | null;
+  /** Id del modelo del catálogo (`GET /api/chat/models`) con que se ejecutó; ausente en turnos anteriores al selector. */
+  modelId?: string | null;
   tokens?: number | null;
   costUsd?: number | null;
   durationMs?: number | null;
@@ -480,9 +491,41 @@ export interface ChatSession {
   id: string;
   title: string | null;
   repositoryPath?: string;
+  /** Modelo que responde los turnos siguientes; ausente en sesiones anteriores al selector (usan el de por defecto). */
+  modelId?: string | null;
   createdAt: string;
   updatedAt: string;
   turns: ChatTurn[];
+}
+
+/** Un modelo seleccionable del chat (`GET /api/chat/models`). Los precios son USD por millón de tokens. */
+export interface ChatModelDto {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  /** False si el deployment suelta la respuesta de golpe al final en vez de ir goteando. */
+  streaming: boolean;
+  inputPricePerMillion?: number | null;
+  outputPricePerMillion?: number | null;
+}
+
+/** Ruta de solo lectura, además del repositorio, que las tools de ficheros del chat pueden recorrer. */
+export interface ChatReadRootDto {
+  path: string;
+  /** Viene de la configuración del servidor (`CodebaseAnalysis:Chat:AllowedReadRoots`): no se quita desde aquí. */
+  global: boolean;
+  /** Por qué ya no vale (la carpeta se borró, o ahora es un enlace a un sitio prohibido); null si vale. */
+  problem: string | null;
+}
+
+export interface ChatReadRootsDto {
+  roots: ChatReadRootDto[];
+}
+
+export interface ChatModelsDto {
+  defaultId: string;
+  models: ChatModelDto[];
 }
 
 /**
@@ -503,7 +546,17 @@ export type ChatStreamEvent =
   | { type: 'thinking'; text: string }
   | { type: 'tool.calls'; calls: ToolCallInfo[] }
   | { type: 'tool.started'; name: string }
-  | { type: 'tool.completed'; name: string; success: boolean; durationMs?: number; error?: string | null }
+  // `output`, `outputTruncated` y `outputBytes`: la salida de la tool, truncada en el servidor (16 KB); ausentes en un servidor anterior.
+  | {
+      type: 'tool.completed';
+      name: string;
+      success: boolean;
+      durationMs?: number;
+      error?: string | null;
+      output?: string | null;
+      outputTruncated?: boolean;
+      outputBytes?: number | null;
+    }
   | { type: 'turn.completed'; turn: ChatTurn }
   // V2-B: tras el `tool.completed` de la tool que escribió y antes de `turn.completed`.
   | ({ type: 'report.changed' } & ReportChange)

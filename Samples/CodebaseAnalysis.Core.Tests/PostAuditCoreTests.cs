@@ -109,6 +109,14 @@ public sealed class ReportMarkdownTests
     }
 
     [Fact]
+    public void Critical_findings_with_the_report_prefix_are_counted_once_per_id()
+    {
+        // 05-SEC-001 y 05-SEC-1 son el mismo; 05-SEC-001 y 07-SEC-001 no.
+        var table = "| ID | Severidad |\n|---|---|\n| 05-SEC-001 | P0 |\n| 05-SEC-1 | P0 |\n| 07-SEC-001 | P1 |\n| 05-ERR-002 | P2 |\n";
+        Assert.Equal(2, ReportMarkdown.CountCriticalFindings(table));
+    }
+
+    [Fact]
     public void Without_a_severity_table_there_is_no_count()
     {
         Assert.Null(ReportMarkdown.CountCriticalFindings("# X\n\n| ID | Impacto |\n|---|---|\n| A-001 | Alto |\n"));
@@ -141,6 +149,37 @@ public sealed class ReportMarkdownTests
     public void A_leading_file_name_heading_is_removed_only_when_a_real_title_follows(string input, string expected)
     {
         Assert.Equal(expected, ReportMarkdown.RemoveFileNameHeading(input));
+    }
+
+    [Fact]
+    public void The_finding_index_lists_each_identifier_once_with_its_severity_and_type()
+    {
+        var markdown = string.Join("\n",
+            "# X", "",
+            "| ID | Severidad | Tipo | Evidencia |", "|---|---|---|---|",
+            "| `05-SEC-001` | **P1** | Inyección | a.cs:1 |", "| 05-ERR-002 | P2 | Concurrencia | b.cs:2 |", "",
+            "| ID | Severidad |", "|---|---|", "| 05-SEC-001 | P1 |", "",
+            "| Otro | Dato |", "|---|---|", "| x | y |");
+        Assert.Equal(["05-SEC-001 · P1 · Inyección", "05-ERR-002 · P2 · Concurrencia"], ReportMarkdown.FindingIndex(markdown));
+        Assert.Empty(ReportMarkdown.FindingIndex("# Sin tablas"));
+    }
+
+    public static TheoryData<string[], string[]> PrefaceCases => new()
+    {
+        { ["La evidencia confirma el punto de entrada.", "# Informe", "", "Texto"], ["# Informe", "", "Texto"] },
+        { ["Frase uno.", "", "Frase dos.", "", "# Informe", "Texto"], ["# Informe", "Texto"] },
+        { ["# Informe", "Texto"], ["# Informe", "Texto"] },
+        { ["## Sección sin título", "Texto", "# Después"], ["## Sección sin título", "Texto", "# Después"] },
+        { ["| a | b |", "|---|---|", "# Informe"], ["| a | b |", "|---|---|", "# Informe"] },
+        { ["```", "# no es título", "```", "# Informe"], ["```", "# no es título", "```", "# Informe"] },
+        { ["Sin ningún título", "Texto"], ["Sin ningún título", "Texto"] }
+    };
+
+    [Theory]
+    [MemberData(nameof(PrefaceCases))]
+    public void Prose_before_the_title_is_removed_only_when_it_is_plain_text(string[] input, string[] expected)
+    {
+        Assert.Equal(string.Join("\n", expected), ReportMarkdown.RemoveTextBeforeTitle(string.Join("\n", input)));
     }
 }
 

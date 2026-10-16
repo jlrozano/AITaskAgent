@@ -306,17 +306,20 @@ public sealed class KnowledgeTests
         Assert.False(off.Enabled);
         Assert.Contains("desactivados", off.DisabledReason);
 
+        // Sin CodebaseAnalysis:Embeddings:Provider, el proveedor del DefaultRole.
+        (string, string?)[] azure =
+        [
+            ("AITaskAgent:LlmProviders:DefaultRole", "Chat"),
+            ("AITaskAgent:LlmProviders:Roles:Chat:Provider", "Az"),
+            ("AITaskAgent:LlmProviders:Providers:Az:ServiceType", "azure-openai"),
+            ("AITaskAgent:LlmProviders:Providers:Az:BaseUrl", "https://x/")
+        ];
         var noKey = EmbeddingsRuntime.FromConfiguration(TestConfig.FromPairs(
-            ("LlmConfiguration:DefaultProvider", "Az"),
-            ("LlmConfiguration:Providers:Az:ServiceType", "azure-openai"),
-            ("LlmConfiguration:Providers:Az:BaseUrl", "https://x/"),
-            ("LlmConfiguration:Providers:Az:ApiKey", "${Asistente__ApiKey}")), _ => null);
+            [.. azure, ("AITaskAgent:LlmProviders:Providers:Az:ApiKey", "${Asistente__ApiKey}")]), _ => null);
         Assert.False(noKey.Enabled);
+        Assert.Contains("'Az' no tiene clave", noKey.DisabledReason);
 
-        var ok = EmbeddingsRuntime.FromConfiguration(TestConfig.FromPairs(
-            ("LlmConfiguration:DefaultProvider", "Az"),
-            ("LlmConfiguration:Providers:Az:ServiceType", "azure-openai"),
-            ("LlmConfiguration:Providers:Az:BaseUrl", "https://x/")), name => name == "Asistente__ApiKey" ? "k" : null);
+        var ok = EmbeddingsRuntime.FromConfiguration(TestConfig.FromPairs(azure), name => name == "Asistente__ApiKey" ? "k" : null);
         Assert.True(ok.Enabled);
         Assert.Equal("text-embedding-3-small", ok.Client!.Model);
     }

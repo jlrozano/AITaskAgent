@@ -140,6 +140,152 @@ public sealed class ReportValidatorTests : IDisposable
     }
 
     [Fact]
+    public void Report_prefixed_ids_are_recognised_and_checked_like_the_legacy_ones()
+    {
+        WriteReport("05_errores_y_bugs.md", ErroresReport("""
+            | ID | Severidad | Tipo | Evidencia |
+            |---|---|---|---|
+            | 05-SEC-001 | P0 | Inyección | `src/Orders/OrderRepository.cs:10` |
+            | 05-SEC-001 | P0 | Inyección | `src/Orders/OrderRepository.cs:10` |
+
+            ### 05-SEC-001, P0, inyección
+
+            ### 05-ERR-002, P2, errores silenciados
+
+            Ver `src/Orders/OrderRepository.cs:20`, `05-SEC-009` y `05-SEC-3`; `2026-10-01` y `SHA-1` no son identificadores.
+            """));
+
+        var report = Report(Validate(), "05_errores_y_bugs.md");
+        var ids = report.Issues.Where(i => i.Check == ReportValidationChecks.FindingIds).ToList();
+
+        Assert.Equal(["05-ERR-002", "05-SEC-001"], report.Findings.Select(f => f.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(0, report.Findings.Single(f => f.Id == "05-SEC-001").Priority);
+        Assert.Contains(ids, i => i.Level == ReportValidationLevels.Error && i.Message.StartsWith("`05-SEC-3` no sigue el formato", StringComparison.Ordinal)
+            && i.Message.Contains("`05-SEC-003`", StringComparison.Ordinal));
+        Assert.Contains(ids, i => i.Level == ReportValidationLevels.Warning && i.Message.StartsWith("`05-SEC-009` se cita pero ningún hallazgo", StringComparison.Ordinal));
+        Assert.Contains(ids, i => i.Level == ReportValidationLevels.Warning && i.Message.StartsWith("`05-SEC-001` aparece en 2 filas", StringComparison.Ordinal));
+        Assert.Equal((1, 1, 1), (report.Scores.DuplicateIds, report.Scores.MalformedIds, report.Scores.UndefinedIdReferences));
+        Assert.DoesNotContain(ids, i => i.Message.Contains("número de informe", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_report_prefixed_id_must_carry_the_number_of_its_own_report_and_not_mix_formats()
+    {
+        WriteReport("05_errores_y_bugs.md", ErroresReport("""
+            ### 07-SEC-001, P2, con el número de otro informe
+
+            ### 05-ERR-001, P2, bien
+
+            ### SEC-002, P2, sin prefijo en un informe que ya los usa
+
+            Ver `src/Orders/OrderRepository.cs:1`.
+            """));
+        WriteReport("06_arquitectura_acoplamiento.md", ErroresReport("### ARC-001, P2, formato antiguo\n\nVer `src/Orders/OrderRepository.cs:1`."));
+
+        var result = Validate();
+        var messages = Report(result, "05_errores_y_bugs.md").Issues.Where(i => i.Check == ReportValidationChecks.FindingIds).ToList();
+
+        Assert.Contains(messages, i => i.Level == ReportValidationLevels.Warning && i.Message.Contains("`07-SEC-001`", StringComparison.Ordinal)
+            && i.Message.Contains("número de informe 05", StringComparison.Ordinal));
+        Assert.Contains(messages, i => i.Level == ReportValidationLevels.Warning && i.Message.Contains("`SEC-002`", StringComparison.Ordinal)
+            && i.Message.Contains("sin prefijo", StringComparison.Ordinal));
+        Assert.DoesNotContain(messages, i => i.Message.Contains("`05-ERR-001`", StringComparison.Ordinal));
+        // Un informe antiguo, entero sin prefijo, no se avisa.
+        Assert.DoesNotContain(Report(result, "06_arquitectura_acoplamiento.md").Issues, i => i.Check == ReportValidationChecks.FindingIds);
+    }
+
+    [Fact]
+    public void Prefixed_ids_do_not_collide_across_reports_and_the_summary_resolves_them()
+    {
+        WriteReport("05_errores_y_bugs.md", ErroresReport("### 05-SEC-001, P0, x\n\nVer `src/Orders/OrderRepository.cs:1`."));
+        WriteReport("07_inventario_apis_seguridad.md", ErroresReport("### 07-SEC-001, P1, y\n\nVer `src/Orders/OrderRepository.cs:2`."));
+        WriteReport("00_resumen_ejecutivo.md", ErroresReport("Críticos: `05-SEC-001` y `07-SEC-001`; `07-SEC-002` no existe."));
+
+        var result = Validate();
+
+        Assert.Empty(result.CrossReportIdCollisions);
+        Assert.Equal(["`07-SEC-002` se cita pero ningún informe lo define."],
+            Report(result, "00_resumen_ejecutivo.md").Issues.Where(i => i.Check == ReportValidationChecks.FindingIds).Select(i => i.Message));
+        Assert.DoesNotContain(ReportValidationSummary.Describe(result, null), l => l.Message.Contains("repetidos entre informes", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Ids_repeated_across_reports_are_a_warning_in_the_summary_and_not_a_failure()
+    {
+        WriteReport("05_errores_y_bugs.md", ErroresReport("### SEC-001, P0, x\n\nVer `src/Orders/OrderRepository.cs:1`."));
+        WriteReport("07_inventario_apis_seguridad.md", ErroresReport("### SEC-001, P1, y\n\nVer `src/Orders/OrderRepository.cs:2`."));
+
+        var lines = ReportValidationSummary.Describe(Validate(), null);
+
+        var line = Assert.Single(lines, l => l.Message.Contains("repetidos entre informes", StringComparison.Ordinal));
+        Assert.Equal(AnalysisLogLevel.Warning, line.Level);
+        Assert.Contains("SEC-001", line.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Every_auditor_report_must_cite_code_as_a_warning_and_the_summary_is_exempt()
+    {
+        WriteReport("01_analisis_funcional.md", ErroresReport("Descripción sin ninguna cita."));
+        WriteReport("04_flujos_end_to_end.md", ErroresReport("Flujo con cita `src/Orders/OrderRepository.cs:5`."));
+        WriteReport("05_errores_y_bugs.md", ErroresReport("### 05-ERR-001, P2, con cita\n\n`src/Orders/OrderRepository.cs:1`\n\n### 05-ERR-002, P2, sin cita\n\nTexto.\n\n### 05-ERR-003, P3, sin cita\n"));
+        WriteReport("00_resumen_ejecutivo.md", ErroresReport("Resumen sin citas de código."));
+
+        var result = Validate();
+
+        var functional = Report(result, "01_analisis_funcional.md");
+        var issue = Assert.Single(functional.Issues, i => i.Check == ReportValidationChecks.CitationsRequired);
+        Assert.Equal(ReportValidationLevels.Warning, issue.Level);
+        Assert.Equal(ReportCheckStatuses.Warn, functional.Checks.Single(c => c.Check == ReportValidationChecks.CitationsRequired).Status);
+        Assert.DoesNotContain(Report(result, "04_flujos_end_to_end.md").Issues, i => i.Check == ReportValidationChecks.CitationsRequired);
+        Assert.DoesNotContain(Report(result, "00_resumen_ejecutivo.md").Issues, i => i.Check == ReportValidationChecks.CitationsRequired);
+        var errores = Report(result, "05_errores_y_bugs.md").Issues.Single(i => i.Check == ReportValidationChecks.CitationsRequired);
+        Assert.Equal(ReportValidationLevels.Warning, errores.Level);
+        Assert.Contains("05-ERR-002", errores.Message, StringComparison.Ordinal);
+        Assert.Contains("05-ERR-003", errores.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("05-ERR-001", errores.Message, StringComparison.Ordinal);
+        Assert.Equal((1, 2), (result.Totals.ReportsWithoutCitations, result.Totals.FindingsUncited));
+        // Va en la línea de totales, sin añadir otra al log de la ejecución.
+        var lines = ReportValidationSummary.Describe(result, null);
+        Assert.Contains("Sin citas de código: 1 informe(s) sin ninguna y 2 hallazgo(s) sin cita.", lines[0].Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(lines.Skip(1), l => l.Message.Contains("Sin citas de código", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_bold_list_item_that_starts_with_an_id_defined_by_a_heading_is_a_reference_not_a_second_definition()
+    {
+        WriteReport("03_codigo_muerto.md", ErroresReport("""
+            ### 03-CDM-001, P2, método privado
+
+            Ver `src/Orders/OrderRepository.cs:3`.
+
+            ## Plan de acción
+
+            1. **03-CDM-001 y 03-CDM-002:** retirar el método.
+            2. **03-CDM-001:** repetido, pero es el plan.
+            """));
+
+        var report = Report(Validate(), "03_codigo_muerto.md");
+
+        Assert.Equal(["03-CDM-001"], report.Findings.Select(f => f.Id));
+        Assert.Equal(0, report.Scores.DuplicateIds);
+        Assert.DoesNotContain(report.Issues, i => i.Check == ReportValidationChecks.FindingIds && i.Level == ReportValidationLevels.Error);
+    }
+
+    [Fact]
+    public void Two_bold_definitions_of_the_same_id_are_still_a_duplicate()
+    {
+        WriteReport("02_code_smells.md", ErroresReport("""
+            **02-COH-001, uno.** `src/Orders/OrderRepository.cs:1`.
+
+            **02-COH-001, otra vez.** `src/Orders/OrderRepository.cs:2`.
+            """));
+
+        var report = Report(Validate(), "02_code_smells.md");
+
+        Assert.Equal(1, report.Scores.DuplicateIds);
+    }
+
+    [Fact]
     public void Every_P0_or_P1_finding_cites_a_real_location()
     {
         WriteReport("05_errores_y_bugs.md", ErroresReport("""

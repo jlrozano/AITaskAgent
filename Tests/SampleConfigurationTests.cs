@@ -50,12 +50,16 @@ public class SampleConfigurationTests
 
         // Only the checked-in file of each sample. Build output holds stale copies of exactly the
         // configuration this test is meant to police.
+        // appsettings.analysis.json is the codebase-analysis app's file (CodebaseAnalysis.Core), shared by its CLI and web.
         foreach (var dir in Directory.GetDirectories(samplesRoot))
         {
-            var file = Path.Combine(dir, "appsettings.json");
-            if (File.Exists(file) && !BindsItsOwnConfig.Contains(Path.GetFileName(dir)))
+            foreach (var name in new[] { "appsettings.json", "appsettings.analysis.json" })
             {
-                data.Add(file);
+                var file = Path.Combine(dir, name);
+                if (File.Exists(file) && !BindsItsOwnConfig.Contains(Path.GetFileName(dir)))
+                {
+                    data.Add(file);
+                }
             }
         }
 

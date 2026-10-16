@@ -59,20 +59,16 @@ public sealed class ReincorporationPipelineTests
         Directory.CreateDirectory(Path.Combine(repo.Path, "src"));
         await File.WriteAllTextAsync(Path.Combine(repo.Path, "src", "Sample.cs"), "namespace Demo; public class Sample { }");
 
-        IConfiguration configuration = TestConfig.FromPairs(
-            ("LlmConfiguration:DefaultProvider", "Fake"),
-            ("LlmConfiguration:Providers:Fake:ServiceType", "fake"),
-            ("LlmConfiguration:Providers:Fake:BaseUrl", "http://fake.invalid/"),
-            ("LlmConfiguration:Providers:Fake:Model", "fake-model"));
+        IConfiguration configuration = TestConfig.FromPairs(FakeLlmConfig.Pairs("canned"));
         var services = new ServiceCollection();
         services.AddSingleton(configuration);
         services.AddLogging();
-        services.AddKeyedSingleton<ILlmService>("fake", new CannedLlmService(CannedReport));
+        services.AddSingleton<ILlmService>(new CannedLlmService(CannedReport));
         services.AddAITaskAgent();
         await using var serviceProvider = services.BuildServiceProvider();
         serviceProvider.UseAITaskAgent();
 
-        var roles = LlmRoleFactory.BuildRoles(configuration, serviceProvider, _ => null, _ => { });
+        var roles = LlmRoleFactory.BuildRoles(serviceProvider, _ => null, _ => { });
         var input = AnalysisRunOptions.BuildInput(configuration, repo.Path, _ => { });
         await CreateEnrichedGraphAsync(input.DatabasePath);
         var paths = new KnowledgePaths(input.RepositoryPath, input.OutputReportsPath);

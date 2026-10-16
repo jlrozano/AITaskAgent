@@ -5,11 +5,15 @@ using AITaskAgent.LLM.Configuration;
 using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.LLM.Models;
+using AITaskAgent.LLM.Results;
 using AITaskAgent.LLM.Steps;
 using AITaskAgent.Support.Template;
 using CodebaseAnalysis.Core.Models;
+using CodebaseAnalysis.Core.Notes;
 using CodebaseAnalysis.Core.Progress;
 using CodebaseAnalysis.Core.Support;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json.Linq;
 using System.Runtime.CompilerServices;
 
 namespace CodebaseAnalysis.Core.Steps;
@@ -92,11 +96,18 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
 
         sw.Stop();
 
+        // Bucle de herramientas cortado (el detector de repeticiones, o la retención reiterada del protocolo de notas): lo que
+        // queda es el turno cortado, no un informe (con notas, solo sus marcadores). Con respuesta final configurada se lleva al
+        // mismo camino que el tope de iteraciones; sin ella, el corte se queda como respuesta, como en el resto del framework.
+        if (result is LlmStepResult { ToolLoopStopMessage: { } stopMessage } && ToolLimitFinalAnswerPrompt != null && !IsFinalAnswerMode(context))
+            result = CreateErrorResult(stopMessage, new ToolLoopCutException(Name, stopMessage));
+
         if (CanAnswerWithoutTools(result, context))
         {
             // No es un fallo del informe: SwitchToNextFallback lo convierte en un último intento sin tools.
+            var why = result.Error?.OriginalException is ToolLoopCutException ? "cortó su bucle de herramientas" : "agotó su tope de herramientas";
             context.Report(Name, AnalysisLogLevel.Warning,
-                $"⚠️ [LLM]{targetInfo} agotó su tope de herramientas tras {sw.Elapsed.TotalSeconds:F1}s: se redacta con lo consultado.");
+                $"⚠️ [LLM]{targetInfo} {why} tras {sw.Elapsed.TotalSeconds:F1}s: se redacta con lo consultado.");
             return result;
         }
 
@@ -127,7 +138,8 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
                 singleReport.ReportFileName = OutputFileName;
             }
 
-            singleReport.MarkdownContent = ReportMarkdown.RemoveFileNameHeading(singleReport.MarkdownContent);
+            // Los marcadores que dejan las notas del protocolo (<nota r="Rn">) no son parte del informe.
+            singleReport.MarkdownContent = ReportMarkdown.RemoveFileNameHeading(ReportMarkdown.RemoveTextBeforeTitle(NoteTagHandler.RemovePlaceholders(singleReport.MarkdownContent)));
             singleReport.PopulateDerivedMetadata();
             ReconcileCriticalFindings(singleReport, context, targetInfo);
             if (!singleReport.HasAnalysisMeta)
@@ -188,13 +200,16 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
             context.Get<GraphProvenance>(AnalysisContextKeys.GraphProvenance));
     }
 
-    /// <summary>Tope de tools agotado por primera vez en esta invocación, con un mensaje de respuesta final configurado.</summary>
+    /// <summary>
+    /// Tope de tools agotado, o bucle de tools cortado, por primera vez en esta invocación, con un mensaje de respuesta final
+    /// configurado.
+    /// </summary>
     private bool CanAnswerWithoutTools(IStepResult result, PipelineContext context) =>
         ToolLimitFinalAnswerPrompt != null
         && _invocations.TryGetValue(context, out var state)
         && !state.FinalAnswerMode
         && state.Conversation != null
-        && result.Error?.OriginalException is ToolIterationLimitExceededException;
+        && result.Error?.OriginalException is ToolIterationLimitExceededException or ToolLoopCutException;
 
     protected override bool SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)
     {
@@ -213,10 +228,24 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
     protected override ConversationContext GetConversationContext(PipelineContext context)
     {
         var state = State(context);
-        return state.FinalAnswerMode && state.Conversation != null
+        var conversation = state.FinalAnswerMode && state.Conversation != null
             ? state.Conversation
             : state.Conversation = base.GetConversationContext(context);
+
+        // Con el protocolo de notas, la sesión de este contexto apunta a esta conversación: las tools envueltas en
+        // NoteProtocolTool marcan sus resultados y NoteTagHandler los sustituye por sus notas. En el intento de respuesta
+        // final la conversación es la misma y la sesión se conserva.
+        if (UsesNoteProtocol)
+            NoteSessions.Begin(context, conversation, Name, NoteOptions);
+
+        return conversation;
     }
+
+    /// <summary>Umbrales de pendientes del protocolo de notas (<c>CodebaseAnalysis:NoteProtocol</c>); null = los de por defecto.</summary>
+    public NoteProtocolOptions? NoteOptions { get; init; }
+
+    /// <summary>Si el paso lleva el protocolo de notas (<see cref="NoteTagHandler"/> entre sus <c>TagHandlers</c>).</summary>
+    public bool UsesNoteProtocol => TagHandlers.Any(h => h is NoteTagHandler);
 
     protected override Task<string?> BuildUserMessageAsync(IStepResult input, PipelineContext context) =>
         IsFinalAnswerMode(context)
@@ -226,13 +255,41 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
     protected override LlmRequest ConfigureLlmRequest(LlmRequest request, PipelineContext context)
     {
         var configured = base.ConfigureLlmRequest(request, context);
-        return IsFinalAnswerMode(context) ? configured with { Tools = null } : configured;
+        if (!IsFinalAnswerMode(context) || configured.Tools is not { Count: > 0 })
+            return configured;
+
+        // Las tools se quedan y se prohíbe usarlas: sus definiciones son parte del prefijo cacheado, y quitarlas hacía que la
+        // llamada final pagara todo el historial sin caché. El with copia Options (copia profunda) antes de añadir la clave,
+        // así que el JObject de la petición original no cambia.
+        return configured with { Options = new JObject { [FinalAnswerRequests.ToolChoiceOption] = FinalAnswerRequests.ToolChoiceNone } };
     }
 
     protected override async Task FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)
     {
         await base.FinalizeAsync(result, context, cancellationToken);
         _invocations.Remove(context);
+        CloseNoteSession(context);
+    }
+
+    /// <summary>
+    /// Guardarraíl del protocolo de notas: avisa (nunca falla) de los resultados que se quedaron sin nota, que siguen enteros
+    /// en la conversación, y deja de marcar resultados en este contexto. Las notas siguen legibles para quien las recoja.
+    /// </summary>
+    private void CloseNoteSession(PipelineContext context)
+    {
+        if (!UsesNoteProtocol || !NoteSessions.TryGet(context, out var session) || !session.IsActive)
+            return;
+
+        session.Deactivate();
+        var unannotated = session.Unannotated;
+        if (unannotated.Count == 0)
+            return;
+
+        var targetInfo = !string.IsNullOrEmpty(OutputFileName) ? $" '{OutputFileName}'" : $" ({Name})";
+        Logger.LogWarning("Step {StepName}: {Count} of {Total} tool results got no note ({Ids})",
+            Name, unannotated.Count, session.EmittedIds.Count, string.Join(", ", unannotated));
+        context.Report(Name, AnalysisLogLevel.Warning,
+            $"⚠️ [LLM]{targetInfo} dejó {unannotated.Count} de {session.EmittedIds.Count} resultado(s) de herramientas sin nota ({string.Join(", ", unannotated)}): se quedaron enteros en la conversación.");
     }
 
     /// <summary>
@@ -263,4 +320,29 @@ public class CustomStatelessTemplateLlmStep<TIn, TOut> : StatelessTemplateLlmSte
     {
         return ((IStep)this).ExecuteAsync(input, context, attempt, null, cancellationToken);
     }
+}
+
+/// <summary>
+/// El framework cortó el bucle de herramientas de un paso con respuesta final configurada (ver
+/// <see cref="LlmStepResult.ToolLoopStopMessage"/>): como <see cref="ToolIterationLimitExceededException"/>, lleva al último
+/// intento sin herramientas en lugar de guardar el turno cortado como resultado.
+/// </summary>
+public sealed class ToolLoopCutException(string stepName, string reason)
+    : InvalidOperationException($"Tool loop of '{stepName}' cut: {reason}")
+{
+    public string StepName { get; } = stepName;
+}
+
+/// <summary>Cómo pide <see cref="CustomStatelessTemplateLlmStep{TIn, TOut}"/> la respuesta final sin herramientas.</summary>
+public static class FinalAnswerRequests
+{
+    /// <summary>Opción de la petición (va tal cual al cuerpo en los servicios OpenAI-compatibles).</summary>
+    public const string ToolChoiceOption = "tool_choice";
+
+    public const string ToolChoiceNone = "none";
+
+    /// <summary>Si la petición prohíbe las tools (<c>tool_choice: "none"</c>): el intento de respuesta final.</summary>
+    public static bool ForbidsTools(LlmRequest request) =>
+        request.Options.GetValue(ToolChoiceOption, StringComparison.OrdinalIgnoreCase) is JValue { Type: JTokenType.String } value
+        && string.Equals((string?)value, ToolChoiceNone, StringComparison.OrdinalIgnoreCase);
 }

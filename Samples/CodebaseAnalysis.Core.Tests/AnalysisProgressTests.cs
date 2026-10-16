@@ -51,7 +51,7 @@ public sealed class AnalysisProgressTests
         var (channel, received) = Channel();
         var (context, reporter) = ContextWith(channel);
 
-        context.Report("BdpEnricherStep", AnalysisLogLevel.Warning, "⚠️ sin solución");
+        context.Report("DotNetEnricherStep", AnalysisLogLevel.Warning, "⚠️ sin solución");
         context.Report("DetectAndIndexGraphStep", AnalysisLogLevel.Info, "   [indexador] línea", AnalysisEventTypes.Channels.Indexer);
         await channel.DisposeAsync();
 
@@ -61,7 +61,7 @@ public sealed class AnalysisProgressTests
             first =>
             {
                 Assert.Equal(AnalysisEventTypes.Log, first.EventType);
-                Assert.Equal("BdpEnricherStep", first.StepName);
+                Assert.Equal("DotNetEnricherStep", first.StepName);
                 Assert.Equal("⚠️ sin solución", first.Message);
                 Assert.Equal(context.CorrelationId, first.CorrelationId);
                 Assert.Equal("warning", first.Metadata![Key.Level]);

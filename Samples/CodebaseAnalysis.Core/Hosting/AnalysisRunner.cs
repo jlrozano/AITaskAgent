@@ -96,6 +96,39 @@ public static class AnalysisRunner
     }
 
     /// <summary>
+    /// Verifica <paramref name="reports"/> ya escritos en disco (<see cref="AnalysisPipelineFactory.CreateVerificationPipeline"/>):
+    /// preparación, un verificador por informe y, con <paramref name="synthesis"/>, la síntesis ejecutiva. <paramref name="input"/>
+    /// no se modifica: se trabaja sobre una copia con esos informes y sin <c>ForceReindex</c>.
+    /// </summary>
+    /// <exception cref="ArgumentException">Si <paramref name="reports"/> está vacío.</exception>
+    public static async Task<IStepResult> VerifyAsync(
+        AnalysisPipelineInput input,
+        IReadOnlyList<ReportType> reports,
+        bool synthesis,
+        Dictionary<string, LlmRole> roles,
+        IServiceProvider serviceProvider,
+        IEventChannel? eventChannel,
+        IAnalysisReporter reporter,
+        CancellationToken cancellationToken = default,
+        ITemplateProvider? templateProvider = null,
+        IPipeline? engine = null)
+    {
+        if (reports.Count == 0)
+            throw new ArgumentException("La verificación necesita al menos un informe.", nameof(reports));
+
+        var verification = ForRegeneration(input, reports);
+        templateProvider ??= AnalysisPipelineFactory.CreateDefaultTemplateProvider();
+        var pipeline = AnalysisPipelineFactory.CreateVerificationPipeline(templateProvider, roles, verification, synthesis, serviceProvider, engine);
+
+        var context = CreateContext(verification, serviceProvider, eventChannel, reporter);
+
+        context.Report(SourceName, AnalysisLogLevel.Info,
+            $"🔎 Verificando {string.Join(", ", reports)} {(synthesis ? "y regenerando el resumen ejecutivo" : "sin regenerar el resumen ejecutivo")} con AITaskFramework...");
+        ReportLimits(context, serviceProvider, roles);
+        return await pipeline.ExecuteAsync(verification, context, cancellationToken);
+    }
+
+    /// <summary>
     /// Vuelca los límites de tiempo efectivos (<see cref="EffectiveLimits.DescribeAnalysis"/>) al reporter y al canal: en la
     /// web llegan al log de la ejecución y al registro de eventos; la CLI los escribe también en su fichero de log.
     /// </summary>

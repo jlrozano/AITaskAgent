@@ -1,0 +1,15 @@
+- ¿Cuáles son los puntos de entrada del subsistema y qué tipo de disparo es cada uno (petición, evento de pantalla, trigger, comando, tarea temporizada)?
+- Para cada entrada relevante, ¿cuál es el camino completo hasta la operación terminal, paso a paso y con la llamada que une cada paso con el siguiente?
+- ¿Qué datos viajan en cada paso (parámetros, objetos de formulario, DTO, tablas o columnas) y qué se transforma por el camino?
+- ¿Dónde se toman decisiones que cambian el camino, con qué condición y hacia dónde va cada rama?
+- ¿Qué se valida, en qué paso y qué ocurre con el flujo cuando la validación falla?
+- ¿Dónde empieza y termina cada transacción, y qué queda hecho si el flujo se interrumpe a la mitad?
+- ¿Qué pasos son síncronos y cuáles se difieren, se encolan o se delegan a otro proceso?
+- ¿Cuál es la operación terminal de cada flujo (escritura en base de datos, fichero, mensaje, pantalla, respuesta)?
+- ¿Qué caminos alternativos existen (error, entrada vacía o duplicada, falta de permisos, cancelación, reintento) y dónde termina cada uno?
+- ¿Hay reenvíos, rutas o llamadas sin destino resuelto, o caminos que el grafo sugiere y el código no confirma?
+- ¿En qué punto el flujo sale hacia otro subsistema o hacia un sistema externo, y qué datos cruzan la frontera?
+- ¿Cómo se suspende, reanuda, cancela o reintenta una ejecución, qué estado se guarda en cada caso y qué ocurre si la operación no está preparada para ello?
+- ¿Qué eventos o avisos se definen y cuáles se emiten realmente? Cada evento definido sin emisor o emitido sin receptor es un hallazgo del flujo.
+- ¿Qué precondiciones tiene el arranque de una ejecución (objetos que deben existir, configuración, contexto previo) y qué falla, y con qué mensaje, cuando faltan?
+- ¿Qué capacidades se exponen a un modelo, un script o un complemento (herramientas, comandos, extensiones) y cómo se descubren y se registran?

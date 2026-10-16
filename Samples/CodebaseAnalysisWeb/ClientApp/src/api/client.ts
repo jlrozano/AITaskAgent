@@ -2,6 +2,8 @@ import type {
   AnalysisEventDto,
   ApiErrorBody,
   ApiErrorCode,
+  ChatModelsDto,
+  ChatReadRootsDto,
   ChatSession,
   ChatSessionSummaryDto,
   ChatStreamEvent,
@@ -20,6 +22,7 @@ import type {
   SourceFileDto,
   SourceRefDto,
   StartAnalysisRequest,
+  VerifyReportsRequest,
   WorkspaceDto,
 } from './types';
 import { SseParser, readSseStream } from './sse';
@@ -225,6 +228,10 @@ export const api = {
   regenerateReports: async (runId: string, reports: string[], synthesis: boolean): Promise<RunStatusDto> =>
     json(await send(`/api/analysis/${enc(runId)}/regenerate`, jsonInit('POST', { reports, synthesis } satisfies RegenerateReportsRequest))),
 
+  /** 202 con la ejecución otra vez en curso (verificando); mismos 409 y 404 que regenerar. */
+  verifyReports: async (runId: string, reports: string[], synthesis: boolean): Promise<RunStatusDto> =>
+    json(await send(`/api/analysis/${enc(runId)}/verify`, jsonInit('POST', { reports, synthesis } satisfies VerifyReportsRequest))),
+
   analysisEventsUrl: (runId: string, after: number): string => `/api/analysis/${enc(runId)}/events?after=${after}`,
 
   getReports: async (): Promise<ReportSummaryDto[]> => json(await send('/api/reports')),
@@ -302,8 +309,28 @@ export const api = {
 
   listChatSessions: async (): Promise<ChatSessionSummaryDto[]> => json(await send('/api/chat/sessions')),
 
-  createChatSession: async (title?: string): Promise<ChatSession> =>
-    json(await send('/api/chat/sessions', jsonInit('POST', title ? { title } : {}))),
+  createChatSession: async (title?: string, modelId?: string | null): Promise<ChatSession> =>
+    json(await send('/api/chat/sessions', jsonInit('POST', { ...(title ? { title } : {}), ...(modelId ? { modelId } : {}) }))),
+
+  listChatModels: async (): Promise<ChatModelsDto> => json(await send('/api/chat/models')),
+
+  // ── Rutas de lectura adicionales del chat: solo se guarda la ruta, no se indexa ni se copia nada. ──
+
+  /** 409 `no_workspace` sin repositorio abierto. */
+  listChatReadRoots: async (): Promise<ChatReadRootsDto> => json(await send('/api/chat/read-roots')),
+
+  /** 400 `invalid_path` si la ruta no vale (el mensaje del servidor dice por qué). Devuelve la lista completa. */
+  addChatReadRoot: async (path: string): Promise<ChatReadRootsDto> =>
+    json(await send('/api/chat/read-roots', jsonInit('POST', { path }))),
+
+  /** 404 `not_found` si ya no estaba. */
+  removeChatReadRoot: async (path: string): Promise<void> => {
+    await send(`/api/chat/read-roots?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+  },
+
+  /** Fija el modelo de una sesión: vale para los turnos siguientes. Devuelve la sesión actualizada. */
+  setChatSessionModel: async (id: string, modelId: string): Promise<ChatSession> =>
+    json(await send(`/api/chat/sessions/${enc(id)}/model`, jsonInit('PUT', { modelId }))),
 
   getChatSession: async (id: string): Promise<ChatSession> => json(await send(`/api/chat/sessions/${enc(id)}`)),
 

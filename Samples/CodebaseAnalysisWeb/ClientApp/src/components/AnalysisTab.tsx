@@ -7,6 +7,7 @@ import { AuditorGrid } from './AuditorGrid';
 import { EventLog } from './EventLog';
 import { PhaseStepper } from './PhaseStepper';
 import { ProgressSummary, RUN_STATUS_LABELS } from './ProgressSummary';
+import { SharedPassPanel } from './SharedPassPanel';
 import { StatusBanner } from './StatusBanner';
 
 interface Props {
@@ -103,6 +104,7 @@ export function AnalysisTab({ run, onOpenReports, chatBusy = false }: Props) {
               </StatusBanner>
             )}
             <PhaseStepper state={state} now={now} />
+            <SharedPassPanel pass={state.sharedPass} running={running} now={now} />
             <AuditorGrid
               state={state}
               meta={meta}
@@ -115,6 +117,15 @@ export function AnalysisTab({ run, onOpenReports, chatBusy = false }: Props) {
               }
               regenerating={run.regenerating}
               regenerateError={run.regenerateError}
+              // Verificar y deshacer tienen las mismas condiciones que regenerar: escriben el informe y el grafo.
+              onVerify={
+                run.connection === 'failed' || otherRepo ? undefined : (reports, synthesis) => void run.verify(reports, synthesis)
+              }
+              verifying={run.verifying}
+              verifyError={run.verifyError}
+              onUndoVerification={
+                run.connection === 'failed' || otherRepo ? undefined : (report) => void run.undoVerification(report)
+              }
             />
             <EventLog entries={state.log} droppedUpToSeq={state.droppedUpToSeq} />
           </>

@@ -48,3 +48,10 @@ export function formatCost(usd: number | null | undefined): string {
   if (usd > 0 && usd < 0.001) return '< 0,001 $';
   return `${usd.toFixed(usd < 0.1 ? 3 : 2).replace('.', ',')} $`;
 }
+
+/** «2 / 10 USD por millón (entrada / salida)»; null si el modelo no tiene precio. */
+export function formatPricePerMillion(input: number | null | undefined, output: number | null | undefined): string | null {
+  if (input == null || output == null) return null;
+  const n = (v: number) => v.toLocaleString('es-ES', { maximumFractionDigits: 3 });
+  return `${n(input)} / ${n(output)} USD por millón de tokens (entrada / salida)`;
+}

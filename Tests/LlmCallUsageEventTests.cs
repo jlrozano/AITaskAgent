@@ -38,6 +38,9 @@ public sealed class LlmCallUsageEventTests
 
         public string Name => "queued-stub";
 
+        /// <summary>cached_tokens reported on the streamed usage chunk; null as a provider that does not send them.</summary>
+        public int? StreamCachedTokens { get; init; }
+
         public Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken cancellationToken = default) =>
             Task.FromResult(_results.Dequeue());
 
@@ -53,7 +56,8 @@ public sealed class LlmCallUsageEventTests
                 FinishReason = FinishReason.Stop,
                 TokensUsed = 3_000_000,
                 PromptTokens = 2_000_000,
-                CompletionTokens = 1_000_000
+                CompletionTokens = 1_000_000,
+                CachedPromptTokens = StreamCachedTokens
             };
         }
 
@@ -61,21 +65,22 @@ public sealed class LlmCallUsageEventTests
         public int GetMaxContextTokens(string? model = null) => 8192;
     }
 
-    private static LlmResult Answer(string content, int prompt, int completion, List<ToolCall>? toolCalls = null) =>
+    private static LlmResult Answer(string content, int prompt, int completion, List<ToolCall>? toolCalls = null, int? cached = null) =>
         LlmResult.Success(
             [new LlmResponse { Content = content, FinishReason = toolCalls != null ? FinishReason.ToolCalls : FinishReason.Stop, ToolCalls = toolCalls }],
             tokensUsed: prompt + completion,
             promptTokens: prompt,
             completionTokens: completion,
-            model: "deployment-2026-01-01");
+            model: "deployment-2026-01-01",
+            cachedPromptTokens: cached);
 
     private static async Task<(IStepResult Result, List<LlmResponseEvent> Finals)> RunAsync(
-        ILlmService service, bool priced, bool streaming = false, bool withTool = false)
+        ILlmService service, bool priced, bool streaming = false, bool withTool = false, decimal? cachedPrice = null)
     {
         var provider = new LlmProvider
         {
             Service = service,
-            Models = priced ? [new LlmModelSettings("deployment", 1m, 10m, new LlmInferenceSettings())] : []
+            Models = priced ? [new LlmModelSettings("deployment", 1m, 10m, new LlmInferenceSettings(), cachedPrice)] : []
         };
         IStep step = new StatelessTemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
             "Usage",
@@ -157,5 +162,35 @@ public sealed class LlmCallUsageEventTests
         var final = Assert.Single(finals);
         Assert.Equal((2_000_000, 1_000_000), (final.PromptTokens, final.CompletionTokens));
         Assert.Equal(12m, final.CostUsd);
+        Assert.Null(final.CachedPromptTokens);
+    }
+
+    [Fact]
+    public async Task A_streamed_call_prices_its_cached_tokens_at_the_cached_price()
+    {
+        var service = new QueuedService { StreamCachedTokens = 1_000_000 };
+
+        var (result, finals) = await RunAsync(service, priced: true, streaming: true, cachedPrice: 0.1m);
+
+        var final = Assert.Single(finals);
+        Assert.Equal(1_000_000, final.CachedPromptTokens);
+        // 1 M sin caché a 1 $ + 1 M de caché a 0,1 $ + 1 M de salida a 10 $.
+        Assert.Equal(11.1m, final.CostUsd);
+        Assert.Equal(11.1m, ((ILlmStepResult)result).CostUsd);
+    }
+
+    [Fact]
+    public async Task Cached_tokens_and_their_discount_add_up_across_tool_iterations()
+    {
+        var call = new List<ToolCall> { new() { Id = "c1", Name = "echo", Arguments = "{}" } };
+        // Solo la segunda vuelta trae cached_tokens: la primera cuenta como 0, no anula la suma.
+        var service = new QueuedService(Answer("", 1_000_000, 0, call), Answer("fin", 1_000_000, 0, cached: 500_000));
+
+        var (result, finals) = await RunAsync(service, priced: true, withTool: true, cachedPrice: 0.1m);
+
+        Assert.Equal([null, 500_000], finals.Select(f => f.CachedPromptTokens));
+        // 1 $ la primera; 0,5 M a 1 $ + 0,5 M a 0,1 $ la segunda.
+        Assert.Equal([1m, 0.55m], finals.Select(f => f.CostUsd ?? -1));
+        Assert.Equal(1.55m, ((ILlmStepResult)result).CostUsd);
     }
 }

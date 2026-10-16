@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { ApiError, api, errorMessage, parseAnalysisEvent } from '../api/client';
 import { connectResumableSse, type SseConnectionStatus } from '../api/sse';
 import type { AnalysisEventDto, RunStatusDto, StartAnalysisRequest } from '../api/types';
-import { initialRunState, runReducer, type RunState } from '../state/runReducer';
+import { REPORT_FILE_NAMES, initialRunState, runReducer, type RunState } from '../state/runReducer';
 
 export interface AnalysisRunApi {
   state: RunState;
@@ -15,10 +15,18 @@ export interface AnalysisRunApi {
   regenerating: string[] | null;
   /** Error del último intento de regenerar (409, 404...), con los informes que se pidieron. */
   regenerateError: { reports: string[]; code: string; message: string } | null;
+  /** Informes cuya verificación se está pidiendo: del clic hasta que llega `run.verification_started`. */
+  verifying: string[] | null;
+  /** Error del último intento de verificar o de deshacer una verificación, con los informes afectados. */
+  verifyError: { reports: string[]; code: string; message: string } | null;
   start: (request: StartAnalysisRequest) => Promise<void>;
   cancel: () => Promise<void>;
   /** Vuelve a generar esos informes de la ejecución terminada, sin `reset`: el SSE sigue desde el último seq. */
   regenerate: (reports: string[], synthesis: boolean) => Promise<void>;
+  /** Verifica esos informes ya escritos contra el código; mismo mecanismo que regenerar (misma ejecución, mismo log). */
+  verify: (reports: string[], synthesis: boolean) => Promise<void>;
+  /** Restaura la versión anterior a la última verificación de ese informe («Deshacer verificación»). */
+  undoVerification: (report: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -35,6 +43,8 @@ export function useAnalysisRun(onRunFinished?: () => void): AnalysisRunApi {
   const [cancelling, setCancelling] = useState(false);
   const [regenerating, setRegenerating] = useState<string[] | null>(null);
   const [regenerateError, setRegenerateError] = useState<AnalysisRunApi['regenerateError']>(null);
+  const [verifying, setVerifying] = useState<string[] | null>(null);
+  const [verifyError, setVerifyError] = useState<AnalysisRunApi['verifyError']>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
   const streamRef = useRef<AbortController | null>(null);
@@ -58,6 +68,7 @@ export function useAnalysisRun(onRunFinished?: () => void): AnalysisRunApi {
       pending = [];
       dispatch({ type: 'events', events });
       if (events.some((e) => e.type === 'run.regeneration_started')) setRegenerating(null);
+      if (events.some((e) => e.type === 'run.verification_started')) setVerifying(null);
       if (events.some((e) => e.type === 'run.completed')) finishedRef.current?.();
     };
     void connectResumableSse({
@@ -71,15 +82,18 @@ export function useAnalysisRun(onRunFinished?: () => void): AnalysisRunApi {
         if (!event) return;
         if (pending.length === 0) queueMicrotask(flush);
         pending.push(event);
-        // Tras el primer run.completed puede venir una regeneración: el stream no ha terminado hasta el siguiente.
+        // Tras el primer run.completed puede venir una regeneración o una verificación: el stream no ha terminado hasta el siguiente.
         if (event.type === 'run.completed') completed = true;
-        else if (event.type === 'run.regeneration_started') completed = false;
+        else if (event.type === 'run.regeneration_started' || event.type === 'run.verification_started') completed = false;
       },
       isComplete: () => completed,
       onStatus: (s) => {
         if (controller.signal.aborted) return;
         setConnection(s);
-        if (s === 'failed' || s === 'closed') setRegenerating(null);
+        if (s === 'failed' || s === 'closed') {
+          setRegenerating(null);
+          setVerifying(null);
+        }
       },
     });
   }, []);
@@ -161,10 +175,59 @@ export function useAnalysisRun(onRunFinished?: () => void): AnalysisRunApi {
     [follow],
   );
 
+  const verify = useCallback(
+    async (reports: string[], synthesis: boolean) => {
+      const runId = stateRef.current.runId;
+      if (!runId || reports.length === 0) return;
+      setError(null);
+      setVerifyError(null);
+      setVerifying(reports);
+      try {
+        const status = await api.verifyReports(runId, reports, synthesis);
+        // Como al regenerar: sin reset, los demás carriles se conservan y los eventos nuevos siguen el mismo seq.
+        follow(status, stateRef.current.lastSeq);
+      } catch (e) {
+        setVerifying(null);
+        setVerifyError({ reports, code: e instanceof ApiError ? e.code : 'error', message: errorMessage(e) });
+      }
+    },
+    [follow],
+  );
+
+  const undoVerification = useCallback(async (report: string) => {
+    const lane = stateRef.current.auditors[report];
+    const fileName = (REPORT_FILE_NAMES as Record<string, string | undefined>)[report];
+    if (!lane?.verification.previousVersionId || !fileName) return;
+    setVerifyError(null);
+    try {
+      await api.restoreReportVersion({ kind: 'catalog', fileName }, lane.verification.previousVersionId);
+      dispatch({ type: 'verification_undone', report });
+    } catch (e) {
+      setVerifyError({ reports: [report], code: e instanceof ApiError ? e.code : 'error', message: errorMessage(e) });
+    }
+  }, []);
+
   const clearError = useCallback(() => {
     setError(null);
     setRegenerateError(null);
+    setVerifyError(null);
   }, []);
 
-  return { state, connection, error, starting, cancelling, regenerating, regenerateError, start, cancel, regenerate, clearError };
+  return {
+    state,
+    connection,
+    error,
+    starting,
+    cancelling,
+    regenerating,
+    regenerateError,
+    verifying,
+    verifyError,
+    start,
+    cancel,
+    regenerate,
+    verify,
+    undoVerification,
+    clearError,
+  };
 }

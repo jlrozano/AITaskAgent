@@ -27,7 +27,7 @@ public sealed record AnalysisTimeouts
     /// <summary>Detección e indexado del grafo (<c>DetectAndIndexGraphStep</c>).</summary>
     public int DetectMinutes { get; init; } = 15;
 
-    /// <summary>Enriquecimiento de <c>BdpEnricherStep</c>, con su fallback del LLM. El enriquecimiento Java tiene el suyo.</summary>
+    /// <summary>Enriquecimiento de <c>DotNetEnricherStep</c>, con su fallback del LLM. El proceso del CLI tiene su propio límite (<c>DotNetEnricher:TimeoutSeconds</c>) y el enriquecimiento Java el suyo.</summary>
     public int EnrichMinutes { get; init; } = 20;
 
     /// <summary>El paralelo de los auditores entero (<c>ParallelReportsExecution</c>).</summary>
@@ -39,12 +39,16 @@ public sealed record AnalysisTimeouts
     /// <summary>La síntesis ejecutiva (<c>ExecutiveSynthesizerStep</c>).</summary>
     public int SynthesisMinutes { get; init; } = 15;
 
+    /// <summary>La llamada del verificador de un informe, con sus consultas a las tools (<c>VerifyReportStep</c>).</summary>
+    public int VerifierMinutes { get; init; } = 10;
+
     public TimeSpan Pipeline => ToTimeSpan(PipelineMinutes);
     public TimeSpan Detect => ToTimeSpan(DetectMinutes);
     public TimeSpan Enrich => ToTimeSpan(EnrichMinutes);
     public TimeSpan Reports => ToTimeSpan(ReportsMinutes);
     public TimeSpan Auditor => ToTimeSpan(AuditorMinutes);
     public TimeSpan Synthesis => ToTimeSpan(SynthesisMinutes);
+    public TimeSpan Verifier => ToTimeSpan(VerifierMinutes);
 
     /// <summary>
     /// Minutos a <c>Timeout</c> de paso o de pipeline. Sin límite es <see cref="Timeout.InfiniteTimeSpan"/> y no null: con
@@ -64,7 +68,8 @@ public sealed record AnalysisTimeouts
             EnrichMinutes = section.GetValue<int?>(nameof(EnrichMinutes)) ?? defaults.EnrichMinutes,
             ReportsMinutes = section.GetValue<int?>(nameof(ReportsMinutes)) ?? defaults.ReportsMinutes,
             AuditorMinutes = section.GetValue<int?>(nameof(AuditorMinutes)) ?? defaults.AuditorMinutes,
-            SynthesisMinutes = section.GetValue<int?>(nameof(SynthesisMinutes)) ?? defaults.SynthesisMinutes
+            SynthesisMinutes = section.GetValue<int?>(nameof(SynthesisMinutes)) ?? defaults.SynthesisMinutes,
+            VerifierMinutes = section.GetValue<int?>(nameof(VerifierMinutes)) ?? defaults.VerifierMinutes
         };
     }
 

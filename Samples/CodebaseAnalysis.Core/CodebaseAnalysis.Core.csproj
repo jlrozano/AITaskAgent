@@ -45,6 +45,33 @@
     <InternalsVisibleTo Include="CodebaseAnalysis.Core.Tests" />
   </ItemGroup>
 
+  <!-- El enriquecedor Roslyn (DotNetEnricherStep) es un CLI aparte que se lanza como proceso: se compila con Core pero no
+       se referencia su ensamblado (ReferenceOutputAssembly=false) ni pasa a los que referencian Core (PrivateAssets=all;
+       si pasara, tendrían dos copias de los ficheros que enlaza de aquí). Private=false evita que el SDK copie su .exe suelto
+       (sin su .dll) a la raíz de cada ejecutable. Su salida viaja como contenido de Core a
+       dotnet-enricher/ en la carpeta de cada ejecutable que lo referencia (CLI, web, tests), como el analizador Java. -->
+  <ItemGroup>
+    <ProjectReference Include="..\DotNetEnricher\DotNetEnricher.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
+  </ItemGroup>
+
+  <!-- Se añade antes de AssignTargetPaths, que también corre cuando un proyecto que referencia Core le pide su contenido.
+       Con un OutDir común para todos los proyectos (-p:OutDir=...) el CLI ya está en la misma carpeta que la app y no se
+       copia: DotNetEnricherStep lo busca en los dos sitios. -->
+  <Target Name="IncludeDotNetEnricherOutput" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="..\DotNetEnricher\DotNetEnricher.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_DotNetEnricherTargetPath" />
+    </MSBuild>
+    <PropertyGroup>
+      <_DotNetEnricherOutDir>@(_DotNetEnricherTargetPath->'%(RootDir)%(Directory)')</_DotNetEnricherOutDir>
+      <_DotNetEnricherSharesOutDir Condition="'$([System.IO.Path]::GetFullPath($(_DotNetEnricherOutDir)))' == '$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine($(MSBuildProjectDirectory), $(OutDir)))))'">true</_DotNetEnricherSharesOutDir>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(_DotNetEnricherSharesOutDir)' != 'true' And Exists('$(_DotNetEnricherOutDir)')">
+      <_DotNetEnricherFiles Include="$(_DotNetEnricherOutDir)**\*" />
+      <None Include="@(_DotNetEnricherFiles)" Link="dotnet-enricher\%(_DotNetEnricherFiles.RecursiveDir)%(_DotNetEnricherFiles.Filename)%(_DotNetEnricherFiles.Extension)"
+            CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

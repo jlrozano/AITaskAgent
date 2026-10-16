@@ -41,6 +41,15 @@ public sealed record ChatOptions
     public int MaxHistoryTurns { get; init; } = 20;
 
     /// <summary>
+    /// Rutas de solo lectura que el chat puede recorrer en todos los repositorios (<c>AllowedReadRoots</c>), además de
+    /// las que añade el usuario por repositorio. Se validan igual que las suyas; las que no valen se descartan con un aviso.
+    /// </summary>
+    public IReadOnlyList<string> AllowedReadRoots { get; init; } = [];
+
+    /// <summary>Admite rutas de red UNC como rutas de lectura (<c>AllowUncPaths</c>); por defecto no.</summary>
+    public bool AllowUncPaths { get; init; }
+
+    /// <summary>
     /// Límite de un turno (<c>TurnTimeoutMinutes</c>, 5 por defecto; 0 o negativo lo quita y queda
     /// <see cref="Timeout.InfiniteTimeSpan"/>). Lo aplica <see cref="ChatAgent"/> al turno entero, que es un solo paso.
     /// </summary>
@@ -56,7 +65,9 @@ public sealed record ChatOptions
             MaxHistoryTurns = section.GetValue<int?>("MaxHistoryTurns") ?? defaults.MaxHistoryTurns,
             TurnTimeout = section.GetValue<double?>("TurnTimeoutMinutes") is double minutes
                 ? minutes > 0 && minutes <= Hosting.AnalysisTimeouts.MaxMinutes ? TimeSpan.FromMinutes(minutes) : Timeout.InfiniteTimeSpan
-                : defaults.TurnTimeout
+                : defaults.TurnTimeout,
+            AllowedReadRoots = [.. section.GetSection(nameof(AllowedReadRoots)).GetChildren().Select(c => c.Value).Where(v => !string.IsNullOrWhiteSpace(v))!],
+            AllowUncPaths = section.GetValue<bool?>(nameof(AllowUncPaths)) ?? defaults.AllowUncPaths
         };
     }
 }
@@ -73,9 +84,10 @@ public sealed class ChatAgent(
     ChatOptions options,
     ILogger? logger = null,
     TimeProvider? clock = null,
-    ChatKnowledgeServices? knowledgeServices = null)
+    ChatKnowledgeServices? knowledgeServices = null,
+    string? modelId = null)
 {
-    /// <summary>Rol LLM del chat en <c>LlmConfiguration:Roles</c>.</summary>
+    /// <summary>Rol LLM del chat en <c>AITaskAgent:LlmProviders:Roles</c>.</summary>
     public const string RoleName = "ChatAssistant";
 
     /// <summary>Nombre del step del turno: es el <c>StepName</c> de sus eventos.</summary>
@@ -90,7 +102,7 @@ public sealed class ChatAgent(
 
     public static IReadOnlyList<string> ToolNames { get; } =
     [
-        "graph_search", GraphNeighborsTool.ToolName, "graph_domain", "view_file", "view_code_item", "list_dir", "find_by_name", "grep_search",
+        "graph_search", GraphNeighborsTool.ToolName, "graph_domain", "view_file", "view_file_outline", "view_code_item", "list_dir", "find_by_name", "grep_search",
         ListReportsTool.ToolName, ReadReportTool.ToolName,
         CreateReportTool.ToolName, UpdateReportTool.ToolName,
         ListDocumentsTool.ToolName, ReadDocumentTool.ToolName, DescribeImageTool.ToolName, SemanticSearchTool.ToolName
@@ -99,33 +111,13 @@ public sealed class ChatAgent(
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>
-    /// Deja en <paramref name="roles"/> el rol del chat. Si la configuración no lo declara, el que
-    /// <see cref="Hosting.LlmRoleFactory.BuildRoles"/> creó con el proveedor por defecto (hay que pedírselo en
-    /// <c>requiredRoles</c>) pasa a hacer streaming.
+    /// El rol del chat de <paramref name="roles"/>, tal como lo declara la configuración (el del sample hace streaming). Hay
+    /// que pedirlo en <c>requiredRoles</c> a <see cref="Hosting.LlmRoleFactory.BuildRoles"/>, que falla si no está declarado.
     /// </summary>
-    public static LlmRole EnsureRole(Dictionary<string, LlmRole> roles, IConfiguration configuration)
-    {
-        if (!roles.TryGetValue(RoleName, out var role))
-        {
-            throw new InvalidOperationException($"No hay rol '{RoleName}': pídelo en requiredRoles al construir los roles.");
-        }
-
-        if (!configuration.GetSection($"LlmConfiguration:Roles:{RoleName}").Exists())
-        {
-            role = new LlmRole
-            {
-                Provider = role.Provider,
-                Model = role.Model,
-                SystemPrompt = role.SystemPrompt,
-                Inference = (role.Inference ?? new LlmInferenceSettings()) with { UseStreaming = true },
-                Fallbacks = role.Fallbacks,
-                Tools = role.Tools
-            };
-            roles[RoleName] = role;
-        }
-
-        return role;
-    }
+    public static LlmRole EnsureRole(Dictionary<string, LlmRole> roles) =>
+        roles.TryGetValue(RoleName, out var role)
+            ? role
+            : throw new InvalidOperationException($"No hay rol '{RoleName}': pídelo en requiredRoles al construir los roles.");
 
     /// <summary>
     /// Ejecuta un turno, lo añade a la sesión y la guarda. Cada evento sale por <paramref name="onEvent"/>
@@ -148,7 +140,8 @@ public sealed class ChatAgent(
         {
             Id = $"t-{session.Turns.Count + 1:D4}",
             AskedAt = _clock.GetUtcNow(),
-            Question = question
+            Question = question,
+            ModelId = modelId
         };
 
         onEvent(new ChatStreamEvent(ChatStreamEventTypes.TurnStarted, new Dictionary<string, object?>
@@ -237,7 +230,7 @@ public sealed class ChatAgent(
 
             step = new AuditedChatStep(StepName, role, question, systemPrompt, turnStart)
             {
-                Tools = [.. AvailableTools.Instance.GetTools([.. ToolNames])],
+                Tools = [.. ReadRootsAwareTool.Annotate(AvailableTools.Instance.GetTools([.. ToolNames]), workspace.RepositoryPath, workspace.ReadRoots)],
                 MaxToolIterations = options.MaxToolIterations,
                 Timeout = Timeout.InfiniteTimeSpan
             };

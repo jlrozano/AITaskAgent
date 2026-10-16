@@ -26,12 +26,32 @@ public sealed record ExpectedFinding
     public string? Note { get; init; }
 }
 
+/// <summary>
+/// Algo que los informes NO deberían decir (una trampa sembrada): un hallazgo que case con él es un falso positivo. Mismas
+/// condiciones que <see cref="ExpectedFinding"/>, con <c>Files</c> para varios ficheros (basta que el hallazgo cite uno) y sin
+/// obligación de <c>File</c> o <c>Keywords</c> más allá de tener alguno.
+/// </summary>
+public sealed record NotExpectedFinding
+{
+    public string? Id { get; init; }
+    public string? Report { get; init; }
+    public string? File { get; init; }
+    public List<string> Files { get; init; } = [];
+    public int? StartLine { get; init; }
+    public int? EndLine { get; init; }
+    public List<string> Keywords { get; init; } = [];
+    public string? Note { get; init; }
+}
+
 /// <summary>El contenido de <c>expected-findings.json</c>: la lista de hallazgos esperados de un repositorio de evaluación.</summary>
 public sealed record ExpectedFindingsDocument
 {
     public string? Repository { get; init; }
     public string? Description { get; init; }
     public List<ExpectedFinding> Findings { get; init; } = [];
+
+    /// <summary>Las trampas: los hallazgos que casen con alguna son falsos positivos.</summary>
+    public List<NotExpectedFinding> NotExpected { get; init; } = [];
 
     /// <summary>
     /// Lee el fichero. Admite comentarios <c>//</c> y comas finales, para que la plantilla pueda ir documentada.
@@ -60,6 +80,13 @@ public sealed record ExpectedFindingsDocument
 /// <summary>Resultado de un hallazgo esperado: si se encontró y con qué hallazgos del informe casa.</summary>
 public sealed record ExpectedFindingResult(string Id, string? Report, bool Found, IReadOnlyList<string> MatchedFindings, string? Problem);
 
+/// <summary>Una trampa de <c>notExpected</c> y los hallazgos del informe que casan con ella (falsos positivos si hay alguno).</summary>
+public sealed record FalsePositiveResult(string Id, string? Report, IReadOnlyList<string> MatchedFindings, string? Problem)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool Triggered => MatchedFindings.Count > 0;
+}
+
 /// <summary>Los hallazgos de un informe cubierto por la lista que no casan con ningún esperado: candidatos a falso positivo.</summary>
 public sealed record UnexpectedFindings(string Report, IReadOnlyList<string> Findings);
 
@@ -76,6 +103,14 @@ public sealed class ExpectedFindingsComparison
     public int UnexpectedCount { get; set; }
     public List<ExpectedFindingResult> Items { get; } = [];
     public List<UnexpectedFindings> Unexpected { get; } = [];
+
+    /// <summary>Número de trampas (<c>notExpected</c>) evaluadas.</summary>
+    public int NotExpectedCount { get; set; }
+
+    /// <summary>Cuántas trampas se activaron: hallazgos que dicen lo que no deberían.</summary>
+    public int FalsePositiveCount { get; set; }
+
+    public List<FalsePositiveResult> NotExpected { get; } = [];
 }
 
 /// <summary>Compara los hallazgos de una validación con un <see cref="ExpectedFindingsDocument"/>.</summary>
@@ -124,6 +159,30 @@ public static class ExpectedFindingsComparer
             comparison.Unexpected.Add(new UnexpectedFindings(report.FileName, unexpected));
         }
 
+        for (var i = 0; i < expected.NotExpected.Count; i++)
+        {
+            var trap = expected.NotExpected[i];
+            var id = string.IsNullOrWhiteSpace(trap.Id) ? $"#{i + 1}" : trap.Id.Trim();
+            var reportName = ResolveReportName(trap.Report);
+            var files = trap.Files.Concat(string.IsNullOrWhiteSpace(trap.File) ? [] : [trap.File]).ToList();
+            string? problem = reportName == null
+                ? $"Informe '{trap.Report}' desconocido: usa el fichero (03_codigo_muerto.md) o el alias (deadcode)."
+                : files.Count == 0 && trap.Keywords.Count == 0
+                    ? "Sin 'file', 'files' ni 'keywords': no hay nada con qué casar."
+                    : null;
+            var report = reportName == null ? null : validation.Reports.FirstOrDefault(r => r.FileName.Equals(reportName, StringComparison.OrdinalIgnoreCase));
+            if (problem == null && report == null)
+                problem = $"No hay informe {reportName} en la carpeta validada.";
+
+            var matched = problem == null
+                ? report!.Findings.Where(f => MatchesTrap(trap, files, f)).Select(f => f.Id).ToList()
+                : [];
+            comparison.NotExpectedCount++;
+            if (matched.Count > 0)
+                comparison.FalsePositiveCount++;
+            comparison.NotExpected.Add(new FalsePositiveResult(id, reportName ?? trap.Report, matched, problem));
+        }
+
         comparison.CoveragePercent = comparison.ExpectedCount == 0 ? null : Math.Round(100.0 * comparison.Found / comparison.ExpectedCount, 1);
         return comparison;
     }
@@ -141,35 +200,48 @@ public static class ExpectedFindingsComparer
         return descriptor?.FileName;
     }
 
-    private static bool Matches(ExpectedFinding expected, ReportFinding finding)
+    private static bool Matches(ExpectedFinding expected, ReportFinding finding) =>
+        Matches(string.IsNullOrWhiteSpace(expected.File) ? [] : [expected.File], expected.StartLine, expected.EndLine, expected.Keywords, finding);
+
+    private static bool MatchesTrap(NotExpectedFinding trap, List<string> files, ReportFinding finding) =>
+        Matches(files, trap.StartLine, trap.EndLine, trap.Keywords, finding);
+
+    /// <summary>Con varios ficheros basta que el hallazgo cite uno (con el rango, si lo hay); las palabras clave, todas.</summary>
+    private static bool Matches(List<string> files, int? startLine, int? endLine, List<string> keywords, ReportFinding finding)
     {
-        if (!string.IsNullOrWhiteSpace(expected.File))
+        if (files.Count > 0)
         {
-            var wanted = expected.File.Trim().Replace('\\', '/').TrimStart('.', '/');
-            var hit = finding.CitationList.Any(c => c.IsValid && c.Target != null
-                && (c.Target.Equals(wanted, StringComparison.OrdinalIgnoreCase) || c.Target.EndsWith("/" + wanted, StringComparison.OrdinalIgnoreCase))
-                && Overlaps(expected, c));
+            var hit = files.Any(file =>
+            {
+                var wanted = file.Trim().Replace('\\', '/').TrimStart('.', '/');
+                return finding.CitationList.Any(c => c.IsValid && c.Target != null
+                    && (c.Target.Equals(wanted, StringComparison.OrdinalIgnoreCase) || c.Target.EndsWith("/" + wanted, StringComparison.OrdinalIgnoreCase))
+                    && Overlaps(startLine, endLine, c));
+            });
             if (!hit)
                 return false;
         }
 
-        if (expected.Keywords.Count > 0)
+        if (keywords.Count > 0)
         {
             var text = Fold(finding.Text);
-            if (!expected.Keywords.Where(k => !string.IsNullOrWhiteSpace(k)).All(k => text.Contains(Fold(k.Trim()), StringComparison.Ordinal)))
+            if (!keywords.Where(k => !string.IsNullOrWhiteSpace(k)).All(k => text.Contains(Fold(k.Trim()), StringComparison.Ordinal)))
                 return false;
         }
         return true;
     }
 
     /// <summary>Sin rango esperado vale cualquier cita al fichero; con rango, la cita tiene que llevar líneas y solaparse.</summary>
-    private static bool Overlaps(ExpectedFinding expected, ReportCitation citation)
+    private static bool Overlaps(int? startLine, int? endLine, ReportCitation citation)
     {
-        if (expected.StartLine is not { } start)
+        if (startLine is not { } start)
             return true;
         if (citation.StartLine is not { } s)
             return false;
-        var end = expected.EndLine ?? start;
+        var end = endLine ?? start;
+        // Una cita con varios rangos (`F.cs:11,16-21`) casa si alguno de ellos se solapa, no el hueco entre ellos.
+        if (citation.Ranges is { Count: > 0 } ranges)
+            return ranges.Any(r => r.Start <= end && r.End >= start);
         var e = citation.EndLine ?? s;
         return s <= end && e >= start;
     }

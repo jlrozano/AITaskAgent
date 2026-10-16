@@ -23,4 +23,11 @@ public sealed record LlmResponse
 
     /// <summary>Tool calls requested by the LLM in this candidate.</summary>
     public List<ToolCall>? ToolCalls { get; init; }
+
+    /// <summary>
+    /// Set when the step cut its tool loop instead of the model finishing on its own (the repeat detector, or a tool
+    /// that threw <see cref="ToolLoopStopRequestedException"/>): why it was cut. The candidate still reads as a final
+    /// answer; a derived step can use this to choose another ending, such as one last turn without tools.
+    /// </summary>
+    public string? ToolLoopStopMessage { get; init; }
 }

@@ -15,6 +15,7 @@ using CodebaseAnalysis.Core.Knowledge.Graph;
 using CodebaseAnalysis.Core.Models;
 using CodebaseAnalysis.Core.Progress;
 using CodebaseAnalysis.Core.Reports;
+using CodebaseAnalysis.Core.Steps;
 using CodebaseAnalysis.Core.Support;
 using CodebaseAnalysis.Core.Tools;
 using DocumentFormat.OpenXml;
@@ -293,7 +294,7 @@ public sealed class PostAuditV2CoreTests
         var (configuration, serviceProvider) = await OfflineHostAsync(new CancellingLlmService(cts), ("reports", "errores"));
         await using var _ = serviceProvider;
 
-        var roles = LlmRoleFactory.BuildRoles(configuration, serviceProvider, _ => null, _ => { });
+        var roles = LlmRoleFactory.BuildRoles(serviceProvider, _ => null, _ => { });
         var input = AnalysisRunOptions.BuildInput(configuration, repo.Path, _ => { });
         await CreateGraphAsync(input.DatabasePath);
         var paths = new KnowledgePaths(input.RepositoryPath, input.OutputReportsPath);
@@ -407,11 +408,13 @@ public sealed class PostAuditV2CoreTests
         var llm = new ToolLoopingLlmService(CannedReport);
         var (configuration, serviceProvider) = await OfflineHostAsync(llm,
             ("reports", "flujos"),
+            // El tope de herramientas es el del auditor: sin la investigación por subsistema, que tiene el suyo (SubsystemInvestigationReportStepTests).
+            ("CodebaseAnalysis:Preparation:Mode", "Off"),
             ("CodebaseAnalysis:Auditors:MaxToolIterations", "2"),
             ("CodebaseAnalysis:Auditors:MaxToolIterationsByRole:FlowsAuditor", "3"));
         await using var _ = serviceProvider;
 
-        var roles = LlmRoleFactory.BuildRoles(configuration, serviceProvider, _ => null, _ => { });
+        var roles = LlmRoleFactory.BuildRoles(serviceProvider, _ => null, _ => { });
         var input = AnalysisRunOptions.BuildInput(configuration, repo.Path, _ => { });
         await CreateGraphAsync(input.DatabasePath);
         AnalysisToolRegistration.Register(input);
@@ -436,34 +439,61 @@ public sealed class PostAuditV2CoreTests
         var llm = new AlwaysToolsLlmService();
         var (configuration, serviceProvider) = await OfflineHostAsync(llm,
             ("reports", "flujos"),
+            ("CodebaseAnalysis:Preparation:Mode", "Off"),
             ("CodebaseAnalysis:Auditors:MaxToolIterationsByRole:FlowsAuditor", "3"));
         await using var _ = serviceProvider;
 
-        var roles = LlmRoleFactory.BuildRoles(configuration, serviceProvider, _ => null, _ => { });
+        var roles = LlmRoleFactory.BuildRoles(serviceProvider, _ => null, _ => { });
         var input = AnalysisRunOptions.BuildInput(configuration, repo.Path, _ => { });
         await CreateGraphAsync(input.DatabasePath);
         AnalysisToolRegistration.Register(input);
 
         await AnalysisRunner.RunAsync(input, roles, serviceProvider, new EventChannel(), new CapturingReporter(), CancellationToken.None);
 
-        // Una ronda con tools y una sin ellas, de 3 llamadas cada una: el intento final no abre otro.
+        // Una ronda con tools y otra con ellas prohibidas (tool_choice: none), de 3 llamadas cada una: el intento final no abre otro.
         Assert.Equal(6, llm.Calls);
         Assert.Equal(3, llm.CallsWithoutTools);
         Assert.False(File.Exists(Path.Combine(input.OutputReportsPath, "04_flujos_end_to_end.md")));
     }
 
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("false", false)]
+    public async Task The_auditor_carries_the_note_protocol_by_default_and_not_when_it_is_switched_off(string? auditors, bool expected)
+    {
+        using var repo = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(repo.Path, "src"));
+        await File.WriteAllTextAsync(Path.Combine(repo.Path, "src", "Sample.cs"), "namespace Demo; public class Sample { }");
+        var llm = new NoteRecordingLlmService(CannedReport);
+        var (configuration, serviceProvider) = await OfflineHostAsync(llm,
+            ("reports", "flujos"),
+            ("CodebaseAnalysis:Preparation:Mode", "Off"),
+            ("CodebaseAnalysis:NoteProtocol:Auditors", auditors));
+        await using var _ = serviceProvider;
+
+        var roles = LlmRoleFactory.BuildRoles(serviceProvider, _ => null, _ => { });
+        var input = AnalysisRunOptions.BuildInput(configuration, repo.Path, _ => { });
+        await CreateGraphAsync(input.DatabasePath);
+        AnalysisToolRegistration.Register(input);
+
+        var result = await AnalysisRunner.RunAsync(input, roles, serviceProvider, new EventChannel(), new CapturingReporter(), CancellationToken.None);
+
+        Assert.False(result.HasError, result.Error?.Message);
+        // El system prompt del auditor, con sus plantillas reales: las instrucciones de la etiqueta llegan sin tocar las plantillas.
+        Assert.Equal(expected, llm.FirstSystemPrompt.Contains("<nota r=\"Rn\">", StringComparison.Ordinal));
+        var toolResult = Assert.Single(llm.FinalToolMessages);
+        Assert.Equal(expected, toolResult.StartsWith("[R1] ", StringComparison.Ordinal));
+    }
+
     private static async Task<(IConfiguration, ServiceProvider)> OfflineHostAsync(ILlmService llm, params (string, string?)[] extra)
     {
         IConfiguration configuration = TestConfig.FromPairs(
-            [("LlmConfiguration:DefaultProvider", "Fake"),
-             ("LlmConfiguration:Providers:Fake:ServiceType", "fake"),
-             ("LlmConfiguration:Providers:Fake:BaseUrl", "http://fake.invalid/"),
-             ("LlmConfiguration:Providers:Fake:Model", "fake-model"),
+            [.. FakeLlmConfig.Pairs(llm.Name),
              .. extra]);
         var services = new ServiceCollection();
         services.AddSingleton(configuration);
         services.AddLogging();
-        services.AddKeyedSingleton("fake", llm);
+        services.AddSingleton(llm);
         services.AddAITaskAgent();
         var provider = services.BuildServiceProvider();
         provider.UseAITaskAgent();
@@ -533,7 +563,7 @@ public sealed class PostAuditV2CoreTests
         public override Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken cancellationToken = default)
         {
             var n = Interlocked.Increment(ref _calls);
-            if (request.Tools is not { Count: > 0 })
+            if (request.Tools is not { Count: > 0 } || FinalAnswerRequests.ForbidsTools(request))
             {
                 Interlocked.Increment(ref _callsWithoutTools);
             }
@@ -543,6 +573,37 @@ public sealed class PostAuditV2CoreTests
                 FinishReason = FinishReason.ToolCalls,
                 ToolCalls = [new ToolCall { Id = $"call_{n}", Name = "graph_search", Arguments = JsonSerializer.Serialize(new { query = $"Sample{n}" }) }]
             }], model: request.Model));
+        }
+    }
+
+    /// <summary>Una búsqueda en el grafo y después el informe; guarda el system prompt de la primera llamada y los resultados que ve la última.</summary>
+    private sealed class NoteRecordingLlmService(string report) : BatchOnlyLlmService
+    {
+        private int _calls;
+
+        public string FirstSystemPrompt { get; private set; } = "";
+        public IReadOnlyList<string> FinalToolMessages { get; private set; } = [];
+
+        public override string Name => "note-recording";
+
+        public override Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                FirstSystemPrompt = request.SystemPrompt ?? "";
+                return Task.FromResult(LlmResult.Success([new LlmResponse
+                {
+                    Content = string.Empty,
+                    FinishReason = FinishReason.ToolCalls,
+                    ToolCalls = [new ToolCall { Id = "call_1", Name = "graph_search", Arguments = JsonSerializer.Serialize(new { query = "Sample" }) }]
+                }], model: request.Model));
+            }
+
+            // La síntesis ejecutiva llama después sin resultados de tools: no pisa los del auditor.
+            List<string> toolMessages = [.. request.Conversation.History.Messages.Where(m => m.Role == LlmConstants.MessageRoles.Tool).Select(m => m.Content ?? "")];
+            if (toolMessages.Count > 0)
+                FinalToolMessages = toolMessages;
+            return Task.FromResult(LlmResult.Success([new LlmResponse { Content = report, FinishReason = FinishReason.Stop }], model: request.Model));
         }
     }
 
@@ -571,7 +632,7 @@ public sealed class PostAuditV2CoreTests
 
         public override Task<LlmResult> InvokeAsync(LlmRequest request, CancellationToken cancellationToken = default)
         {
-            if (request.Tools?.Any(t => t.Name == "graph_search") == true)
+            if (request.Tools?.Any(t => t.Name == "graph_search") == true && !FinalAnswerRequests.ForbidsTools(request))
             {
                 var n = Interlocked.Increment(ref _toolRequests);
                 return Task.FromResult(LlmResult.Success([new LlmResponse

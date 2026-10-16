@@ -8,7 +8,7 @@ const entries: LogEntry[] = Array.from({ length: 30 }, (_, i) => ({
   ts: '2026-09-27T10:15:00Z',
   type: 'log',
   level: 'info',
-  source: 'BdpEnricherStep',
+  source: 'DotNetEnricherStep',
   report: null,
   phase: 'enrich',
   message: `línea ${i + 1}`,

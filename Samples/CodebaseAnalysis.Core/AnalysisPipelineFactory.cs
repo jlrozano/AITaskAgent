@@ -9,10 +9,14 @@ using AITaskAgent.Support.Template;
 using CodebaseAnalysis.Core.Enrichment;
 using CodebaseAnalysis.Core.Hosting;
 using CodebaseAnalysis.Core.Models;
+using CodebaseAnalysis.Core.Notes;
+using CodebaseAnalysis.Core.Preparation;
 using CodebaseAnalysis.Core.Progress;
+using CodebaseAnalysis.Core.Reports;
 using CodebaseAnalysis.Core.Steps;
 using CodebaseAnalysis.Core.Support;
 using Microsoft.Extensions.Configuration;
+using OpenAILLmService;
 using System.Globalization;
 
 namespace CodebaseAnalysis.Core;
@@ -39,6 +43,74 @@ public static class AnalysisPipelineFactory
         type = default;
         return stepName.StartsWith(AuditorStepPrefix, StringComparison.Ordinal)
             && Enum.TryParse(stepName[AuditorStepPrefix.Length..], out type);
+    }
+
+    private const string InvestigationStepPrefix = "Investigation_";
+
+    /// <summary>
+    /// Nombre del sub-step LLM que investiga un subsistema para un informe en modo B: <c>Investigation_&lt;ReportType&gt;_&lt;subsistemaId&gt;</c>.
+    /// El envoltorio del informe y su consolidación se siguen llamando <see cref="AuditorStepName"/>: cuentan en el mismo carril.
+    /// </summary>
+    /// <exception cref="ArgumentException">Si <paramref name="subsystemId"/> está vacío.</exception>
+    public static string InvestigationStepName(ReportType type, string subsystemId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(subsystemId);
+        return $"{InvestigationStepPrefix}{type}_{subsystemId}";
+    }
+
+    /// <summary>
+    /// Inverso de <see cref="InvestigationStepName"/>; false si el nombre no es el de una investigación (<paramref name="subsystemId"/> queda
+    /// vacío). El tipo de informe es el tramo hasta el primer <c>_</c> (los nombres del enumerado no llevan ninguno), así que el
+    /// identificador del subsistema puede llevarlo.
+    /// </summary>
+    public static bool TryParseInvestigationStepName(string stepName, out ReportType type, out string subsystemId)
+    {
+        type = default;
+        subsystemId = string.Empty;
+        if (!stepName.StartsWith(InvestigationStepPrefix, StringComparison.Ordinal))
+            return false;
+
+        var rest = stepName[InvestigationStepPrefix.Length..];
+        var separator = rest.IndexOf('_');
+        if (separator <= 0 || separator == rest.Length - 1)
+            return false;
+        if (!Enum.TryParse(rest[..separator], out type) || !Enum.IsDefined(type))
+        {
+            type = default;
+            return false;
+        }
+
+        subsystemId = rest[(separator + 1)..];
+        return true;
+    }
+
+    private const string VerifyStepPrefix = "Verify_";
+    private const string VerifierStepPrefix = "Verifier_";
+
+    /// <summary>Nombre del paralelo de los verificadores (no es un paso de fase: la verificación no mueve el avance del análisis).</summary>
+    public const string ParallelVerificationStepName = "ParallelVerificationExecution";
+
+    /// <summary>Nombre del pipeline de verificación en los eventos (<c>pipeline.started</c>).</summary>
+    public const string VerificationPipelineName = "CodebaseAnalysisVerification";
+
+    /// <summary>Nombre del paso que verifica un informe: <c>Verify_&lt;ReportType&gt;</c>.</summary>
+    public static string VerifyStepName(ReportType type) => $"{VerifyStepPrefix}{type}";
+
+    /// <summary>Nombre del sub-step LLM del verificador de un informe: <c>Verifier_&lt;ReportType&gt;</c>.</summary>
+    public static string VerifierLlmStepName(ReportType type) => $"{VerifierStepPrefix}{type}";
+
+    /// <summary>Inverso de <see cref="VerifyStepName"/> y de <see cref="VerifierLlmStepName"/>; false si el nombre no es de ninguno.</summary>
+    public static bool TryParseVerificationStepName(string stepName, out ReportType type)
+    {
+        type = default;
+        foreach (var prefix in new[] { VerifyStepPrefix, VerifierStepPrefix })
+        {
+            if (stepName.StartsWith(prefix, StringComparison.Ordinal) && Enum.TryParse(stepName[prefix.Length..], out type) && Enum.IsDefined(type))
+                return true;
+        }
+
+        type = default;
+        return false;
     }
 
     /// <summary>
@@ -95,42 +167,51 @@ public static class AnalysisPipelineFactory
             systemPromptTemplateName: enricherRole.SystemPrompt ?? "enricher_system"
         );
         var semanticEnrichmentStep = new SemanticEnrichmentStep(enricherLlmStep);
-        var bdpEnricherStep = new BdpEnricherStep(semanticEnrichmentStep) { Timeout = timeouts.Enrich };
+        var dotNetEnricherStep = new DotNetEnricherStep(semanticEnrichmentStep) { Timeout = timeouts.Enrich };
 
         // 4. Pre-extracción de Facetas SQL
         var facetExtractorStep = new SqlFacetExtractorStep();
 
-        // 5. Construcción Dinámica del ParallelStep
+        // 5. Construcción Dinámica del ParallelStep. Los informes se crean antes que el presupuesto de tiempo: este escribe el
+        //    Timeout de cada uno a través del registro que se crea con ellos.
         var requestedList = input.RequestedReports.Count > 0
             ? input.RequestedReports
             : Enum.GetValues<ReportType>().ToList();
-        var parallelReportsStep = CreateReportsStep(templateProvider, roles, input, requestedList, timeouts);
+        var preparation = PreparationOptions.FromServices(serviceProvider);
+        var (parallelReportsStep, registry) = CreateReportsStep(
+            templateProvider, roles, input, requestedList, timeouts, preparation, NoteProtocolOptions.FromServices(serviceProvider));
 
         // 6. Agregador y Resumen Ejecutivo
         var executiveSynthesizerStep = CreateSynthesisStep(templateProvider, roles, timeouts);
 
-        // Enlace secuencial de los 6 pasos (5 fases: los dos enriquecedores comparten la fase enrich)
-        return new CodebaseAnalysisPipeline(
-            ResolveEngine(serviceProvider, engine),
-            [
-                detectStep,
-                languageEnricherStep,
-                bdpEnricherStep,
-                facetExtractorStep,
-                parallelReportsStep,
-                executiveSynthesizerStep
-            ],
-            timeouts.Pipeline);
+        // Enlace secuencial de los pasos (5 fases: los dos enriquecedores comparten la fase enrich). Con la preparación por
+        // subsistema (CodebaseAnalysis:Preparation:Mode = Subsystems) van cuatro más entre las facetas y los informes.
+        List<IStep> steps = [detectStep, languageEnricherStep, dotNetEnricherStep, facetExtractorStep];
+        steps.AddRange(CreatePreparationSteps(templateProvider, roles, registry, preparation, reuseSavedDomainMap: false));
+        // La pasada compartida (CodebaseAnalysis:SharedPass:Enabled), tras el mapa de dominios y antes de los informes; apagada, no
+        // hay paso ni se piden sus roles.
+        if (SharedPass.SharedPassOptions.FromServices(serviceProvider) is { Enabled: true } sharedPass)
+            steps.Add(CreateSharedPassStep(templateProvider, roles, sharedPass));
+        steps.Add(parallelReportsStep);
+        steps.Add(executiveSynthesizerStep);
+
+        return new CodebaseAnalysisPipeline(ResolveEngine(serviceProvider, engine), steps, timeouts.Pipeline);
     }
+
+    /// <summary>El paso de la pasada compartida con sus dos roles (<see cref="SharedPass.SharedPassOptions.ReaderRole"/> y <see cref="SharedPass.SharedPassOptions.JudgeRole"/>).</summary>
+    internal static SharedPassStep CreateSharedPassStep(ITemplateProvider templateProvider, Dictionary<string, LlmRole> roles, SharedPass.SharedPassOptions options) =>
+        new(ResolveRole(roles, options.ReaderRole), ResolveRole(roles, options.JudgeRole), templateProvider, options);
 
     /// <summary>Nombre del pipeline de regeneración en los eventos (<c>pipeline.started</c>).</summary>
     public const string RegenerationPipelineName = "CodebaseAnalysisRegeneration";
 
     /// <summary>
     /// Pipeline reducido que vuelve a generar los informes de <c>input.RequestedReports</c> sobre el grafo que ya existe:
-    /// <see cref="PrepareRegenerationStep"/>, <see cref="SqlFacetExtractorStep"/>, los auditores pedidos y, con
-    /// <paramref name="synthesis"/>, la síntesis ejecutiva. No detecta, indexa ni enriquece. Las facetas se recalculan porque
-    /// solo viven en memoria y son consultas SQL de segundos.
+    /// <see cref="PrepareRegenerationStep"/>, <see cref="SqlFacetExtractorStep"/>, los pasos de la preparación por subsistema (con
+    /// <c>Mode = Subsystems</c>), los auditores pedidos y, con <paramref name="synthesis"/>, la síntesis ejecutiva. No detecta, indexa
+    /// ni enriquece. Las facetas se recalculan porque solo viven en memoria y son consultas SQL de segundos; de la preparación se
+    /// recalculan el inventario, el plan y el presupuesto (deterministas y baratos) y se reutiliza el mapa de dominios del disco si
+    /// coincide con la huella del grafo, porque nombrarlo cuesta una llamada al LLM.
     /// </summary>
     /// <exception cref="ArgumentException">Si <c>input.RequestedReports</c> está vacío.</exception>
     public static CodebaseAnalysisPipeline CreateRegenerationPipeline(
@@ -147,17 +228,104 @@ public static class AnalysisPipelineFactory
 
         timeouts ??= AnalysisTimeouts.FromServices(serviceProvider);
 
-        List<IStep> steps =
-        [
-            new PrepareRegenerationStep(),
-            new SqlFacetExtractorStep(),
-            CreateReportsStep(templateProvider, roles, input, input.RequestedReports, timeouts)
-        ];
+        var preparation = PreparationOptions.FromServices(serviceProvider);
+        var (reportsStep, registry) = CreateReportsStep(
+            templateProvider, roles, input, input.RequestedReports, timeouts, preparation, NoteProtocolOptions.FromServices(serviceProvider));
+
+        List<IStep> steps = [new PrepareRegenerationStep(), new SqlFacetExtractorStep()];
+        // Los mismos pasos de preparación, pero el mapa de dominios del disco se reutiliza (sin volver a nombrar con el LLM)
+        // mientras coincida con la huella del grafo actual.
+        steps.AddRange(CreatePreparationSteps(templateProvider, roles, registry, preparation, reuseSavedDomainMap: true));
+        steps.Add(reportsStep);
         if (synthesis)
             steps.Add(CreateSynthesisStep(templateProvider, roles, timeouts));
 
         return new CodebaseAnalysisPipeline(ResolveEngine(serviceProvider, engine), steps, timeouts.Pipeline, RegenerationPipelineName);
     }
+
+    /// <summary>
+    /// Pipeline que verifica los informes de <c>input.RequestedReports</c> ya escritos en disco: <see cref="PrepareRegenerationStep"/>
+    /// (comprueba el grafo y retira del grafo los informes, que vuelven en el <c>finally</c> del pipeline), un paso
+    /// <see cref="VerifyReportStep"/> por informe en paralelo y, con <paramref name="synthesis"/>, la síntesis ejecutiva. No
+    /// calcula facetas: el verificador no las consume.
+    /// </summary>
+    /// <exception cref="ArgumentException">Si <c>input.RequestedReports</c> está vacío.</exception>
+    public static CodebaseAnalysisPipeline CreateVerificationPipeline(
+        ITemplateProvider templateProvider,
+        Dictionary<string, LlmRole> roles,
+        AnalysisPipelineInput input,
+        bool synthesis,
+        IServiceProvider? serviceProvider = null,
+        IPipeline? engine = null,
+        AnalysisTimeouts? timeouts = null)
+    {
+        if (input.RequestedReports.Count == 0)
+            throw new ArgumentException("La verificación necesita al menos un informe.", nameof(input));
+
+        timeouts ??= AnalysisTimeouts.FromServices(serviceProvider);
+        var verifierRole = ResolveRole(roles, VerifierRoleName);
+        // Un índice de ficheros del repositorio para todos los informes, y solo si hay alguno que verificar.
+        var validator = new Lazy<ReportValidator.ReportContentValidator>(() =>
+            ReportValidator.CreateContentValidator(new ReportValidationRequest(input.RepositoryPath, input.OutputReportsPath, input.DatabasePath)));
+
+        var branches = input.RequestedReports.Select(type => (IStep)new VerifyReportStep(
+            type,
+            CreateVerifierStep(templateProvider, verifierRole, type, input.GetAuditorMaxToolIterations(VerifierRoleName), timeouts.Verifier),
+            validator,
+            timeouts.Verifier)
+        {
+            // El límite del paso cubre su LLM, la validación y la escritura; el del LLM lo aplica el propio paso.
+            Timeout = timeouts.Verifier == Timeout.InfiniteTimeSpan ? Timeout.InfiniteTimeSpan : timeouts.Verifier + TimeSpan.FromMinutes(2)
+        }).ToArray();
+
+        List<IStep> steps =
+        [
+            new PrepareRegenerationStep(),
+            new TolerantReportsParallelStep(ParallelVerificationStepName, branches)
+            {
+                Timeout = timeouts.Reports,
+                MaxDegreeOfParallelism = input.MaxParallelAuditors
+            }
+        ];
+        if (synthesis)
+            steps.Add(CreateSynthesisStep(templateProvider, roles, timeouts));
+
+        return new CodebaseAnalysisPipeline(ResolveEngine(serviceProvider, engine), steps, timeouts.Pipeline, VerificationPipelineName);
+    }
+
+    /// <summary>Rol LLM del verificador (<c>AITaskAgent:LlmProviders:Roles:ReportVerifier</c>).</summary>
+    public const string VerifierRoleName = "ReportVerifier";
+
+    /// <summary>
+    /// Tools del verificador: leer el código, buscar texto y los vecinos de un nodo del grafo. No lleva las demás del grafo ni la
+    /// documentación aportada: comprueba afirmaciones concretas del informe, no las descubre.
+    /// </summary>
+    public static IReadOnlyList<string> VerifierToolNames { get; } =
+        ["view_file", "view_code_item", "grep_search", Tools.GraphNeighborsTool.ToolName];
+
+    /// <summary>
+    /// Mensaje de la última llamada, sin tools, del verificador que agota su tope de iteraciones: devuelve ya el resultado con
+    /// lo que ha comprobado.
+    /// </summary>
+    public const string VerifierToolLimitPrompt =
+        "Has agotado las consultas a herramientas disponibles. No pidas más herramientas: responde ya con el informe corregido y su apartado " +
+        "«Cambios de la verificación», o con SIN CAMBIOS si no has encontrado nada que corregir, limitándote a lo que has comprobado.";
+
+    private static CustomStatelessTemplateLlmStep<VerificationInput, LlmStringStepResult> CreateVerifierStep(
+        ITemplateProvider templateProvider, LlmRole role, ReportType type, int maxToolIterations, TimeSpan timeout) =>
+        new(
+            name: VerifierLlmStepName(type),
+            role: role,
+            templateProvider: templateProvider,
+            promptTemplateName: "report_verifier_prompt",
+            systemPromptTemplateName: role.SystemPrompt ?? "report_verifier_system",
+            tools: [.. VerifierToolNames])
+        {
+            // Se invoca sin middleware: el límite real lo aplica VerifyReportStep con su propio token.
+            Timeout = timeout,
+            MaxToolIterations = maxToolIterations,
+            ToolLimitFinalAnswerPrompt = VerifierToolLimitPrompt
+        };
 
     private static IPipeline ResolveEngine(IServiceProvider? serviceProvider, IPipeline? engine) =>
         engine ?? (serviceProvider?.GetService(typeof(IPipeline)) as IPipeline) ?? new Pipeline();
@@ -165,8 +333,8 @@ public static class AnalysisPipelineFactory
     /// <summary>
     /// El rol pedido, o un error que lo nombra. Antes devolvía el primero configurado, y un auditor podía acabar con el
     /// prompt de sistema y el modelo de otro rol sin aviso (auditoría, H-11). No rompe ninguna configuración válida:
-    /// <see cref="Hosting.LlmRoleFactory.BuildRoles"/> crea con el proveedor por defecto los
-    /// <see cref="Hosting.LlmRoleFactory.RequiredRoles"/> que falten, y la CLI y la web construyen los roles con él.
+    /// <see cref="Hosting.LlmRoleFactory.BuildRoles"/> ya falla si falta alguno de los
+    /// <see cref="Hosting.LlmRoleFactory.RequiredRoles"/>, y la CLI y la web construyen los roles con él.
     /// </summary>
     internal static LlmRole ResolveRole(Dictionary<string, LlmRole> roles, string roleName)
     {
@@ -175,40 +343,151 @@ public static class AnalysisPipelineFactory
 
         throw new InvalidOperationException(
             $"No hay rol LLM '{roleName}' (roles recibidos: {(roles.Count == 0 ? "ninguno" : string.Join(", ", roles.Keys.Order(StringComparer.OrdinalIgnoreCase)))}). "
-            + $"Decláralo en LlmConfiguration:Roles o construye los roles con LlmRoleFactory.BuildRoles, que crea los que faltan "
-            + $"con el proveedor por defecto.");
+            + $"Decláralo en {Hosting.LlmRoleFactory.SectionName}:Roles.");
     }
 
-    /// <summary>El paralelo tolerante con un auditor por informe, cada uno con su límite.</summary>
-    private static TolerantReportsParallelStep CreateReportsStep(
+    /// <summary>Rol LLM que nombra los subsistemas (el del informe funcional: no obliga a configurar un rol nuevo).</summary>
+    public const string DomainNamingRoleName = "FunctionalAuditor";
+
+    /// <summary>
+    /// Los cuatro pasos de la preparación por subsistema, en su orden: inventario, descubrimiento de dominios, plan de cobertura y
+    /// presupuesto de tiempo. Vacío con <c>Mode = Off</c>. El presupuesto recibe el <paramref name="registry"/> con los pasos de los
+    /// informes, por constructor y sin estáticos.
+    /// </summary>
+    private static IReadOnlyList<IStep> CreatePreparationSteps(
+        ITemplateProvider templateProvider,
+        Dictionary<string, LlmRole> roles,
+        AuditorStepRegistry registry,
+        PreparationOptions preparation,
+        bool reuseSavedDomainMap)
+    {
+        if (preparation.Mode == PreparationMode.Off)
+            return [];
+
+        var namingStep = DomainDiscoveryStep.CreateNamingStep(templateProvider, ResolveRole(roles, DomainNamingRoleName));
+        return
+        [
+            new RepositoryInventoryStep(),
+            new DomainDiscoveryStep(namingStep, reuseSavedMap: reuseSavedDomainMap),
+            new CoveragePlanningStep(templateProvider, registry),
+            new TimeBudgetStep(registry, CallLimit(roles.Where(r => AuditorRoleNames.Contains(r.Key, StringComparer.OrdinalIgnoreCase)).Select(r => r.Value)))
+        ];
+    }
+
+    /// <summary>Roles de los informes (los que llaman al LLM dentro del paralelo de informes y sus investigaciones).</summary>
+    private static readonly string[] AuditorRoleNames =
+    [
+        "FunctionalAuditor", "CodeSmellsAuditor", "DeadCodeAuditor", "FlowsAuditor", "SecurityBugAuditor",
+        "ArchitectureAuditor", "ApiSecurityAuditor", "TechnicalDebtAuditor", "DiAuditor"
+    ];
+
+    /// <summary>
+    /// Límite de llamadas LLM simultáneas con que se presupuesta el tiempo: el menor de los efectivos de los roles
+    /// (<c>MaxConcurrentRequests</c> del rol, si no del proveedor, si no el del servicio). Null si ninguno tiene límite (0 = sin límite).
+    /// </summary>
+    internal static int? CallLimit(IEnumerable<LlmRole> roles)
+    {
+        var limits = roles
+            .Select(r => r.Inference?.GetOption<int?>(OpenAILlmService.MaxConcurrentRequestsKey)
+                ?? r.Provider.Inference?.GetOption<int?>(OpenAILlmService.MaxConcurrentRequestsKey)
+                ?? OpenAILlmService.DefaultMaxConcurrentRequests)
+            .Where(limit => limit > 0)
+            .ToList();
+        return limits.Count == 0 ? null : limits.Min();
+    }
+
+    /// <summary>
+    /// El paralelo tolerante con un paso por informe, cada uno con su límite, y el <see cref="AuditorStepRegistry"/> de este pipeline
+    /// con todos ellos (y el propio paralelo) para que <see cref="TimeBudgetStep"/> les escriba el <c>Timeout</c>. Con
+    /// <c>Mode = Subsystems</c>, los informes en modo B (<see cref="CoveragePlanner.ModeBReports"/>) son un
+    /// <see cref="SubsystemInvestigationReportStep"/> que investiga por subsistema y consolida con el auditor de siempre; los demás, y
+    /// todos con <c>Off</c>, son el auditor.
+    /// </summary>
+    private static (TolerantReportsParallelStep Step, AuditorStepRegistry Registry) CreateReportsStep(
         ITemplateProvider templateProvider,
         Dictionary<string, LlmRole> roles,
         AnalysisPipelineInput input,
         IEnumerable<ReportType> reports,
-        AnalysisTimeouts timeouts)
+        AnalysisTimeouts timeouts,
+        PreparationOptions preparation,
+        NoteProtocolOptions noteProtocol)
     {
+        var registry = new AuditorStepRegistry();
         var parallelStepsList = new List<IStep>();
         foreach (var reportType in reports)
         {
             var roleName = AnalysisPipelineInput.GetRoleName(reportType);
             var templatePrefix = AnalysisPipelineInput.GetTemplatePrefix(reportType);
+            var role = ResolveRole(roles, roleName);
+            var maxToolIterations = input.GetAuditorMaxToolIterations(roleName);
 
-            parallelStepsList.Add(CreateReportStep(
-                templateProvider: templateProvider,
-                role: ResolveRole(roles, roleName),
-                templatePrefix: templatePrefix,
-                type: reportType,
-                maxToolIterations: input.GetAuditorMaxToolIterations(roleName),
-                timeout: timeouts.Auditor));
+            var auditor = CreateReportStep(templateProvider, role, templatePrefix, reportType, maxToolIterations, timeouts.Auditor, noteProtocol.Auditors, noteProtocol);
+            IStep step = auditor;
+            if (preparation.Mode == PreparationMode.Subsystems && CoveragePlanner.ModeBReports.Contains(reportType))
+            {
+                // La consolidación lleva su propio tope, más corto; el auditor completo queda para cuando no haya nada que investigar.
+                var consolidation = CreateReportStep(
+                    templateProvider, role, templatePrefix, reportType,
+                    ConsolidationMaxToolIterations(maxToolIterations, preparation.ConsolidationMaxToolIterations), timeouts.Auditor, noteProtocol.Auditors, noteProtocol);
+                step = CreateInvestigationReportStep(
+                    templateProvider, role, templatePrefix, reportType, maxToolIterations, timeouts.Auditor, preparation, consolidation, auditor,
+                    noteProtocol.Investigations, noteProtocol);
+            }
+
+            registry.Register(reportType, step);
+            parallelStepsList.Add(step);
         }
 
-        return new TolerantReportsParallelStep(ParallelReportsStepName, parallelStepsList.ToArray())
+        var parallel = new TolerantReportsParallelStep(ParallelReportsStepName, parallelStepsList.ToArray())
         {
             Timeout = timeouts.Reports,
             // CodebaseAnalysis:Reports:MaxParallelAuditors; 0 = sin tope propio (uno por procesador, lo de siempre).
             MaxDegreeOfParallelism = input.MaxParallelAuditors
         };
+        registry.RegisterReportsParallel(parallel);
+        return (parallel, registry);
     }
+
+    /// <summary>
+    /// El envoltorio de un informe en modo B. Hasta que <see cref="TimeBudgetStep"/> le escribe el límite calculado (o si no llega a
+    /// calcularse), cubre lo que cubrirían sus tandas de investigaciones y la consolidación con el límite de un auditor cada una, no
+    /// el de un auditor solo: con un informe de varios subsistemas ese límite lo cortaría a medias.
+    /// </summary>
+    private static SubsystemInvestigationReportStep CreateInvestigationReportStep(
+        ITemplateProvider templateProvider,
+        LlmRole role,
+        string templatePrefix,
+        ReportType type,
+        int maxToolIterations,
+        TimeSpan auditorTimeout,
+        PreparationOptions preparation,
+        CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult> consolidation,
+        CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult> degradedAuditor,
+        bool investigationNoteProtocol,
+        NoteProtocolOptions noteOptions)
+    {
+        var parallel = Math.Max(preparation.MaxParallelInvestigations, 1);
+        var waves = (preparation.MaxSubsystemsPerReport + parallel - 1) / parallel;
+        return new SubsystemInvestigationReportStep(
+            type,
+            consolidation,
+            subsystemId => SubsystemInvestigationReportStep.CreateInvestigationStep(
+                templateProvider, role, templatePrefix, type, subsystemId, maxToolIterations, auditorTimeout, investigationNoteProtocol, noteOptions),
+            auditorTimeout,
+            preparation,
+            degradedAuditor)
+        {
+            Timeout = auditorTimeout == Timeout.InfiniteTimeSpan ? Timeout.InfiniteTimeSpan : auditorTimeout * (waves + 1)
+        };
+    }
+
+    /// <summary>
+    /// Tope de consultas a herramientas de la consolidación de un informe en modo B: el configurado
+    /// (<c>CodebaseAnalysis:Preparation:ConsolidationMaxToolIterations</c>), sin pasar nunca del tope del auditor del informe, y el del auditor
+    /// si el configurado es 0 («sin acotar»).
+    /// </summary>
+    internal static int ConsolidationMaxToolIterations(int auditorMaxToolIterations, int configured) =>
+        configured <= 0 ? auditorMaxToolIterations : Math.Min(configured, auditorMaxToolIterations);
 
     private static ExecutiveSynthesizerStep CreateSynthesisStep(
         ITemplateProvider templateProvider,
@@ -253,13 +532,15 @@ public static class AnalysisPipelineFactory
         "view_file", "view_code_item", "grep_search", "graph_search", Tools.GraphNeighborsTool.ToolName, "graph_domain", Tools.ReadDocumentTool.ToolName
     ];
 
-    private static IStep CreateReportStep(
+    private static CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult> CreateReportStep(
         ITemplateProvider templateProvider,
         LlmRole role,
         string templatePrefix,
         ReportType type,
         int maxToolIterations,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        bool noteProtocol,
+        NoteProtocolOptions noteOptions)
     {
         return new CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult>(
             name: AuditorStepName(type),
@@ -274,7 +555,10 @@ public static class AnalysisPipelineFactory
         {
             Timeout = timeout,
             MaxToolIterations = maxToolIterations,
-            ToolLimitFinalAnswerPrompt = AuditorToolLimitPrompt
+            ToolLimitFinalAnswerPrompt = AuditorToolLimitPrompt,
+            // CodebaseAnalysis:NoteProtocol:Auditors: cada resultado de herramienta se sustituye por la nota del modelo.
+            TagHandlers = noteProtocol ? [NoteTagHandler.Instance] : [],
+            NoteOptions = noteOptions
         };
     }
 }

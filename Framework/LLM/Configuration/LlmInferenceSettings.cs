@@ -15,13 +15,31 @@ public record LlmInferenceSettings
 
     protected LlmInferenceSettings(LlmInferenceSettings other)
     {
-        Options = (JObject)other.Options.DeepClone();
+        _options = (JObject)other._options.DeepClone();
     }
+
+    private readonly JObject _options = [];
 
     /// <summary>
     /// Raw provider-specific options. This is the single source of truth.
     /// </summary>
-    public JObject Options { get; init; } = [];
+    /// <remarks>
+    /// Assigning it merges the given keys into the current ones (a given key wins, arrays are replaced) instead of
+    /// replacing the object: the facade properties below live here too, so a replacement would wipe whichever of them
+    /// were set before it - in an object initializer, or when a configuration binder happens to hand over
+    /// <c>MaxTokens</c> before <c>Options</c>.
+    /// </remarks>
+    public JObject Options
+    {
+        get => _options;
+        init
+        {
+            if (value != null)
+            {
+                _options.Merge(value, new JsonMergeSettings { MergeArrayHandling = MergeArrayHandling.Replace });
+            }
+        }
+    }
 
     // --- Framework Standard Properties (Facades to ProviderOptions) ---
 

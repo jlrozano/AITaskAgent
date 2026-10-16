@@ -87,13 +87,20 @@ public static class ChatEventMapper
                     new Dictionary<string, object?> { ["name"] = ts.ToolName })];
 
             case ToolCompletedEvent tc:
-                return [new ChatStreamEvent(ChatStreamEventTypes.ToolCompleted, new Dictionary<string, object?>
+            {
+                var fields = new Dictionary<string, object?>
                 {
                     ["name"] = tc.ToolName,
                     ["success"] = tc.Success,
                     ["durationMs"] = (long)Math.Round(tc.Duration.TotalMilliseconds),
                     ["error"] = tc.ErrorMessage
-                })];
+                };
+                // La salida, truncada, para el detalle de la llamada en vivo; los argumentos ya llegaron enteros en tool.calls.
+                ToolEventPayload.AddTo(fields, tc.AdditionalData, includeOutput: true);
+                fields.Remove("arguments");
+                fields.Remove("argumentsTruncated");
+                return [new ChatStreamEvent(ChatStreamEventTypes.ToolCompleted, fields)];
+            }
 
             case StepProgressEvent { EventType: AnalysisEventTypes.ChatReportChanged } sp when sp.Metadata != null:
                 return [new ChatStreamEvent(ChatStreamEventTypes.ReportChanged, new Dictionary<string, object?>(sp.Metadata))];

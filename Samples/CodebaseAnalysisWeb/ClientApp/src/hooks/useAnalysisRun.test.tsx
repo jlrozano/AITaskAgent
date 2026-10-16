@@ -11,6 +11,8 @@ import {
   sse,
   sseResponse,
   streamOf,
+  successfulRun,
+  verificationAfter,
 } from '../test/fixtures';
 import { useAnalysisRun } from './useAnalysisRun';
 
@@ -160,5 +162,111 @@ describe('useAnalysisRun: regenerar informes (R3)', () => {
     expect(result.current.state.status).toBe('cancelled');
     expect(result.current.state.lastSeq).toBe(lastSeq);
     expect(api.calls.filter((c) => c.url.startsWith(`/api/analysis/${RUN_ID}/events`))).toHaveLength(1);
+  });
+});
+
+describe('useAnalysisRun: verificar un informe y deshacer la verificación', () => {
+  const lastSeq = successfulRun.length;
+  const succeededStatus: RunStatusDto = {
+    ...runningStatus,
+    status: 'succeeded',
+    finishedAt: '2026-09-27T10:16:00Z',
+    lastSeq,
+  };
+  const verification = verificationAfter(successfulRun, ['CodeSmells']);
+
+  /** Servidor falso: el SSE sirve los eventos con seq > after; los de la verificación, solo tras el POST. */
+  function server(verify: () => Response, extra: Record<string, (call: { url: string }) => Response> = {}) {
+    let verified = false;
+    return mockFetch({
+      'GET /api/analysis/current': () => jsonResponse(succeededStatus),
+      [`GET /api/analysis/${RUN_ID}/events`]: (call) => {
+        const after = Number(new URL(call.url, 'http://localhost').searchParams.get('after') ?? 0);
+        const events = (verified ? [...successfulRun, ...verification] : successfulRun).filter((e) => e.seq > after);
+        return sseResponse(streamOf(events.map((e) => sse('analysis', e, e.seq))));
+      },
+      [`POST /api/analysis/${RUN_ID}/verify`]: () => {
+        const response = verify();
+        verified = response.ok;
+        return response;
+      },
+      ...extra,
+    });
+  }
+
+  it('sigue la misma ejecución desde el último seq, sin reset: el carril queda corregido y el resto se conserva', async () => {
+    const api = server(() => jsonResponse({ ...succeededStatus, status: 'running', finishedAt: null }, 202));
+    vi.stubGlobal('fetch', vi.fn(api.fn));
+    const onFinished = vi.fn();
+    const { result } = renderHook(() => useAnalysisRun(onFinished));
+    await waitFor(() => expect(result.current.state.lastSeq).toBe(lastSeq));
+
+    await act(() => result.current.verify(['CodeSmells'], false));
+    await waitFor(() => expect(result.current.state.lastSeq).toBe(lastSeq + verification.length));
+
+    const post = api.calls.find((c) => c.method === 'POST')!;
+    expect(post.url).toBe(`/api/analysis/${RUN_ID}/verify`);
+    expect(post.body).toEqual({ reports: ['CodeSmells'], synthesis: false });
+    expect(api.calls.filter((c) => c.url.startsWith(`/api/analysis/${RUN_ID}/events`)).map((c) => c.url)).toEqual([
+      `/api/analysis/${RUN_ID}/events?after=0`,
+      `/api/analysis/${RUN_ID}/events?after=${lastSeq}`,
+    ]);
+
+    const state = result.current.state;
+    expect(state.log).toHaveLength(lastSeq + verification.length);
+    expect(state.auditors.CodeSmells.verification).toMatchObject({ status: 'corrected', changes: 2, previousVersionId: 'v0001' });
+    expect(state.auditors.InyeccionDependenciasExtensiones.verification.status).toBe('idle');
+    expect(state.auditors.CodeSmells.status).toBe('succeeded');
+    expect(result.current.verifying).toBeNull();
+    expect(result.current.verifyError).toBeNull();
+    expect(onFinished).toHaveBeenCalledTimes(2);
+  });
+
+  it('un rechazo del servidor queda en verifyError, con los informes pedidos, y no toca el estado', async () => {
+    const api = server(() => jsonResponse({ error: 'analysis_running', message: 'Hay un análisis en curso.' }, 409));
+    vi.stubGlobal('fetch', vi.fn(api.fn));
+    const { result } = renderHook(() => useAnalysisRun());
+    await waitFor(() => expect(result.current.state.lastSeq).toBe(lastSeq));
+
+    await act(() => result.current.verify(['CodeSmells'], true));
+
+    expect(result.current.verifyError).toEqual({ reports: ['CodeSmells'], code: 'analysis_running', message: expect.stringMatching(/análisis/) });
+    expect(result.current.verifying).toBeNull();
+    expect(result.current.state.status).toBe('succeeded');
+    expect(result.current.state.lastSeq).toBe(lastSeq);
+  });
+
+  it('deshacer restaura la versión anterior a la verificación y devuelve el carril a «sin verificar»', async () => {
+    const api = server(() => jsonResponse({ ...succeededStatus, status: 'running', finishedAt: null }, 202), {
+      'POST /api/reports/02_code_smells.md/versions/v0001/restore': () =>
+        jsonResponse({ fileName: '02_code_smells.md', reportType: 'CodeSmells', title: 'Code smells', health: 'Green' }),
+    });
+    vi.stubGlobal('fetch', vi.fn(api.fn));
+    const { result } = renderHook(() => useAnalysisRun());
+    await waitFor(() => expect(result.current.state.lastSeq).toBe(lastSeq));
+    await act(() => result.current.verify(['CodeSmells'], false));
+    await waitFor(() => expect(result.current.state.auditors.CodeSmells.verification.status).toBe('corrected'));
+
+    await act(() => result.current.undoVerification('CodeSmells'));
+
+    expect(api.calls.some((c) => c.method === 'POST' && c.url === '/api/reports/02_code_smells.md/versions/v0001/restore')).toBe(true);
+    expect(result.current.state.auditors.CodeSmells.verification.status).toBe('idle');
+    expect(result.current.verifyError).toBeNull();
+  });
+
+  it('si deshacer falla, el error queda en el carril y la verificación se conserva', async () => {
+    const api = server(() => jsonResponse({ ...succeededStatus, status: 'running', finishedAt: null }, 202), {
+      'POST /api/reports/02_code_smells.md/versions/v0001/restore': () => jsonResponse({ error: 'analysis_running', message: 'x' }, 409),
+    });
+    vi.stubGlobal('fetch', vi.fn(api.fn));
+    const { result } = renderHook(() => useAnalysisRun());
+    await waitFor(() => expect(result.current.state.lastSeq).toBe(lastSeq));
+    await act(() => result.current.verify(['CodeSmells'], false));
+    await waitFor(() => expect(result.current.state.auditors.CodeSmells.verification.status).toBe('corrected'));
+
+    await act(() => result.current.undoVerification('CodeSmells'));
+
+    expect(result.current.verifyError).toMatchObject({ reports: ['CodeSmells'], code: 'analysis_running' });
+    expect(result.current.state.auditors.CodeSmells.verification.status).toBe('corrected');
   });
 });

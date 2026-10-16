@@ -4,15 +4,18 @@ Estado del código a 2026-09-29, rama `consolidation`, con las correcciones de l
 analizador Java (`docs/plans/2026-09-29-referencias-tipos-campos-plan.md`). La fuente de verdad es el código; los documentos de
 diseño se citan para las cifras medidas y las decisiones. `CORE` abrevia `Samples/CodebaseAnalysis.Core`, `WEB`
 abrevia `Samples/CodebaseAnalysisWeb` y las rutas sin prefijo son relativas a la raíz del repositorio. Lo que no se ha
-podido verificar en el código se dice en su sitio.
+podido verificar en el código se dice en su sitio. La preparación por subsistema (apartado 1.6.1) refleja el código a
+2026-10-04; lo medido en este documento es anterior a ella y describe el pipeline con `Mode = Off`.
 
 ## Resumen
 
-La app analiza un repositorio en seis pasos del framework agrupados en cinco fases (`CORE/AnalysisPipelineFactory.cs:113-123`).
+La app analiza un repositorio en seis pasos del framework agrupados en cinco fases (`CORE/AnalysisPipelineFactory.cs:113-123`);
+con la preparación por subsistema, activa por defecto, son diez, porque cuatro pasos deterministas (inventario, mapa de
+dominios, plan de cobertura y presupuesto de tiempo) se suman a la fase de facetas (apartado 1.6.1).
 `codebase-memory-mcp` (cbm) indexa el repositorio en su caché y el pipeline copia esa BD a `.codebase/codebase.db`, que
 es la única que se escribe a partir de ahí. Sobre la copia escriben la ingesta de Office y de Markdown, la
 reincorporación de documentos del usuario, el analizador Java nativo (`javac` en un proceso aparte), el plugin
-Struts/JSP y, si no hay enriquecedor nativo, BdpGraphEnricher o un fallback LLM. Un paso SQL determinista calcula una
+Struts/JSP y, si no hay enriquecedor nativo, DotNetEnricher (Roslyn, en un proceso aparte) o un fallback LLM. Un paso SQL determinista calcula una
 vez unas cuarenta facetas en memoria, y nueve auditores LLM las reciben en paralelo, cada uno con su par de plantillas y
 seis tools de solo lectura sobre el grafo, el código y los documentos. Cada auditor escribe su informe en `reports/` al
 terminar, y una síntesis sin tools escribe `00_resumen_ejecutivo.md` a partir de los semáforos, los resúmenes y los
@@ -46,8 +49,12 @@ medición se dice.
 | `DetectAndIndexGraphStep` | `AnalysisPipelineInput` | repositorio entero (cbm), `~/.cache/codebase-memory-mcp/<proyecto>.db` | `.codebase/codebase.db`, `backups/` con `ForceReindex` | cbm, 59-67 s en indexación completa y el paso entero 24,5 s sin reindexar (prueba M, apartado 1.14); el plan daba 157 s (`docs/plans/2026-09-28-enriquecimiento-nativo-java-plan.md:62`) | excepción que corta el pipeline (`:54-60`, `:86-91`, `:310-326`) |
 | Ingesta Office, Markdown y conocimiento | dentro del paso anterior | `.accdb`/`.mdb`/`.docx`, `*.md`, `.codebase/knowledge/graph-sources.json` | nodos y aristas en la copia | sin medir | Office y Markdown avisan por fichero; el resto propaga |
 | `LanguageEnricherStep` | `GraphStatusResult` | disco (`RepositoryScan`), JDK, jars | copia del grafo, `enrichment_runs`, `.codebase/enrichment/java/` | con las referencias de tipos y campos, mediana de 166,6 s frente a 119,4 s sin ellas en la misma sesión (1,39 veces, apartado 1.14); 181,7 s con el plugin en la prueba M, con 1364 ficheros más de los que tenía cbm; en el diseño, unos 109 s y `javac` solo 66 s (`docs/plans/2026-09-28-enriquecimiento-nativo-java-design.md:47`) | aviso y fila `skipped`/`failed`; sigue con el grafo de cbm |
-| `BdpEnricherStep` | `GraphStatusResult` | solución .NET o 15 ficheros clave (LLM) | copia del grafo, `enrichment_runs` (solo el fallback) | sin medir | CLI con código ≠ 0 o `Required` → corta; fallback → aviso |
+| `DotNetEnricherStep` | `GraphStatusResult` | solución .NET o 15 ficheros clave (LLM) | copia del grafo, `enrichment_runs` | sin medir en un repositorio grande; unos 7 s el CLI sobre csharp-simple | CLI ausente, código ≠ 0/2 o tiempo agotado → aviso, fila `failed` y fallback; con `Required` → corta |
 | `SqlFacetExtractorStep` | `GraphStatusResult` | copia del grafo, ficheros para fragmentos y secretos, documentos | `ReportFacetInput` en memoria y en el contexto | 45,9 s sobre el grafo con referencias (46,7 s en una copia sin el índice por label, apartado 1.6); 51,5 s en la prueba M | cada consulta fallida llega como nota «no es un conjunto vacío» |
+| `RepositoryInventoryStep` | `ReportFacetInput` | disco, copia del grafo, `enrichment_runs` | `reports/_repository_inventory.json` | sin medir | aviso; el input sale intacto (solo `Mode = Subsystems`) |
+| `DomainDiscoveryStep` | `ReportFacetInput` | inventario, copia del grafo, LLM (solo nombra) | `reports/_domain_map.json` | sin medir | aviso; sin LLM, nombres derivados del código |
+| `CoveragePlanningStep` | `ReportFacetInput` | mapa de dominios, plantillas de preguntas | `reports/_coverage_plan.json` | sin medir | aviso; plan vacío y los informes en modo B degradan a auditor normal |
+| `TimeBudgetStep` | `ReportFacetInput` | plan, inventario, mapa, `AuditorStepRegistry` | `Timeout` de cada informe y `reports/_time_budget.json` | sin medir | aviso; los pasos conservan el límite de la configuración |
 | `ParallelReportsExecution` | `ReportFacetInput` | LLM, grafo, código, documentos | `reports/01…09_*.md` | sin medir para Java: en la prueba M Azure respondió `404 DeploymentNotFound` | una rama fallida no para la síntesis salvo que fallen todas |
 | `ExecutiveSynthesizerStep` | `ParallelResult` | LLM, informes en disco | `reports/00_resumen_ejecutivo.md` | sin medir | respuesta vacía → resumen de respaldo sin LLM |
 
@@ -71,7 +78,7 @@ recorre también la salida del propio pipeline (`:343-386`). `GraphSchema.Ensure
 no tiene código ni hay artefactos Office, el paso lanza y el pipeline se para (`DetectAndIndexGraphStep.cs:86-91`). `CheckIfEnrichedAsync` decide
 si el código ya está enriquecido (nodos `CsProject` o propiedades `afferent_coupling`, `cyclomatic` o `in_cycle`), sin
 contar los nodos de Office, los del fallback LLM ni los marcados por el analizador Java (`DetectAndIndexGraphStep.cs:446-469`); esa marca solo la
-usa `BdpEnricherStep`.
+usa `DotNetEnricherStep`, y solo cuando `enrichment_runs` no tiene ninguna pasada suya.
 
 **Límite MAX_PATH.** cbm no indexa los ficheros cuya ruta absoluta llega a 260 caracteres, el MAX_PATH de Windows: no
 deja ningún nodo en ese `file_path` y el paso no lo avisa. En la prueba M, con la copia del repositorio en una carpeta
@@ -99,8 +106,8 @@ Las tres escriben dentro de `DetectAndIndexGraphStep` y con el mismo `project` q
   (`CORE/Knowledge/Graph/KnowledgeGraphIngestor.cs:13-29`). Si el run no llega a la síntesis, los informes retirados
   vuelven en el `finally` de `CodebaseAnalysisPipeline` (`CORE/AnalysisPipelineFactory.cs:335-368`).
 
-Nadie en el repositorio escribe nodos `WorkflowStep`, así que `WorkflowStepsCatalog` llega siempre vacía; lo que
-escribe BdpGraphEnricher, que es externo, no se ha podido comprobar.
+Nadie en el repositorio escribe nodos `WorkflowStep`, así que `WorkflowStepsCatalog` llega siempre vacía; tampoco
+los escribe DotNetEnricher (`Samples/DotNetEnricher`).
 
 ## 1.4 `LanguageEnricherStep`: analizador Java y plugin Struts/JSP
 
@@ -109,7 +116,7 @@ El paso recorre el disco una vez (`RepositoryScan`), sin `.git`, `bin`, `obj`, `
 `DetectedLanguages` en el contexto (`CORE/Steps/LanguageEnricherStep.cs:75-78`). La presencia de `.java` activa el
 analizador Java y la de algún `struts-config*.xml` el plugin, por ese orden (`:80-98`). Su límite es
 `JavaAnalyzer:StepTimeoutSeconds` (3600 s) y no `CodebaseAnalysis:Timeouts:EnrichMinutes`, que es el de
-`BdpEnricherStep` (`CORE/Enrichment/JavaAnalyzerOptions.cs:41-57`).
+`DotNetEnricherStep` (`CORE/Enrichment/JavaAnalyzerOptions.cs:41-57`).
 
 ### Analizador Java
 
@@ -211,12 +218,17 @@ repite el plugin (`LanguageEnricherStep.cs:370-373`). Una reindexación de cbm c
 todo. La versión del analizador es una constante manual, ahora la 2 (`JavaGraphWriter.cs:240`): editar
 `JavaAnalyzer.java` sin subirla hace que la pasada se omita.
 
-## 1.5 `BdpEnricherStep` y el fallback LLM
+## 1.5 `DotNetEnricherStep` y el fallback LLM
 
 Si `LanguageEnricherStep` encontró Java y no C#, el paso lo dice y devuelve la entrada sin CLI ni LLM
-(`CORE/Steps/BdpEnricherStep.cs:40-50`). En otro caso, deshabilitado va al fallback (`:54-63`), con el grafo ya
-enriquecido no hace nada (`:65-69`), sin CLI o sin `.sln`/`.slnx` va al fallback salvo `BdpEnricher:Required`
-(`:71-103`), y con ambos ejecuta `BdpGraphEnricher.CLI enrich`. El fallback, `SemanticEnrichmentStep`, envía al rol
+(`CORE/Steps/DotNetEnricherStep.cs:54-65`). En otro caso, deshabilitado va al fallback (`:69-73`); con una pasada `ok`
+de `DotNetEnricher` en `enrichment_runs` sobre la misma indexación y configuración no hace nada (`:89-95`), y tampoco
+con el grafo ya enriquecido y sin ninguna pasada registrada (`:96-100`); sin `.sln`/`.slnx` va al fallback (`:102-107`).
+Si no, lanza como proceso el CLI del repositorio (`Samples/DotNetEnricher`, que el build deja en `dotnet-enricher/`
+junto a la app; `:200-222`) con la raíz del repositorio y sin proyecto, que resuelve el propio CLI por mayoría en
+`nodes`. El CLI escribe en una sola transacción y registra su pasada; si no está, sale con un código distinto de 0 y 2
+o supera `DotNetEnricher:TimeoutSeconds`, el paso lo mata, avisa, deja una fila `failed` y pasa al fallback, salvo
+`DotNetEnricher:Required` (`:145-190`). El fallback, `SemanticEnrichmentStep`, envía al rol
 `Enricher` hasta 15 ficheros de rutas, controladores o DI y vuelca el JSON que devuelve; el código impone las marcas
 (`origin: ai_enricher`, `enriched_by: SemanticEnricherAgent`) y solo deja pasar propiedades semánticas de una lista
 blanca, nunca métricas (`CORE/Steps/SemanticEnrichmentStep.cs:36-47`). Sin ficheros de entrada no llama al modelo
@@ -287,15 +299,81 @@ ciclos, comunidades, cobertura documental, obsoletos y puntos de extensión), ca
 `json_extract`, que son la siguiente candidata, y las de aristas por tipo, porque un índice más en `edges` encarecería
 la escritura del analizador Java.
 
+## 1.6.1 Preparación por subsistema y modos A y B
+
+Los informes de dominio recibían un universo grande de candidatos y un único contexto con un tope de iteraciones de tools: en
+un repositorio grande recorrían pocas partes funcionales y resumían una muestra local bien citada como si fuera el
+conjunto (la hipótesis de trabajo de `docs/plans/2026-10-04-preparacion-informes-por-subsistema-design.md`, sin
+contrastar todavía con una medición real). Con `CodebaseAnalysis:Preparation:Mode = Subsystems` (el valor por defecto; el
+otro es `Off`, que deja el pipeline como en los apartados anteriores, sin pasos nuevos ni artefactos) cuatro pasos
+`IStep<ReportFacetInput, ReportFacetInput>` van tras `SqlFacetExtractorStep` y antes de los informes, en la fase `facets`
+(`CORE/AnalysisPipelineFactory.cs`, `CreatePreparationSteps`). Cada uno devuelve el mismo input con campos de texto
+rellenos, escribe su artefacto en `reports/`, nunca falla duro (un problema interno es un aviso y los siguientes
+trabajan sin ese dato; solo se propaga la cancelación) y tiene un límite fijo: 10, 20, 5 y 5 minutos.
+
+| Paso | LLM | Escribe | Qué hace |
+|---|---|---|---|
+| `RepositoryInventoryStep` | no | `_repository_inventory.json` | módulos por fichero de build, ficheros y líneas por *source set* (`production`, `test`, `qa`, `debug`, `generated`, `samples`, `unknown`), puntos de entrada, tablas, ficheros de configuración, estado por lenguaje, cobertura del grafo (ficheros en disco frente a ficheros con nodos, con la deriva de cbm que mide el analizador Java) y líneas de producción contadas en disco |
+| `DomainDiscoveryStep` | solo nombra | `_domain_map.json` | subsistemas por estructura (carpetas, paquetes, Struts), comunidades que calcula él mismo sobre el grafo agregado a nivel de tipo y fusión por vocabulario de los nombres (sin los `StopTokens`); cada fichero de producción en un subsistema o en `unassigned` |
+| `CoveragePlanningStep` | no | `_coverage_plan.json` | puntúa los subsistemas con `Preparation:Weights` por el perfil de cada informe (`Preparation:ReportProfiles`: cada informe elige sus K), excluye test, qa y generado y elige K por informe en modo B más una cola larga, con los excluidos y su motivo, las preguntas de la investigación y la evidencia mínima |
+| `TimeBudgetStep` | no | `_time_budget.json` | calcula el tiempo de cada informe con `CodebaseAnalysis:TimeBudget` y lo escribe en su `Timeout` |
+
+El LLM que nombra los subsistemas (sub-step `DomainNaming`, rol `FunctionalAuditor`, sin tools) recibe un resumen de cada
+uno y devuelve nombre, descripción y prioridad; su salida se valida en código: no puede descartar ni inventar
+subsistemas, y lo que no responda de forma coherente conserva un nombre derivado del código (`name_origin`: `llm` o
+`derived`). Se decidió que el mapa sea determinista y el LLM solo nombre porque un LLM que descubra los dominios desde
+cero reintroduce la variabilidad que se quiere medir; el coste es que un repositorio sin referencias resueltas en el
+grafo da un mapa por estructura (`basis` `structure_only`). Las comunidades las calcula el paso y no se leen de cbm, y el
+vocabulario sirve para reunir una capacidad repartida entre ramas distantes del árbol de paquetes, que agrupar solo por
+paquete partiría en fragmentos. El presupuesto no es una constante: el tiempo de una investigación es
+`clamp(base + k · miles de líneas del subsistema)`, el de la consolidación de un informe en modo B
+`clamp(base + k · subsistemas elegidos)` y el de un auditor en modo A `clamp(base + k · miles de líneas de producción)`,
+con los coeficientes por defecto de `CORE/appsettings.analysis.json` (`TimeBudget`), que son **provisionales**. `TimeBudgetStep`
+escribe `Timeout` directamente en los pasos que la factoría registra en un `AuditorStepRegistry` por pipeline, sin
+estáticos. Si la suma dividida por la concurrencia efectiva supera `PipelineMinutes`, recorta subsistemas de los
+informes en modo B (primero los de menor puntuación) y avisa; si el límite de `ReportsMinutes` del conjunto no cabe en lo
+presupuestado, lo sube con un aviso y nunca lo baja.
+
+**Modo B** (`CoveragePlanner.ModeBReports`): `AnalisisFuncional`, `FlujosEndToEnd`, `ErroresYBugs` y
+`ArquitecturaAcoplamiento`. Por fuera es el mismo paso `Auditor_<tipo>` con el mismo contrato (un `.md`, el mismo
+nombre y su `analysis-meta`); por dentro es un `SubsystemInvestigationReportStep`, que sigue el patrón de
+`VerifyReportStep` (invoca sus sub-steps con `ExecuteStepAsync` y un token propio, sin middleware). Por cada subsistema
+elegido lanza una investigación `Investigation_<tipo>_<id>` con el mismo prompt de sistema y las mismas tools que el
+auditor y su plantilla `report_<informe>_investigacion_prompt.md`, hasta `MaxParallelInvestigations` a la vez, y cada una
+devuelve **texto plano con citas** sin tocar el disco. Después consolida con el paso de auditor de siempre, que sigue siendo
+el único punto de escritura del informe (nombre de fichero, `analysis-meta`, procedencia, `report.written`), con dos
+propiedades nuevas de `ReportFacetInput` en su prompt, `investigation_notes` y `coverage_summary`, y el informe acaba con un
+apartado `## Cobertura` (cubiertos, excluidos con su motivo y no cubiertos). Una investigación que falla o supera su tiempo
+es un aviso y deja ese subsistema «no cubierto»; si fallan todas, falla el informe con el error del paso. Sin subsistemas
+elegidos el informe se escribe como un auditor normal. **Modo A**: los otros cinco informes (02, 03, 07, 08 y 09) siguen
+siendo un único auditor, que recibe `repository_inventory`, `domain_map` y `coverage_plan` en el prompt y un protocolo de
+cobertura por subsistemas con el mismo apartado «Cobertura», solo si el plan trae subsistemas elegidos. El motor de plantillas
+no tiene condicionales (solo interpola `{{ x }}` e incluye ficheros), así que las plantillas están redactadas para que un
+bloque vacío no estorbe.
+
+Los artefactos empiezan por `_`: no son informes del catálogo, y por eso ni se listan, ni se sirven por la API de la web, ni se
+copian a `backups/`. Se serializan en `snake_case` con `schema_version`, `generated_at` y `graph_fingerprint`, y el mismo grafo
+y el mismo disco dan los mismos bytes salvo la marca de tiempo y lo que nombra el LLM. `ReportValidator` añade la
+comprobación `coverage` (un informe en modo B al que el plan del disco eligió subsistemas lleva el apartado «Cobertura» y
+nombra cada uno; solo avisa) y la síntesis ejecutiva recibe un resumen de cobertura por informe, construido sin LLM con el plan
+y los apartados «Cobertura» de los informes (`CORE/Preparation/SynthesisCoverage.cs`), para no presentar como completo un
+análisis con subsistemas sin cubrir. La regeneración (apartado 1.11) incluye estos pasos: recalcula el inventario, el plan y
+el presupuesto y reutiliza el mapa de `reports/_domain_map.json` si su huella coincide con la del grafo, sin volver a
+nombrar. Lo que este apartado no puede afirmar: que los informes en modo B salgan mejor (no hay medición con un LLM real; los
+tests usan un LLM falso), ni que los coeficientes de tiempo, el umbral de fusión por vocabulario (`VocabularyMergeThreshold`)
+o el tamaño mínimo de un subsistema (`MinSubsystemFiles`) sean los adecuados: se calibran con una medición sobre un
+repositorio grande que está pendiente.
+
 ## 1.7 Los nueve auditores en paralelo
 
-Cada informe pedido es un `CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult>` con su rol, sus
+Con `Mode = Off`, y con `Mode = Subsystems` para los cinco informes en modo A, cada informe pedido es un `CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult>` con su rol, sus
 plantillas `report_<prefijo>_system.md` y `_prompt.md`, un límite de `AuditorMinutes` (15) y un tope de iteraciones de
 tools de 12, o 16 para `FlowsAuditor` (`CORE/AnalysisPipelineFactory.cs:175-203`, `:245-268`,
 `CORE/appsettings.analysis.json:19-21`). Todos van en `TolerantReportsParallelStep`, con `ReportsMinutes` (60) para el
 conjunto y `CodebaseAnalysis:Reports:MaxParallelAuditors` como tope de concurrencia; con 0, el valor por defecto, corre
 una rama por procesador (`Framework/Core/Steps/ParallelStep.cs:60`). Las siete tools son las mismas para los nueve
-(`CORE/AnalysisPipelineFactory.cs:251-254`):
+(`CORE/AnalysisPipelineFactory.cs:251-254`); con `Mode = Subsystems`, los cuatro informes en modo B (apartado 1.6.1) son un
+envoltorio con el mismo nombre `Auditor_<tipo>` y sus investigaciones usan esas mismas tools:
 
 | Tool | Qué da | Qué no da |
 |---|---|---|
@@ -330,8 +408,36 @@ De cada informe manda al rol `ExecutiveSynthesizer` el semáforo, el recuento `c
 resumen y hasta 30 encabezados `##`/`###` (`:305-362`), junto con las métricas globales de las facetas (`:177-202`). Los
 defectos críticos son los del informe de errores, o «no disponible» si no hay dato (`:217-224`). Si el modelo no
 devuelve texto, escribe un resumen de respaldo sin LLM (`:249-253`). Antes de escribir el `00` le añade la misma
-procedencia que a los informes, con `fallback=true` si el resumen es el de respaldo (`:257-260`). Después reincorpora al
+procedencia que a los informes, con `fallback=true` si el resumen es el de respaldo (`:257-260`). Con la preparación por subsistema, recibe además un resumen de cobertura por informe (apartado 1.6.1). Después reincorpora al
 grafo los informes del catálogo que estaban marcados.
+
+## 1.8.1 Verificación a demanda (`VerifyReportStep`, rol `ReportVerifier`)
+
+Verificar no es una etapa del análisis: es un botón por informe, junto a «Regenerar», que comprueba un informe ya escrito
+contra el código y reescribe lo que el código contradice. `POST /api/analysis/{runId}/verify` (`{ reports[], synthesis }`)
+reutiliza el camino de regenerar: la misma ejecución en memoria vuelve a `running` con el mismo `runId` y el mismo log, emite
+`run.verification_started` y cierra con otro `run.completed`; las exclusiones son las de regenerar (404, 409
+`analysis_running`, `chat_turn_running`, `knowledge_operation_running`, `run_from_other_workspace`). Su pipeline
+(`AnalysisPipelineFactory.CreateVerificationPipeline`) es `PrepareRegenerationStep` (comprueba el grafo y retira del grafo los
+informes, que vuelven en el `finally` del pipeline), un `Verify_<Tipo>` por informe en paralelo bajo `MaxParallelAuditors` y,
+si se pide, la síntesis. No calcula facetas.
+
+Cada `Verify_<Tipo>` hace tres cosas. Prepara: valida el informe con `ReportValidator.CreateContentValidator` y arma **un único
+texto** para `{{ input }}` con cuatro bloques (`<borrador>`, `<fallos_validacion>`, `<recuentos>` con las cifras que el
+borrador afirma, y `<evidencias>` con el código que rodea a cada cita que resuelve); las secuencias `@[` se neutralizan porque
+el motor de plantillas expande `@[ruta]` también en el texto interpolado. Llama al rol `ReportVerifier` (`gpt-6-sol`,
+`reasoning_effort: none`) con `view_file`, `view_code_item`, `grep_search` y `graph_neighbors`, en una conversación nueva y con
+`CodebaseAnalysis:Timeouts:VerifierMinutes` (10) como límite. Cierra: interpreta la respuesta (`SIN CAMBIOS`, o el informe
+completo con el apartado final «Cambios de la verificación»), restaura la línea `analysis-meta` del original, valida el
+resultado y escribe con `ReportWriter.Update`, que guarda el original como `baseline`; «Deshacer verificación» llama al
+`restore` de siempre con el `previousVersionId` de `report.verified`. La línea `analysis-meta` gana
+`verification=ok|corrected(n)|warnings(m)`.
+
+Reglas del cierre: si el verificador falla, no responde a tiempo, se corta por longitud o devuelve algo inservible (sin título,
+sin el apartado, o menos de la mitad del original), el fichero no se toca y el carril lo dice con el motivo. Si declara
+cambios pero el texto no cambia, se toma como sin cambios. El apartado «Cambios de la verificación» queda fuera de la
+validación determinista: nombra a propósito citas erróneas e identificadores de hallazgos ya existentes. Verificar no cambia
+`failedReports` y la síntesis no se rehace sola (casilla opcional; la SPA avisa de que puede quedar desfasada).
 
 ## 1.9 Informes y demás ficheros en disco
 
@@ -339,6 +445,7 @@ grafo los informes del catálogo que estaban marcados.
 |---|---|---|
 | `reports/01…09_*.md` | cada auditor al terminar | informe con la línea `<!-- analysis-meta: health=…; critical=…; generated_at=…; model=…; … -->` al final, con la procedencia del apartado 1.7 |
 | `reports/00_resumen_ejecutivo.md` | síntesis | resumen y dashboard, con la misma línea de procedencia |
+| `reports/_repository_inventory.json`, `_domain_map.json`, `_coverage_plan.json`, `_time_budget.json` | los cuatro pasos de la preparación (solo con `Mode = Subsystems`) | inventario del repositorio, subsistemas y asignación de ficheros, plan de cobertura por informe en modo B y tiempos asignados (apartado 1.6.1); no son informes del catálogo y no se copian a `backups/` |
 | `reports/_run_meta.json` | anfitrión (CLI o web) al terminar | consumo LLM de la ejecución: llamadas, tokens de entrada y salida y coste, en total y por paso (apartado 1.13) |
 | `reports/_validation.json` | anfitrión (CLI o web) al terminar, y `--validate-reports` | validación determinista de los informes: citas, identificadores, hallazgos graves, nombres del grafo, procedencia y Mermaid (apartado 1.15) |
 | `reports/custom/*.md` | chat (`create_report`) | informes propios; el pipeline no los toca ni los lee |
@@ -354,9 +461,11 @@ Todos los límites del análisis están en `CodebaseAnalysis:Timeouts`, en minut
 (`CORE/Hosting/AnalysisTimeouts.cs:25-54`). `PipelineMinutes` (240) lo aplica `CodebaseAnalysisPipeline` con su propio
 token y al motor le llega `Timeout.InfiniteTimeSpan`, de modo que un corte por tiempo termina con un error que nombra la
 clave y no con «A task was canceled.» (`CORE/AnalysisPipelineFactory.cs:308-334`). Los de paso son `DetectMinutes` (15),
-`EnrichMinutes` (20, solo `BdpEnricherStep`), `ReportsMinutes` (60), `AuditorMinutes` (15) y `SynthesisMinutes` (15);
+`EnrichMinutes` (20, solo `DotNetEnricherStep` con su fallback), `ReportsMinutes` (60), `AuditorMinutes` (15) y `SynthesisMinutes` (15);
 el analizador Java usa `JavaAnalyzer:TimeoutSeconds` (900) y `StepTimeoutSeconds` (3600), y las facetas y la
-preparación de una regeneración, 5 minutos fijos. Por debajo, el proveedor OpenAI corta cada intento sin respuesta a los
+preparación de una regeneración, 5 minutos fijos. Con la preparación por subsistema, `AuditorMinutes` y `ReportsMinutes` son el
+punto de partida: `TimeBudgetStep` escribe el límite de cada informe según el tamaño del código y puede subir el del
+conjunto, y los cuatro pasos de preparación tienen los suyos fijos (apartado 1.6.1). Por debajo, el proveedor OpenAI corta cada intento sin respuesta a los
 600 s y cada silencio de streaming a los 120 s, configurables por proveedor o rol
 (`OpenAILLmService/OpenAILlmService.cs:145-158`); con los valores por defecto un intento colgado consume 10 de los 15
 minutos del auditor.
@@ -373,9 +482,15 @@ log (`Samples/CodebaseAnalysisPipeline/Program.cs:173`). La web vuelca al arranc
 
 La web ejecuta el mismo pipeline a través de `AnalysisRunner` y no reimplementa nada. El progreso se agrupa en cinco
 fases por el nombre del paso (`CORE/Progress/AnalysisEventMapper.cs:32-53`): `detect`, `enrich` (los dos
-enriquecedores y el sub-step LLM del fallback), `facets` (también `PrepareRegenerationStep`), `reports` (el paralelo y
-cada `Auditor_<tipo>`) y `synthesis`. La fase `enrich` se abre con el primer paso y solo la cierra el `step.completed`
-de `BdpEnricherStep`. Los timeouts son los del apartado 1.10, leídos de la misma configuración.
+enriquecedores y el sub-step LLM del fallback), `facets` (también `PrepareRegenerationStep` y los cuatro pasos de la
+preparación con el sub-step `DomainNaming`), `reports` (el paralelo, cada `Auditor_<tipo>` y cada
+`Investigation_<tipo>_<id>`) y `synthesis`. La fase `enrich` se abre con el primer paso y solo la cierra el `step.completed`
+de `DotNetEnricherStep`. La SPA mantiene un carril por informe: las investigaciones de un informe en modo B no emiten
+`step.started` ni `step.completed` (se invocan sin middleware) y sus eventos de LLM y de tools suman al carril del informe por
+su campo `report`. La fase `facets` la cierra `SqlFacetExtractorStep`, como siempre, y la reabre el primer paso de
+preparación; solo la da por terminada `TimeBudgetStep` (con `Mode = Off` esos pasos no existen y la cierra el de facetas), de
+modo que sigue en marcha durante el nombrado de los subsistemas (`WEB/ClientApp/src/state/runReducer.ts`,
+`PREPARATION_STEPS`). Los timeouts son los del apartado 1.10, leídos de la misma configuración.
 
 ![Ciclo de regeneración de un informe sobre la misma ejecución](../assets/images/regeneracion-informe-ciclo.png)
 
@@ -388,8 +503,9 @@ cuando no hay ejecución en curso y el repositorio abierto es el de la ejecució
 última en memoria, 400 con una lista vacía o un informe desconocido y 409 si hay ejecución, turno de chat u operación de
 conocimiento en curso, si no hay repositorio o si es de otro (`WEB/Analysis/AnalysisRunManager.cs:119-178`). La
 ejecución vuelve a `running`, emite `run.regeneration_started` y sigue con el mismo log y el mismo `seq`. El pipeline
-reducido es `PrepareRegenerationStep` → `SqlFacetExtractorStep` → los auditores pedidos → la síntesis si se marca
-(`CORE/AnalysisPipelineFactory.cs:136-160`); no detecta, no indexa y no enriquece, así que el informe se basa en el grafo
+reducido es `PrepareRegenerationStep` → `SqlFacetExtractorStep` → los cuatro pasos de la preparación (con
+`Mode = Subsystems`; el mapa de dominios se reutiliza del disco si coincide con el grafo) → los auditores pedidos → la
+síntesis si se marca (`CORE/AnalysisPipelineFactory.cs:136-160`); no detecta, no indexa y no enriquece, así que el informe se basa en el grafo
 de ahora. `PrepareRegenerationStep` falla si no hay BD o no tiene grafo estructural y retira del grafo los informes del
 catálogo marcados (`CORE/Steps/PrepareRegenerationStep.cs:43-59`). Al terminar, `failedReports` es el de antes, menos
 los regenerados con `report.written`, más los pedidos en la ejecución original que no tienen informe en ninguna de sus
@@ -403,6 +519,12 @@ Un turno es un paso LLM con prompt literal y dieciséis tools: las siete del aud
 `semantic_search` (`CORE/Chat/ChatAgent.cs:91-97`). Consulta la misma copia del grafo y los mismos informes que el
 análisis, y la web impide que convivan un turno y un análisis, porque este sobrescribe la BD y mueve los informes. El
 límite del turno es `CodebaseAnalysis:Chat:TurnTimeoutMinutes` (5), aplicado con su propio token (`:217`).
+
+El modelo que responde se elige en la interfaz, por sesión, entre los de `CodebaseAnalysis:Chat:Models`; cada uno es un rol de
+`AITaskAgent:LlmProviders:Roles` con su proveedor, su `Model` y sus `Options` (`CORE/Chat/ChatModelCatalog.cs`).
+`ChatSession.ModelId` guarda la elección y se puede cambiar entre turnos; cada turno guarda `ModelId` y el deployment que
+contestó. Qué modelos trae el sample, qué `Options` necesita cada uno y los avisos de arranque están en el README de la web
+(«Modelos del chat»).
 
 La plantilla `CORE/templates/chat_system.md` obliga a marcar cada hecho sobre el sistema: `[V]` si se leyó en el código
 en ese turno, con `ruta:línea`; `[D]` si sale de un informe o documento, con `nombre › sección`; `[I]` si se infiere.
@@ -443,9 +565,9 @@ salida y el coste (`Framework/Observability/Events/LlmResponseEvent.cs:43-52`, `
 `:794`), y `LlmUsageTracker` los suma por paso y en total (`CORE/Progress/LlmUsageTracker.cs:89-129`). La web lo manda en
 el `usage` de `run.completed` y la SPA lo enseña en el resumen (`WEB/Analysis/AnalysisRunManager.cs:391`, `:481`), la
 CLI lo imprime al terminar (`Samples/CodebaseAnalysisPipeline/Program.cs:213`, `:222`), y los dos lo escriben en `reports/_run_meta.json`
-(`CORE/Reports/RunMetaFile.cs:46`). El coste sale de los precios de `LlmConfiguration:Providers:<p>:Models`
-(`CORE/Hosting/LlmRoleFactory.cs:99`), que en el sample están a `null`: sin la tarifa del contrato de Azure el coste es
-`null`, no 0.
+(`CORE/Reports/RunMetaFile.cs:46`). El coste sale de los precios de `AITaskAgent:LlmProviders:Providers:<p>:Models`,
+que enlaza el framework (`CORE/Hosting/LlmRoleFactory.cs:91` los vuelca en el log), y el sample no los trae: sin la tarifa
+del contrato de Azure el coste es `null`, no 0.
 
 ## 1.14 Mediciones del análisis completo (prueba M, 2026-09-29)
 
@@ -550,7 +672,7 @@ Para describir de dónde sale cada conclusión se usan cinco fuentes, con la fia
 
 - **F, facetas deterministas:** propiedades y cálculos SQL del apartado 1.6. Son datos si su propiedad la escribió un
   enriquecedor nativo o un cálculo sobre aristas resueltas; indican dónde mirar, no un veredicto.
-- **R, grafo resuelto:** aristas con `enriched_by` de `JavaAnalyzer` o `StrutsJspPlugin` (y de BdpGraphEnricher en C#).
+- **R, grafo resuelto:** aristas con `enriched_by` de `JavaAnalyzer` o `StrutsJspPlugin` (y de los enriquecedores de DotNetEnricher en C#).
   Son datos sobre la estructura.
 - **H, grafo heurístico:** aristas sin marca, que `graph_neighbors` etiqueta «heurística cbm», o «ingesta Office» si su
   nodo de origen lo escribió OfficeTools (`CORE/Tools/GraphNeighborsTool.cs:57-65`, `:440-442`). En Java quedan pocas,
@@ -561,8 +683,8 @@ Para describir de dónde sale cada conclusión se usan cinco fuentes, con la fia
   el código.
 
 La tabla siguiente es la matriz de facetas por informe, sacada de los placeholders de cada plantilla de prompt, con la
-disponibilidad de cada faceta en un repositorio Java deducida de qué código escribe la propiedad que lee. BdpGraphEnricher
-es un CLI externo que no se ha leído, y el esquema de propiedades de cbm sale del plan (`signature`, `param_types`,
+disponibilidad de cada faceta en un repositorio Java deducida de qué código escribe la propiedad que lee. DotNetEnricher
+no corre en Java, y el esquema de propiedades de cbm sale del plan (`signature`, `param_types`,
 `return_type`, `docstring`, `parent_class`, `docs/plans/2026-09-28-enriquecimiento-nativo-java-plan.md:47-48`), así que
 «vacía en Java» es una inferencia sobre el código disponible, no una medición.
 
@@ -601,7 +723,7 @@ es un CLI externo que no se ha leído, y el esquema de propiedades de cbm sale d
 | `hotspots_ranking` | `:422-432` | 08 | vacía: nadie escribe `hotspot` en Java |
 | `doc_coverage_metrics` | `:434-437` | 08 | con datos: Javadoc decodificado por el analizador |
 | `obsolete_elements` | `:441-449` | 08 | los `@Deprecated` del analizador (`annotations`), además de `is_obsolete` y el `[Obsolete]` de C#; en la prueba M llegó vacía porque aún no leía `annotations` |
-| `di_registrations_catalog`, `di_lifetimes_mapping`, `extension_points_catalog`, `config_adapters_mapping` | `:464-493` | 09 | vacías: `DiRegistration` solo sale de BdpGraphEnricher o del fallback LLM, que en Java no corren |
+| `di_registrations_catalog`, `di_lifetimes_mapping`, `extension_points_catalog`, `config_adapters_mapping` | `:464-493` | 09 | vacías: `DiRegistration` solo sale de DotNetEnricher o del fallback LLM, que en Java no corren |
 | `creational_candidates` | `:499-513` | 09 | 60 por nombre, ordenados por `fan_in` |
 | `provided_documentation` | `ProvidedDocumentationFacet` | 01-09 | la que haya subido el usuario |
 

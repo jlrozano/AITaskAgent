@@ -154,30 +154,9 @@ namespace AITaskAgent.Configuration
                 return new JValue(d);
             }
 
-
-            // TimeSpan se detecta por formato típico: HH:mm:ss o d.HH:mm:ss
-            if (TimeSpan.TryParse(s, CultureInfo.InvariantCulture, out TimeSpan ts))
-            {
-                // Verificar que NO sea una fecha (evitar falsos positivos)
-                // Un TimeSpan válido no debería tener 'T', '+', '-' o 'Z' típicos de ISO 8601
-                if (!s.Contains('T') && !s.Contains('+') && !s.Contains('Z') &&
-                    (s.Contains(':') || s.Contains('.')))
-                {
-                    return new JValue(ts);
-                }
-            }
-
-            // DateTimeOffset y DateTime (ISO 8601)
-            if (DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
-                DateTimeStyles.RoundtripKind, out DateTimeOffset dto))
-            {
-                return new JValue(dto);
-            }
-            if (DateTime.TryParse(s, CultureInfo.InvariantCulture,
-                DateTimeStyles.RoundtripKind, out DateTime dt))
-            {
-                return new JValue(dt);
-            }
+            // Fechas y TimeSpan se quedan como string: Newtonsoft los convierte al enlazar una propiedad DateTime,
+            // DateTimeOffset o TimeSpan, y una propiedad string (un ApiVersion "2024-10-21") recibe el valor intacto
+            // en vez de la fecha reformateada con la cultura y la zona de la máquina.
             // Todo lo demás es string (con expansión de variables de entorno)
             return new JValue(ExpandEnvVars(value));
         }

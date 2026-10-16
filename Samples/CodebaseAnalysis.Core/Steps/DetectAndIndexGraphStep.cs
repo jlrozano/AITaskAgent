@@ -92,6 +92,9 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
 
         await GraphSchema.EnsureAsync(input.DatabasePath, cancellationToken);
 
+        // Con grafo nuevo o heredado: lo que cbm indexó de bin/, obj/ y los ficheros generados no es código del repositorio.
+        await RemoveGeneratedArtifactsFromGraphAsync(context, input.DatabasePath, cancellationToken);
+
         // Check if graph already contains enriched nodes (e.g. CsProject or properties enriched by Roslyn/AI)
         bool isEnriched = !input.ForceReindex && await CheckIfEnrichedAsync(input.DatabasePath, cancellationToken);
         var (totalNodes, totalEdges) = await GetGraphCountsAsync(input.DatabasePath, cancellationToken);
@@ -505,6 +508,28 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
     }
 
     /// <summary>
+    /// cbm indexa la salida de compilación (los .json y .xml de <c>bin/</c> daban miles de nodos) y los ficheros generados;
+    /// falseaban totales, métricas, ciclos y comunidades. Se retiran por ruta (<see cref="Enrichment.GeneratedArtifacts"/>),
+    /// sin un <c>.cbmignore</c>, porque no se escribe en el repositorio analizado. Es idempotente y corre también sobre un
+    /// grafo que ya existía, para que las pasadas siguientes (enriquecedores incluidos) no lo vean.
+    /// </summary>
+    private static async Task RemoveGeneratedArtifactsFromGraphAsync(PipelineContext context, string dbPath, CancellationToken ct)
+    {
+        if (!File.Exists(dbPath))
+            return;
+
+        using var conn = new SqliteConnection($"Data Source={dbPath}");
+        await conn.OpenAsync(ct);
+        using var tx = conn.BeginTransaction();
+        var (nodes, edges) = await Enrichment.GeneratedArtifacts.RemoveFromGraphAsync(conn, tx, ct);
+        await tx.CommitAsync(ct);
+
+        if (nodes > 0)
+            context.Report(StepName, AnalysisLogLevel.Info,
+                $"🧹 Retirados del grafo {nodes} nodos de salida de compilación y ficheros generados (bin/, obj/, *.g.cs…) y {edges} aristas.");
+    }
+
+    /// <summary>
     /// Apunta la versión de cbm de esta indexación (<see cref="Enrichment.EnrichmentRuns.RecordCbmVersionAsync"/>), que entra
     /// en la huella de los enriquecedores. Sin versión lo avisa: la huella queda como antes, con el nombre y la fecha.
     /// </summary>
@@ -570,12 +595,12 @@ public class DetectAndIndexGraphStep : IStep<AnalysisPipelineInput, GraphStatusR
 
     /// <summary>
     /// <c>origin</c> de los nodos que escribe la ingesta de OfficeTools: sus procedimientos VBA traen <c>cyclomatic</c>, pero
-    /// no son el enriquecimiento de código de <see cref="BdpEnricherStep"/>.
+    /// no son el enriquecimiento de código de <see cref="DotNetEnricherStep"/>.
     /// </summary>
     internal static readonly string[] OfficeOrigins = ["office_tools", "access_vba_extractor"];
 
     /// <summary>
-    /// Si el grafo ya tiene el enriquecimiento de código de <see cref="BdpEnricherStep"/> (Roslyn): nodos <c>CsProject</c> o
+    /// Si el grafo ya tiene el enriquecimiento de código de <see cref="DotNetEnricherStep"/> (Roslyn): nodos <c>CsProject</c> o
     /// con <c>afferent_coupling</c>, <c>cyclomatic</c> o <c>in_cycle</c>. No cuentan los de la ingesta de Office ni los del
     /// analizador Java, que calculan también <c>cyclomatic</c> sobre otro código y llevan su propio registro en
     /// <c>enrichment_runs</c>: con ellos, un repositorio .NET con un .docx o con Java se quedaba sin Roslyn (auditoría, H-10).

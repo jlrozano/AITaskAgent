@@ -16,7 +16,9 @@ Recibir las conclusiones, métricas y hallazgos clave de todos los informes téc
    - No confundas tamaño o complejidad esencial con mala calidad. Los motores especializados y núcleos de cálculo o protocolo tienen alta cohesión funcional intrínseca; no deben presentarse como "fallas críticas de diseño" o "God Classes catastróficas", sino como núcleos funcionales a acompañar con tests, validaciones y evolución por composición.
    - Pondera objetivamente la salud del sistema distinguiendo la complejidad esencial de la deuda accidental evitable.
 
-3. **No Duplicar Texto Completo**:
+3. **Sin nota numérica:** el resumen no calcula ni publica una puntuación sobre 100 ni un índice compuesto de salud; el dictamen es el semáforo por área y los hallazgos que lo sostienen.
+
+4. **No Duplicar Texto Completo**:
    - No copies y pegues los informes individuales; sintetiza, extrae correlaciones sistémicas, pondera impactos y destaca lo verdaderamente crítico para el negocio y la ingeniería.
 
 4. **Visualización y Diagramas Enriquecidos**:

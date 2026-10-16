@@ -67,6 +67,19 @@ var completionCost = completionTokens / 1_000_000m * OutputTokenPricePerMillion;
 var totalCost = promptCost + completionCost;
 ```
 
+### 2.1 Tokens de entrada cacheados
+
+Cada modelo de `Providers:<p>:Models` admite además el campo opcional **`CachedInputPricePerMillion`**: el precio
+por millón de los tokens de entrada que el proveedor sirve desde su caché de prompt (OpenAI/Azure los informan en
+`usage.prompt_tokens_details.cached_tokens` y llegan como `LlmResult.CachedPromptTokens`). Esos tokens van incluidos en
+`PromptTokens`: `LlmProvider.CalculateCost` cobra los cacheados a `CachedInputPricePerMillion` y el resto a
+`InputPricePerMillion`. Si el campo no está, los cacheados se cobran a precio de entrada normal (el coste sale por
+exceso, nunca por defecto).
+
+```json
+{ "Name": "gpt-5.4", "InputPricePerMillion": 2.5, "OutputPricePerMillion": 15, "CachedInputPricePerMillion": 0.25 }
+```
+
 ### 3. Fallback a Precios Hardcoded
 
 Si **NO** configuras los precios en el profile, el sistema usará precios predefinidos para modelos conocidos de OpenAI:

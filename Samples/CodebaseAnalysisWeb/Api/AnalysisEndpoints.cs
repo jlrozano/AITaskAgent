@@ -47,6 +47,15 @@ public static class AnalysisEndpoints
                 : started.Error!.ToResult(started.StatusCode);
         });
 
+        // Verifica informes de la última ejecución, ya terminada, contra el código (mismo runId y mismo log que regenerar).
+        app.MapPost("/api/analysis/{runId}/verify", (string runId, VerifyReportsRequest body, AnalysisRunManager manager) =>
+        {
+            var started = manager.Verify(runId, body);
+            return started.Run != null
+                ? Results.Json(started.Run.ToDto(), statusCode: StatusCodes.Status202Accepted)
+                : started.Error!.ToResult(started.StatusCode);
+        });
+
         app.MapGet("/api/analysis/{runId}/events", async (
             string runId,
             long? after,

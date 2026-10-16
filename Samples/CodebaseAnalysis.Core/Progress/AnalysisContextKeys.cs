@@ -36,7 +36,7 @@ public static class AnalysisContextKeys
 
     /// <summary>
     /// Los <c>Enrichment.DetectedLanguages</c> que encontró en disco el paso de enriquecimiento por lenguaje; con Java y sin
-    /// C#, <c>BdpEnricherStep</c> no recurre al CLI ni al fallback del LLM.
+    /// C#, <c>DotNetEnricherStep</c> no recurre al CLI ni al fallback del LLM.
     /// </summary>
     public const string DetectedLanguages = "DetectedLanguages";
 
@@ -45,4 +45,42 @@ public static class AnalysisContextKeys
     /// <c>enrichment_runs</c>); la pone <c>SqlFacetExtractorStep</c> y va a la línea <c>analysis-meta</c> de cada informe.
     /// </summary>
     public const string GraphProvenance = "GraphProvenance";
+
+    // Preparación de los informes por subsistema (spec 2026-10-04). Las ponen los pasos de preparación, en este orden, entre
+    // SqlFacetExtractorStep y los informes; los leen los pasos siguientes y los envoltorios de los informes en modo B.
+
+    /// <summary>El <c>Preparation.RepositoryInventory</c> que deja <c>RepositoryInventoryStep</c>.</summary>
+    public const string RepositoryInventory = "RepositoryInventory";
+
+    /// <summary>
+    /// Todos los puntos de entrada de producción del grafo (<c>IReadOnlyList&lt;InventoryEntryPoint&gt;</c>), sin el recorte que sufre la
+    /// lista del artefacto del inventario. La deja <c>RepositoryInventoryStep</c> y la lee <c>DomainDiscoveryStep</c>: las métricas de
+    /// entradas de cada subsistema, que puntúan el plan, no pueden salir de una muestra.
+    /// </summary>
+    public const string InventoryEntryPoints = "InventoryEntryPoints";
+
+    /// <summary>
+    /// <c>IReadOnlyList&lt;SqlTableReference&gt;</c>: las tablas que el código nombra en sentencias SQL escritas en cadenas, con el fichero
+    /// donde se nombran (<see cref="Support.SqlTableScanner"/>). La deja <c>RepositoryInventoryStep</c> y la lee <c>DomainDiscoveryStep</c>: con
+    /// ellas cada subsistema cuenta las tablas de sus ficheros aunque el grafo no traiga nodos <c>Table</c>.
+    /// </summary>
+    public const string InventorySqlTables = "InventorySqlTables";
+
+    /// <summary>El <c>Preparation.DomainMap</c> que deja <c>DomainDiscoveryStep</c>.</summary>
+    public const string DomainMap = "DomainMap";
+
+    /// <summary>El <c>SharedPass.ConsolidatedRegistry</c> que deja <c>SharedPassStep</c> (solo con la pasada compartida activada).</summary>
+    public const string SharedPassRegistry = "SharedPassRegistry";
+
+    /// <summary>El <c>Preparation.CoveragePlan</c> que deja <c>CoveragePlanningStep</c>.</summary>
+    public const string CoveragePlan = "CoveragePlan";
+
+    /// <summary>El <c>Preparation.TimeBudgetPlan</c> que deja <c>TimeBudgetStep</c>.</summary>
+    public const string TimeBudgetPlan = "TimeBudgetPlan";
+
+    /// <summary>
+    /// El <c>Preparation.AuditorStepRegistry</c> del pipeline: la factoría lo crea (uno por pipeline, sin estáticos) con los
+    /// pasos de cada informe, y <c>TimeBudgetStep</c> escribe en ellos el <c>Timeout</c> calculado.
+    /// </summary>
+    public const string AuditorStepRegistry = "AuditorStepRegistry";
 }

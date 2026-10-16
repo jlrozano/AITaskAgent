@@ -1,6 +1,6 @@
 // Estado del chat: sesiones, sesión abierta y turno en streaming (plan §4.4, §7). Función pura.
 
-import type { ChatSession, ChatSessionSummaryDto, ChatStreamEvent, ChatTurn, ChatTurnArtifact, ReportChange } from '../api/types';
+import type { ChatModelDto, ChatSession, ChatSessionSummaryDto, ChatStreamEvent, ChatTurn, ChatTurnArtifact, ReportChange } from '../api/types';
 
 export type LiveToolStatus = 'pending' | 'running' | 'ok' | 'error';
 
@@ -12,6 +12,10 @@ export interface LiveTool {
   status: LiveToolStatus;
   durationMs: number | null;
   error: string | null;
+  /** Salida de la tool (`tool.completed`), truncada en el servidor; null si no llegó. No se guarda en el historial. */
+  output?: string | null;
+  outputTruncated?: boolean;
+  outputBytes?: number | null;
   /** Número de segmentos de texto que había cuando apareció la llamada: se pinta detrás de ellos. */
   afterSegment: number;
 }
@@ -48,6 +52,11 @@ export interface ChatState {
    * haber salido antes de que el turno se persistiera (P2-3).
    */
   detached: { sessionId: string; turn: ChatTurn }[];
+  /** Modelos seleccionables (`GET /api/chat/models`); vacío si el servidor no los ofrece, y entonces no hay selector. */
+  models: ChatModelDto[];
+  defaultModelId: string | null;
+  /** Modelo elegido para la conversación nueva, que aún no tiene sesión; null = el de por defecto. */
+  pendingModelId: string | null;
 }
 
 export type ChatAction =
@@ -55,6 +64,11 @@ export type ChatAction =
   | { type: 'session/select'; id: string | null }
   | { type: 'session/loaded'; session: ChatSession }
   | { type: 'session/deleted'; id: string }
+  | { type: 'models/loaded'; models: ChatModelDto[]; defaultId: string | null }
+  /** Modelo elegido sin sesión abierta: se manda al crearla con la primera pregunta. */
+  | { type: 'model/pending'; modelId: string }
+  /** El servidor confirmó el modelo de la sesión (PUT .../model). */
+  | { type: 'session/model'; id: string; modelId: string }
   /** `sessionId` omitido = la sesión abierta. */
   | { type: 'turn/submit'; question: string; sessionId?: string | null }
   /** Con `sessionId`, se ignora si el turno en curso es de otra sesión. */
@@ -71,6 +85,9 @@ export const initialChatState: ChatState = {
   live: null,
   error: null,
   detached: [],
+  models: [],
+  defaultModelId: null,
+  pendingModelId: null,
 };
 
 export const USER_STOPPED_MESSAGE = 'Parado por el usuario.';
@@ -235,6 +252,9 @@ function applyStreamEvent(state: ChatState, event: ChatStreamEvent): ChatState {
         status: event.success ? 'ok' : 'error',
         durationMs: event.durationMs ?? null,
         error: event.error ?? null,
+        output: event.output ?? null,
+        outputTruncated: event.outputTruncated ?? false,
+        outputBytes: event.outputBytes ?? null,
       };
       const tools = patchFirstTool(live.tools, event.name, ['running', 'pending'], patch, () => ({
         key: nextKey(),
@@ -301,6 +321,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const sessions = state.sessions.some((s) => s.id === session.id) ? state.sessions : touchSummary(state.sessions, session);
       return { ...state, activeId: session.id, session, sessions, detached };
     }
+    case 'models/loaded':
+      return { ...state, models: action.models, defaultModelId: action.defaultId };
+    case 'model/pending':
+      return { ...state, pendingModelId: action.modelId };
+    case 'session/model': {
+      if (!state.session || state.session.id !== action.id) return state;
+      return { ...state, session: { ...state.session, modelId: action.modelId } };
+    }
     case 'session/deleted':
       return {
         ...state,
@@ -353,4 +381,15 @@ function sortSessions(sessions: ChatSessionSummaryDto[]): ChatSessionSummaryDto[
 
 export function sessionTitle(title: string | null | undefined): string {
   return title && title.trim() ? title : 'Conversación sin título';
+}
+
+/**
+ * Modelo que se enseña como elegido: el de la sesión abierta (si ya no está en el catálogo, o la sesión es anterior al
+ * selector, el de por defecto) o, sin sesión, el elegido para la conversación nueva. Null si no hay catálogo.
+ */
+export function selectedModelId(state: Pick<ChatState, 'models' | 'defaultModelId' | 'session' | 'pendingModelId'>): string | null {
+  if (state.models.length === 0) return null;
+  const known = (id: string | null | undefined) => (id && state.models.some((m) => m.id === id) ? id : null);
+  const fallback = known(state.defaultModelId) ?? state.models[0].id;
+  return state.session ? (known(state.session.modelId) ?? fallback) : (known(state.pendingModelId) ?? fallback);
 }

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatSession, ChatTurn } from '../api/types';
 import { useChatTurn } from '../hooks/useChatTurn';
-import { chatStream, controlledStream, jsonResponse, mockFetch, sse, sseResponse } from '../test/fixtures';
+import { chatModels, chatStream, controlledStream, jsonResponse, mockFetch, sse, sseResponse } from '../test/fixtures';
 import { renderWithWorkspace } from '../test/renderWithWorkspace';
 import { ChatPane } from './ChatPane';
 import { ChatThread } from './ChatThread';
@@ -173,6 +173,40 @@ describe('ChatThread', () => {
     expect(screen.getByText('src/OrderValidator.cs')).toBeInTheDocument();
     expect(screen.getByText('OrderValidator.cs:12')).toBeInTheDocument();
     expect(screen.getByText('La respuesta falló: HTTP 500')).toBeInTheDocument();
+  });
+});
+
+describe('ChatThread: modelo de cada respuesta', () => {
+  const turn = (extra: Partial<ChatTurn>): ChatTurn => ({
+    id: 't-1',
+    askedAt: '2026-09-27T10:15:02Z',
+    question: 'q',
+    answer: 'r',
+    status: 'completed',
+    error: null,
+    model: 'gpt-5.4',
+    tokens: 100,
+    ...extra,
+  });
+
+  it('enseña la etiqueta del modelo del catálogo en cada respuesta', () => {
+    renderWithWorkspace(
+      <ChatThread
+        live={null}
+        models={chatModels.models}
+        session={{ ...session, turns: [turn({ modelId: 'gpt-5.4' }), turn({ id: 't-2', modelId: 'gpt-6-sol', model: 'gpt-6-sol' })] }}
+      />,
+    );
+    expect(screen.getByText(/^GPT-5\.4 · 100 tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/^GPT-6 Sol · 100 tokens/)).toBeInTheDocument();
+  });
+
+  it('un modelo retirado del catálogo, o un turno antiguo sin modelId, enseñan el deployment', () => {
+    renderWithWorkspace(
+      <ChatThread live={null} models={chatModels.models} session={{ ...session, turns: [turn({ modelId: 'retirado', model: 'gpt-4o' }), turn({ id: 't-2' })] }} />,
+    );
+    expect(screen.getByText(/^gpt-4o · 100 tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/^gpt-5\.4 · 100 tokens/)).toBeInTheDocument();
   });
 });
 

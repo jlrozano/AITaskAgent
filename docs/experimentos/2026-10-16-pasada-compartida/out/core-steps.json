@@ -1,0 +1,2572 @@
+{
+ "batch": "core-steps",
+ "files": [
+  {
+   "path": "Core/Abstractions/Factory.cs",
+   "role": "implementation",
+   "summary": "Factory<T> resuelve instancias de T por nombre. Construye una caché perezosa con todos los T registrados en DI (clave = valor de una propiedad `keyName` leída por reflexión), crea según el ciclo de vida registrado y, si no hay registro, recurre a IOptionsMonitor<T>.Get(name)."
+  },
+  {
+   "path": "Core/Abstractions/IEnrichable.cs",
+   "role": "contract",
+   "summary": "Interfaz opcional para que un paso enriquezca actividades OpenTelemetry y eventos de inicio/fin. Los dos hooks de Activity tienen implementación por defecto vacía; los de evento son obligatorios. Los invoca ObservabilityMiddleware."
+  },
+  {
+   "path": "Core/Abstractions/IFactory.cs",
+   "role": "contract",
+   "summary": "Contrato mínimo IFactory<T>: GetService(string key) devuelve una instancia de T por clave."
+  },
+  {
+   "path": "Core/Abstractions/IFallbackable.cs",
+   "role": "contract",
+   "summary": "Contrato IFallbackable: SwitchToNextFallback permite a un paso cambiar de alternativa (p. ej. otro modelo) tras un error; devuelve bool. Lo consume RetryMiddleware."
+  },
+  {
+   "path": "Core/Abstractions/IStepValidator.cs",
+   "role": "contract",
+   "summary": "Contrato de validador semántico de resultados de paso, con Id para referenciarlo desde YAML y ValidateAsync que devuelve (IsValid, Error)."
+  },
+  {
+   "path": "Core/Execution/StepValidation.cs",
+   "role": "infrastructure",
+   "summary": "Validación estática de unicidad de nombres de paso. Recorre recursivamente GroupStep, ParallelStep y LoopStep lanzando InvalidOperationException ante duplicados. Lo llama Pipeline.ExecuteAsync."
+  },
+  {
+   "path": "Core/Models/StepError.cs",
+   "role": "model",
+   "summary": "Record sellado StepError que implementa IStepError: mensaje obligatorio y excepción original opcional, para comunicar errores sin lanzar."
+  },
+  {
+   "path": "Core/StepResults/ActionResult.cs",
+   "role": "implementation",
+   "summary": "Resultado de ActionStep (StepResult<string>). Constructor privado con fábricas estáticas para éxito, error por mensaje y error por excepción; añade un diccionario Metadata."
+  },
+  {
+   "path": "Core/StepResults/ParallelResult.cs",
+   "role": "implementation",
+   "summary": "Contenedor de resultados de ParallelStep: ConcurrentDictionary nombre de paso -> IStepResult, con Value de solo lectura, GetResult tipado y un indexador que devuelve el Value de cada resultado."
+  },
+  {
+   "path": "Core/StepResults/StepErrorResult.cs",
+   "role": "implementation",
+   "summary": "ErrorStepResult: resultado de error sin tipo (StepResult<string>) que usa el framework cuando un paso falla. Fábricas FromException y FromMessage."
+  },
+  {
+   "path": "Core/StepResults/StepResult.cs",
+   "role": "contract",
+   "summary": "Clase base abstracta de todos los resultados (StepResult) y su variante tipada StepResult<T>. Guarda valor, nombre/tipo del paso, error, SuspendInfo y NextSteps; GetParameters extrae por reflexión las propiedades públicas en PascalCase y camelCase para plantillas."
+  },
+  {
+   "path": "Core/StepResults/SuccessStepResult.cs",
+   "role": "implementation",
+   "summary": "SuccessStepResult: StepResult<string> con un mensaje como Value."
+  },
+  {
+   "path": "Core/StepResults/SuspendStepResult.cs",
+   "role": "implementation",
+   "summary": "SuspendStepResult: resultado que indica suspensión del pipeline para intervención humana; el estado a restaurar viaja en Value y los datos a revisar en DataToReview."
+  },
+  {
+   "path": "Core/Steps/ActionStep.cs",
+   "role": "implementation",
+   "summary": "ActionStep<TIn>: paso determinista que ejecuta un delegado con efectos laterales, en modo normal (espera y captura excepciones) o fire-and-forget (Task.Run, siempre devuelve éxito)."
+  },
+  {
+   "path": "Core/Steps/BreakStep.cs",
+   "role": "implementation",
+   "summary": "BreakStepResult y BreakStep: paso de control de flujo que devuelve un BreakStepResult con el Value de la entrada para que un LoopStep envolvente termine."
+  },
+  {
+   "path": "Core/Steps/DelegatedStep.cs",
+   "role": "implementation",
+   "summary": "DelegatedStep<TIn,TOut>: paso que delega ExecuteAsync en un Func proporcionado; captura toda excepción y la convierte en resultado de error."
+  },
+  {
+   "path": "Core/Steps/EmptyStep.cs",
+   "role": "implementation",
+   "summary": "EmptyStep: IStep marcador sin comportamiento; ExecuteAsync devuelve la entrada, ValidateAsync siempre válido, FinalizeAsync no hace nada. No hereda de StepBase."
+  },
+  {
+   "path": "Core/Steps/GroupStep.cs",
+   "role": "implementation",
+   "summary": "GroupStep (no genérico, deserializable desde YAML) y GroupStep<TIn>: agrupa pasos secuenciales volcándolos en input.NextSteps para que el Pipeline padre los ejecute; la variante tipada valida el tipo de entrada del primer paso."
+  },
+  {
+   "path": "Core/Steps/LoopStep.cs",
+   "role": "implementation",
+   "summary": "LoopStep: ejecuta sus pasos hasta MaxIterations veces mediante context.ExecuteStepsWithNextStepsAsync, sale ante error/suspensión o BreakStepResult y emite LoopExhaustedEvent al agotar iteraciones."
+  },
+  {
+   "path": "Core/Steps/ParallelStep.cs",
+   "role": "implementation",
+   "summary": "ParallelStep y ParallelStep<TIn>: ejecuta ramas con Parallel.ForEachAsync, cada una sobre un PipelineContext clonado (CloneForBranch), emite BranchStarted/CompletedEvent y agrega resultados y errores en un ParallelResult."
+  },
+  {
+   "path": "Core/Steps/StepBase.cs",
+   "role": "contract",
+   "summary": "Clase base abstracta de pasos: nombre, tipos de entrada/salida, reintentos, timeout, validadores, logger, fábrica de resultados por activator, hooks de enriquecimiento (delegan en Enrichable), Finalize, Save/RestoreState y SwitchToNextFallback, con implementaciones explícitas de IStep/IEnrichable/IResume/IFallbackable."
+  },
+  {
+   "path": "Core/Steps/TypedStep.cs",
+   "role": "contract",
+   "summary": "TypedStep<TIn,TOut>: base de pasos con tipos; adapta el ExecuteAsync no genérico al tipado, intentando convertir la entrada con StepResultFactory si no es del tipo esperado."
+  },
+  {
+   "path": "LLM/Results/InputMessage.cs",
+   "role": "implementation",
+   "summary": "InputMessage: StepResult<string> vacío, declarado sin namespace."
+  },
+  {
+   "path": "LLM/Results/Intention.cs",
+   "role": "model",
+   "summary": "Modelos de resultado de análisis de intención (Intention, UserFeedbackInfo, UserChoiceChip, Question) con atributos Description que alimentan el esquema JSON enviado al LLM."
+  },
+  {
+   "path": "LLM/Results/LlmStringStepResult.cs",
+   "role": "implementation",
+   "summary": "LlmStringStepResult: resultado de un paso LLM con Content (alias de Value) y ToolCalls; válido si hay contenido o llamadas a herramientas."
+  },
+  {
+   "path": "Observability/EventEnrichmentResult.cs",
+   "role": "model",
+   "summary": "Record struct genérico EventEnrichmentResult<TEvent> (evento + indicador de supresión). Sin referencias en el grafo."
+  }
+ ],
+ "types": [
+  {
+   "name": "Factory<T>",
+   "kind": "class",
+   "path": "Core/Abstractions/Factory.cs",
+   "startLine": 7,
+   "endLine": 65,
+   "purpose": "Fábrica genérica por nombre sobre el contenedor DI. Cachea (tipo, ciclo de vida, instancia singleton) por nombre; el nombre se lee por reflexión de la propiedad indicada en keyName. Si el nombre no está en la caché usa IOptionsMonitor<T>.",
+   "collaborators": [
+    "IServiceProvider: GetServices<T>/GetService para poblar la caché y crear instancias",
+    "IServiceCollection: determinar ServiceLifetime por ImplementationType",
+    "IOptionsMonitor<T>: resolución alternativa por nombre",
+    "IFactory<T>: contrato que implementa"
+   ],
+   "members": [
+    {
+     "name": "Factory(IServiceProvider sp, IServiceCollection services, string keyName = \"Name\")",
+     "startLine": 7,
+     "endLine": 7,
+     "does": "Constructor primario; captura proveedor, colección y nombre de la propiedad clave.",
+     "inputs": "sp, services desde DI; keyName con valor por defecto",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BuildCache()",
+     "startLine": 12,
+     "endLine": 27,
+     "does": "Materializa todos los T registrados y construye un diccionario nombre -> (Type, Lifetime, Instance); Instance solo se guarda si es Singleton.",
+     "inputs": "sp.GetServices<T>() y services",
+     "outputs": "Dictionary nombre->tupla",
+     "sideEffects": "Instancia todos los T registrados (también los transient) para leer su nombre",
+     "throws": "ArgumentException de ToDictionary si dos servicios dan el mismo nombre"
+    },
+    {
+     "name": "GetServiceName(T instance)",
+     "startLine": 28,
+     "endLine": 35,
+     "does": "Lee por reflexión la propiedad keyName (pública o no) de la instancia y devuelve su ToString, o cadena vacía.",
+     "inputs": "instancia de T",
+     "outputs": "string nombre ('' si no existe propiedad o es null)",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "GetService(string name)",
+     "startLine": 36,
+     "endLine": 64,
+     "does": "Devuelve el servicio por nombre: singleton cacheado, transient creado con ActivatorUtilities, scoped vía GetServices<T>().First(...), o IOptionsMonitor<T>.Get(name).",
+     "inputs": "name; _cache perezoso",
+     "outputs": "T",
+     "sideEffects": "Inicializa _cache; crea instancias",
+     "throws": "InvalidOperationException (lifetime desconocido), ArgumentException si el nombre no existe"
+    }
+   ]
+  },
+  {
+   "name": "IFactory<T>",
+   "kind": "interface",
+   "path": "Core/Abstractions/IFactory.cs",
+   "startLine": 4,
+   "endLine": 7,
+   "purpose": "Contrato de fábrica por clave.",
+   "collaborators": [
+    "Factory<T>: implementación"
+   ],
+   "members": [
+    {
+     "name": "GetService(string key)",
+     "startLine": 6,
+     "endLine": 6,
+     "does": "Devuelve la instancia asociada a la clave.",
+     "inputs": "key",
+     "outputs": "T",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "IEnrichable",
+   "kind": "interface",
+   "path": "Core/Abstractions/IEnrichable.cs",
+   "startLine": 12,
+   "endLine": 51,
+   "purpose": "Hooks opcionales de enriquecimiento de observabilidad por paso: tags de Activity y eventos de inicio/fin.",
+   "collaborators": [
+    "ObservabilityMiddleware: invoca los hooks antes y después del paso",
+    "StepBase: implementación explícita que delega en Enrichable",
+    "StepStartedEvent / IStepCompletedEvent: eventos enriquecidos"
+   ],
+   "members": [
+    {
+     "name": "EnrichActivityBefore(Activity? activity, IStepResult input, PipelineContext context)",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "Hook por defecto vacío para añadir tags antes de ejecutar.",
+     "inputs": "activity (puede ser null), input, context",
+     "outputs": "void",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EnrichActivityAfter(Activity? activity, IStepResult result, PipelineContext context)",
+     "startLine": 30,
+     "endLine": 30,
+     "does": "Hook por defecto vacío para añadir tags tras ejecutar.",
+     "inputs": "activity, result, context",
+     "outputs": "void",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EnrichStartedEvent(StepStartedEvent baseEvent, IStepResult input, PipelineContext context)",
+     "startLine": 40,
+     "endLine": 40,
+     "does": "Devuelve el evento de inicio enriquecido (sin implementación por defecto).",
+     "inputs": "baseEvent, input, context",
+     "outputs": "StepStartedEvent",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EnrichCompletedEvent(IStepCompletedEvent baseEvent, IStepResult result, PipelineContext context)",
+     "startLine": 50,
+     "endLine": 50,
+     "does": "Devuelve el evento de fin enriquecido (sin implementación por defecto).",
+     "inputs": "baseEvent, result, context",
+     "outputs": "IStepCompletedEvent",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "IFallbackable",
+   "kind": "interface",
+   "path": "Core/Abstractions/IFallbackable.cs",
+   "startLine": 5,
+   "endLine": 8,
+   "purpose": "Contrato para pasos que pueden cambiar a una alternativa tras un fallo.",
+   "collaborators": [
+    "RetryMiddleware: lo llama entre reintentos",
+    "StepBase: implementación explícita que delega en SwitchToNextFallback protegido"
+   ],
+   "members": [
+    {
+     "name": "SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)",
+     "startLine": 7,
+     "endLine": 7,
+     "does": "Intenta pasar a la siguiente alternativa; true si cambió.",
+     "inputs": "error del intento, context, número de intento",
+     "outputs": "bool",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "IStepValidator",
+   "kind": "interface",
+   "path": "Core/Abstractions/IStepValidator.cs",
+   "startLine": 9,
+   "endLine": 29,
+   "purpose": "Validador semántico externo de resultados, referenciable desde YAML por Id.",
+   "collaborators": [
+    "StepBase.Validate: los itera en orden"
+   ],
+   "members": [
+    {
+     "name": "Id { get; }",
+     "startLine": 14,
+     "endLine": 14,
+     "does": "Identificador único del validador.",
+     "inputs": "n/a",
+     "outputs": "string",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ValidateAsync(IStepResult result, PipelineContext context, CancellationToken cancellationToken)",
+     "startLine": 25,
+     "endLine": 28,
+     "does": "Valida un resultado.",
+     "inputs": "result, context, token",
+     "outputs": "Task<(bool IsValid, string? Error)>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepValidation",
+   "kind": "class",
+   "path": "Core/Execution/StepValidation.cs",
+   "startLine": 6,
+   "endLine": 34,
+   "purpose": "Utilidad estática que verifica unicidad de nombres de paso recorriendo pasos anidados.",
+   "collaborators": [
+    "GroupStep, ParallelStep, LoopStep: tipos cuyos hijos recorre",
+    "Pipeline.ExecuteAsync: llamador"
+   ],
+   "members": [
+    {
+     "name": "ValidateUniqueStepNames(IReadOnlyList<IStep> steps, string pipelineName, Dictionary<string,string>? existingNames = null)",
+     "startLine": 8,
+     "endLine": 33,
+     "does": "Registra el nombre de cada paso en el diccionario y lanza si ya existe; para contenedores recurre pasando una copia del diccionario.",
+     "inputs": "lista de pasos, nombre del pipeline, nombres ya vistos",
+     "outputs": "void; muta existingNames con los nombres del nivel",
+     "sideEffects": "Muta el diccionario recibido",
+     "throws": "InvalidOperationException ante nombre duplicado"
+    }
+   ]
+  },
+  {
+   "name": "StepError",
+   "kind": "record",
+   "path": "Core/Models/StepError.cs",
+   "startLine": 9,
+   "endLine": 16,
+   "purpose": "Error estructurado sellado de un paso.",
+   "collaborators": [
+    "IStepError: contrato",
+    "ErrorStepResult/ActionResult/StepBase/ParallelStep: lo crean"
+   ],
+   "members": [
+    {
+     "name": "Message { get; init; }",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Mensaje obligatorio.",
+     "inputs": "init",
+     "outputs": "string",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "OriginalException { get; init; }",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Excepción original opcional.",
+     "inputs": "init",
+     "outputs": "Exception?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ActionResult",
+   "kind": "class",
+   "path": "Core/StepResults/ActionResult.cs",
+   "startLine": 6,
+   "endLine": 31,
+   "purpose": "Resultado de ActionStep: string con mensaje y Error opcional.",
+   "collaborators": [
+    "StepResult<string>: base",
+    "StepError: error asociado",
+    "ActionStep: productor"
+   ],
+   "members": [
+    {
+     "name": "ActionResult(IStep step, string message, IStepError? error)",
+     "startLine": 9,
+     "endLine": 13,
+     "does": "Constructor privado: asigna Value=message y Error.",
+     "inputs": "step, message, error",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Metadata { get; init; }",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Diccionario libre inicializado vacío.",
+     "inputs": "init",
+     "outputs": "Dictionary<string, object?>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "FromExceptionAction(IStep step, Exception ex, string? message = null)",
+     "startLine": 16,
+     "endLine": 21,
+     "does": "Crea resultado de error con StepError(ex.Message, ex); el Value es message ?? ex.Message.",
+     "inputs": "step, ex, message opcional",
+     "outputs": "ActionResult",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "FromErrorMessage(IStep step, string message)",
+     "startLine": 24,
+     "endLine": 28,
+     "does": "Crea resultado de error con StepError(message).",
+     "inputs": "step, message",
+     "outputs": "ActionResult",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "FromSuccessMessage(IStep step, string message)",
+     "startLine": 30,
+     "endLine": 30,
+     "does": "Crea resultado sin error.",
+     "inputs": "step, message",
+     "outputs": "ActionResult",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ParallelResult",
+   "kind": "class",
+   "path": "Core/StepResults/ParallelResult.cs",
+   "startLine": 13,
+   "endLine": 53,
+   "purpose": "Resultados de las ramas de un ParallelStep indexados por nombre de paso, almacenados en un ConcurrentDictionary.",
+   "collaborators": [
+    "ParallelStep: único escritor (AddResult internal)",
+    "StepResult: base",
+    "IStepResult<IReadOnlyDictionary<...>>: contrato tipado"
+   ],
+   "members": [
+    {
+     "name": "ParallelResult(IStep step)",
+     "startLine": 13,
+     "endLine": 13,
+     "does": "Constructor primario; delega en StepResult(step).",
+     "inputs": "step",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Value { get; } (new)",
+     "startLine": 20,
+     "endLine": 20,
+     "does": "Oculta StepResult.Value y devuelve vista de solo lectura del diccionario.",
+     "inputs": "estado interno",
+     "outputs": "IReadOnlyDictionary<string, IStepResult>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "IStepResult.Value (explícita)",
+     "startLine": 23,
+     "endLine": 23,
+     "does": "Devuelve la misma vista de solo lectura como object?.",
+     "inputs": "estado interno",
+     "outputs": "object?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AddResult(string stepName, IStepResult result)",
+     "startLine": 28,
+     "endLine": 31,
+     "does": "Añade con TryAdd; un nombre repetido se ignora en silencio.",
+     "inputs": "stepName, result",
+     "outputs": "void",
+     "sideEffects": "Muta el diccionario concurrente",
+     "throws": "ninguno"
+    },
+    {
+     "name": "GetResult(string stepName)",
+     "startLine": 36,
+     "endLine": 37,
+     "does": "Busca el resultado por nombre.",
+     "inputs": "stepName",
+     "outputs": "IStepResult? o null",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "GetResult<TResult>(string stepName)",
+     "startLine": 42,
+     "endLine": 43,
+     "does": "GetResult con cast `as TResult`.",
+     "inputs": "stepName",
+     "outputs": "TResult? o null",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "this[string stepName]",
+     "startLine": 51,
+     "endLine": 52,
+     "does": "Indexador que devuelve el Value del resultado de la rama o null.",
+     "inputs": "stepName",
+     "outputs": "object?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ErrorStepResult",
+   "kind": "class",
+   "path": "Core/StepResults/StepErrorResult.cs",
+   "startLine": 11,
+   "endLine": 31,
+   "purpose": "Resultado de error genérico del framework (string).",
+   "collaborators": [
+    "StepError",
+    "RetryMiddleware/TimeoutMiddleware/Pipeline/ParallelStep: productores"
+   ],
+   "members": [
+    {
+     "name": "ErrorStepResult(IStep step, IStepError error)",
+     "startLine": 13,
+     "endLine": 17,
+     "does": "Asigna Error y Value=error.Message.",
+     "inputs": "step, error",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "FromException(IStep step, Exception ex)",
+     "startLine": 20,
+     "endLine": 24,
+     "does": "Crea resultado con StepError(ex.Message, ex).",
+     "inputs": "step, ex",
+     "outputs": "ErrorStepResult",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "FromMessage(IStep step, string message)",
+     "startLine": 27,
+     "endLine": 30,
+     "does": "Crea resultado con StepError(message).",
+     "inputs": "step, message",
+     "outputs": "ErrorStepResult",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepResult",
+   "kind": "class",
+   "path": "Core/StepResults/StepResult.cs",
+   "startLine": 10,
+   "endLine": 80,
+   "purpose": "Base abstracta de resultados; guarda valor, StepName, StepType, Error, SuspendInfo y NextSteps y extrae parámetros por reflexión.",
+   "collaborators": [
+    "IStep: origen de StepName/StepType",
+    "StepResultFactory (core-attributes): construcción dinámica y GetParameters",
+    "LlmStepResult, ActionResult, etc.: derivados"
+   ],
+   "members": [
+    {
+     "name": "StepResult(IStep step, object? value = null)",
+     "startLine": 16,
+     "endLine": 22,
+     "does": "Guarda valor y copia Name y tipo del paso.",
+     "inputs": "step no nulo",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ArgumentNullException si step es null"
+    },
+    {
+     "name": "Value { get; internal protected set; }",
+     "startLine": 24,
+     "endLine": 24,
+     "does": "Acceso al valor almacenado.",
+     "inputs": "campo _value",
+     "outputs": "object?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepName { get; }",
+     "startLine": 26,
+     "endLine": 26,
+     "does": "Nombre del paso.",
+     "inputs": "fijado en ctor",
+     "outputs": "string",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepType { get; }",
+     "startLine": 28,
+     "endLine": 28,
+     "does": "Nombre del tipo del paso.",
+     "inputs": "fijado en ctor",
+     "outputs": "string",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "HasError { get; }",
+     "startLine": 30,
+     "endLine": 30,
+     "does": "Error != null.",
+     "inputs": "Error",
+     "outputs": "bool",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Error { get; set; }",
+     "startLine": 33,
+     "endLine": 33,
+     "does": "Error asociado.",
+     "inputs": "set público",
+     "outputs": "IStepError?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "SuspendInfo { get; set; }",
+     "startLine": 36,
+     "endLine": 36,
+     "does": "Información de suspensión HITL.",
+     "inputs": "set público",
+     "outputs": "object?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ValidateAsync(PipelineContext context)",
+     "startLine": 40,
+     "endLine": 43,
+     "does": "Validación virtual; por defecto válido.",
+     "inputs": "context",
+     "outputs": "Task<(true, null)>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "NextSteps { get; internal protected set; }",
+     "startLine": 49,
+     "endLine": 49,
+     "does": "Pasos adicionales dinámicos; el setter copia la lista o usa vacía.",
+     "inputs": "lista",
+     "outputs": "List<IStep>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "GetParameters()",
+     "startLine": 55,
+     "endLine": 79,
+     "does": "Recorre las propiedades públicas de instancia del tipo concreto (excepto Value y HasError) y las vuelca al diccionario en PascalCase y camelCase.",
+     "inputs": "reflexión sobre GetType()",
+     "outputs": "Dictionary<string, object?>",
+     "sideEffects": "Reflexión en cada llamada, sin caché",
+     "throws": "Excepciones de PropertyInfo.GetValue (p. ej. TargetParameterCountException con indexadores)"
+    }
+   ]
+  },
+  {
+   "name": "StepResult<T>",
+   "kind": "class",
+   "path": "Core/StepResults/StepResult.cs",
+   "startLine": 85,
+   "endLine": 91,
+   "purpose": "Variante tipada de StepResult que expone Value como T?.",
+   "collaborators": [
+    "StepResult: base",
+    "IStepResult<T>"
+   ],
+   "members": [
+    {
+     "name": "StepResult(IStep step, T? value = default)",
+     "startLine": 85,
+     "endLine": 85,
+     "does": "Constructor primario; pasa value a la base.",
+     "inputs": "step, value",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Value { get; internal protected set; } (new)",
+     "startLine": 88,
+     "endLine": 88,
+     "does": "Getter con cast (T?)base.Value; setter asigna a la base.",
+     "inputs": "base.Value",
+     "outputs": "T?",
+     "sideEffects": "ninguno",
+     "throws": "InvalidCastException si el valor almacenado no es T"
+    }
+   ]
+  },
+  {
+   "name": "SuccessStepResult",
+   "kind": "class",
+   "path": "Core/StepResults/SuccessStepResult.cs",
+   "startLine": 5,
+   "endLine": 11,
+   "purpose": "StepResult<string> de éxito con mensaje.",
+   "collaborators": [
+    "StepResult<string>"
+   ],
+   "members": [
+    {
+     "name": "SuccessStepResult(IStep step, string message)",
+     "startLine": 7,
+     "endLine": 10,
+     "does": "Asigna Value=message.",
+     "inputs": "step, message",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "SuspendStepResult",
+   "kind": "class",
+   "path": "Core/StepResults/SuspendStepResult.cs",
+   "startLine": 14,
+   "endLine": 22,
+   "purpose": "Resultado que pide suspender el pipeline para revisión humana, portando estado y datos a revisar.",
+   "collaborators": [
+    "StepResult<object>",
+    "IResume/Pipeline: consumo externo"
+   ],
+   "members": [
+    {
+     "name": "SuspendStepResult(IStep step, object? state = null)",
+     "startLine": 14,
+     "endLine": 14,
+     "does": "Constructor primario; state pasa a Value.",
+     "inputs": "step, state",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "DataToReview { get; init; }",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "Datos para el revisor.",
+     "inputs": "init",
+     "outputs": "object?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ActionStep<TIn>",
+   "kind": "class",
+   "path": "Core/Steps/ActionStep.cs",
+   "startLine": 12,
+   "endLine": 50,
+   "purpose": "Paso que ejecuta un delegado asíncrono sin resultado propio y devuelve un ActionResult de éxito o error.",
+   "collaborators": [
+    "TypedStep<TIn, ActionResult>: base",
+    "ActionResult: resultado",
+    "PipelineContext: pasado al delegado"
+   ],
+   "members": [
+    {
+     "name": "ActionStep(string name, Func<TIn,PipelineContext,int,ActionResult?,Task> action, bool fireAndForget = false)",
+     "startLine": 12,
+     "endLine": 15,
+     "does": "Constructor primario con delegado y modo.",
+     "inputs": "name, action, fireAndForget",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(TIn input, PipelineContext context, int Attempt, ActionResult? LastStepResult, CancellationToken ct)",
+     "startLine": 17,
+     "endLine": 47,
+     "does": "En fireAndForget lanza el delegado en Task.Run (intento 1, sin último resultado) y devuelve éxito; en modo normal espera el delegado y convierte cualquier excepción en ActionResult de error.",
+     "inputs": "input, context, attempt, último resultado",
+     "outputs": "ActionResult",
+     "sideEffects": "Ejecuta el delegado (efectos laterales), logging de errores, Task.Run en segundo plano",
+     "throws": "ninguna (todas capturadas)"
+    }
+   ]
+  },
+  {
+   "name": "BreakStepResult",
+   "kind": "class",
+   "path": "Core/Steps/BreakStep.cs",
+   "startLine": 10,
+   "endLine": 15,
+   "purpose": "Marca de salida de bucle que porta el valor a propagar.",
+   "collaborators": [
+    "LoopStep: lo detecta y desenvuelve",
+    "StepResult<object>"
+   ],
+   "members": [
+    {
+     "name": "BreakStepResult(IStep step, object? value = null)",
+     "startLine": 12,
+     "endLine": 14,
+     "does": "Constructor que pasa el valor a la base.",
+     "inputs": "step, value",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "BreakStep",
+   "kind": "class",
+   "path": "Core/Steps/BreakStep.cs",
+   "startLine": 22,
+   "endLine": 37,
+   "purpose": "Paso que devuelve un BreakStepResult con el Value de la entrada.",
+   "collaborators": [
+    "StepBase",
+    "BreakStepResult",
+    "LoopStep: consumidor"
+   ],
+   "members": [
+    {
+     "name": "BreakStep()",
+     "startLine": 24,
+     "endLine": 26,
+     "does": "Constructor sin parámetros (nombre \"Break\"); para YAML.",
+     "inputs": "ninguno",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BreakStep(string name = \"Break\")",
+     "startLine": 28,
+     "endLine": 30,
+     "does": "Constructor con nombre opcional.",
+     "inputs": "name",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken ct)",
+     "startLine": 32,
+     "endLine": 36,
+     "does": "Devuelve BreakStepResult(this, input.Value).",
+     "inputs": "input",
+     "outputs": "Task<IStepResult>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "DelegatedStep<TIn,TOut>",
+   "kind": "class",
+   "path": "Core/Steps/DelegatedStep.cs",
+   "startLine": 12,
+   "endLine": 35,
+   "purpose": "Paso cuyo cuerpo es un Func recibido; encapsula errores en resultado de error.",
+   "collaborators": [
+    "TypedStep<TIn,TOut>",
+    "TypedStep.CreateErrorResult"
+   ],
+   "members": [
+    {
+     "name": "DelegatedStep(string name, Func<...> action)",
+     "startLine": 12,
+     "endLine": 15,
+     "does": "Constructor primario con el delegado.",
+     "inputs": "name, action",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(TIn input, PipelineContext context, int attempt, TOut? lastStepResult, CancellationToken ct)",
+     "startLine": 17,
+     "endLine": 32,
+     "does": "Invoca action(this, input, context, attempt, lastStepResult); en excepción devuelve CreateErrorResult con el mensaje.",
+     "inputs": "input, context, attempt, último resultado",
+     "outputs": "TOut",
+     "sideEffects": "Las del delegado",
+     "throws": "ninguna (todas capturadas, incluida cancelación)"
+    }
+   ]
+  },
+  {
+   "name": "EmptyStep",
+   "kind": "class",
+   "path": "Core/Steps/EmptyStep.cs",
+   "startLine": 9,
+   "endLine": 42,
+   "purpose": "Paso marcador: no transforma nada.",
+   "collaborators": [
+    "IStep",
+    "IResume (Resume => null)"
+   ],
+   "members": [
+    {
+     "name": "Name { get; }",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Nombre.",
+     "inputs": "ctor",
+     "outputs": "string",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "InputType",
+     "startLine": 13,
+     "endLine": 13,
+     "does": "typeof(void).",
+     "inputs": "ninguno",
+     "outputs": "Type",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "OutputType",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "typeof(void).",
+     "inputs": "ninguno",
+     "outputs": "Type",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Timeout",
+     "startLine": 17,
+     "endLine": 17,
+     "does": "null.",
+     "inputs": "ninguno",
+     "outputs": "TimeSpan?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "MaxRetries",
+     "startLine": 19,
+     "endLine": 19,
+     "does": "1.",
+     "inputs": "ninguno",
+     "outputs": "int",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Resume",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "null.",
+     "inputs": "ninguno",
+     "outputs": "IResume?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EmptyStep()",
+     "startLine": 26,
+     "endLine": 26,
+     "does": "Nombre \"EmptyStep\".",
+     "inputs": "ninguno",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EmptyStep(string name)",
+     "startLine": 31,
+     "endLine": 31,
+     "does": "Nombre personalizado.",
+     "inputs": "name",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "FinalizeAsync(...)",
+     "startLine": 33,
+     "endLine": 34,
+     "does": "No hace nada.",
+     "inputs": "result, context, ct",
+     "outputs": "Task completada",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(...)",
+     "startLine": 36,
+     "endLine": 37,
+     "does": "Devuelve la entrada sin cambios.",
+     "inputs": "input",
+     "outputs": "Task<IStepResult> con input",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ValidateAsync(...)",
+     "startLine": 39,
+     "endLine": 40,
+     "does": "Siempre (true, null).",
+     "inputs": "result",
+     "outputs": "Task<(true, null)>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "GroupStep",
+   "kind": "class",
+   "path": "Core/Steps/GroupStep.cs",
+   "startLine": 13,
+   "endLine": 51,
+   "purpose": "Agrupador secuencial: delega la ejecución al Pipeline añadiendo sus pasos a input.NextSteps.",
+   "collaborators": [
+    "StepBase",
+    "Pipeline: ejecuta NextSteps",
+    "StepValidation: recorre Steps"
+   ],
+   "members": [
+    {
+     "name": "GroupStep()",
+     "startLine": 18,
+     "endLine": 21,
+     "does": "Constructor para YAML; tipos IStepResult, MaxRetries=1.",
+     "inputs": "ninguno",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "GroupStep(string name, IReadOnlyList<IStep> steps)",
+     "startLine": 24,
+     "endLine": 31,
+     "does": "Deriva InputType del primer paso y OutputType del último; copia los pasos; MaxRetries=1.",
+     "inputs": "name, steps",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "NullReferenceException si steps es null (se accede a steps.Count en el inicializador base antes de ThrowIfNull)"
+    },
+    {
+     "name": "Steps { get; init; }",
+     "startLine": 36,
+     "endLine": 40,
+     "does": "Lista de pasos; init reemplaza la lista interna (null -> vacía).",
+     "inputs": "init",
+     "outputs": "List<IStep>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken ct)",
+     "startLine": 43,
+     "endLine": 50,
+     "does": "Vacía input.NextSteps, añade los pasos del grupo y devuelve la propia entrada.",
+     "inputs": "input",
+     "outputs": "input mutado",
+     "sideEffects": "Muta input.NextSteps",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "GroupStep<TIn>",
+   "kind": "class",
+   "path": "Core/Steps/GroupStep.cs",
+   "startLine": 57,
+   "endLine": 73,
+   "purpose": "Variante tipada: fija InputType a TIn y comprueba compatibilidad con el primer paso.",
+   "collaborators": [
+    "GroupStep"
+   ],
+   "members": [
+    {
+     "name": "GroupStep(string name, IReadOnlyList<IStep> steps)",
+     "startLine": 60,
+     "endLine": 69,
+     "does": "Llama a la base, fija InputType y valida el tipo del primer paso.",
+     "inputs": "name, steps",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ArgumentException si el primer paso no acepta TIn"
+    },
+    {
+     "name": "_steps (propiedad privada)",
+     "startLine": 72,
+     "endLine": 72,
+     "does": "Alias a base.Steps.",
+     "inputs": "base.Steps",
+     "outputs": "List<IStep>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "LoopStep",
+   "kind": "class",
+   "path": "Core/Steps/LoopStep.cs",
+   "startLine": 13,
+   "endLine": 97,
+   "purpose": "Bucle de pasos con tope de iteraciones y salida por BreakStepResult, error o suspensión.",
+   "collaborators": [
+    "PipelineContext.ExecuteStepsWithNextStepsAsync/AddPathPart/RemovePathPart/SendEventAsync",
+    "BreakStepResult",
+    "LoopExhaustedEvent"
+   ],
+   "members": [
+    {
+     "name": "LoopStep()",
+     "startLine": 17,
+     "endLine": 20,
+     "does": "Constructor para YAML.",
+     "inputs": "ninguno",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "LoopStep(string name, IReadOnlyList<IStep> steps, int maxIterations = 50)",
+     "startLine": 22,
+     "endLine": 29,
+     "does": "Copia los pasos y fija MaxIterations; sin validar su valor.",
+     "inputs": "name, steps, maxIterations",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ArgumentNullException si steps es null"
+    },
+    {
+     "name": "Steps { get; init; }",
+     "startLine": 34,
+     "endLine": 38,
+     "does": "Pasos por iteración.",
+     "inputs": "init",
+     "outputs": "List<IStep>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "MaxIterations { get; init; }",
+     "startLine": 43,
+     "endLine": 43,
+     "does": "Tope de iteraciones (50).",
+     "inputs": "init",
+     "outputs": "int",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "OutputIterationToMetadata { get; init; }",
+     "startLine": 49,
+     "endLine": 49,
+     "does": "Clave de Metadata donde se escribe la iteración 1-based.",
+     "inputs": "init",
+     "outputs": "string?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken ct)",
+     "startLine": 51,
+     "endLine": 96,
+     "does": "Itera: escribe contador en Metadata, añade ruta Iter_i, ejecuta los pasos, quita la ruta; devuelve el resultado ante error/suspensión, desenvuelve BreakStepResult en StepResult<object>, y al agotar emite LoopExhaustedEvent y devuelve el último resultado.",
+     "inputs": "input, context",
+     "outputs": "IStepResult",
+     "sideEffects": "Escribe context.Metadata, modifica la ruta del contexto, emite evento sin esperar",
+     "throws": "las del contexto/pasos hijos"
+    }
+   ]
+  },
+  {
+   "name": "ParallelStep",
+   "kind": "class",
+   "path": "Core/Steps/ParallelStep.cs",
+   "startLine": 17,
+   "endLine": 152,
+   "purpose": "Ejecución concurrente de ramas con contexto clonado y agregación de resultados/errores.",
+   "collaborators": [
+    "Parallel.ForEachAsync",
+    "PipelineContext.CloneForBranch/ExecuteStepsWithNextStepsAsync",
+    "BranchStartedEvent/BranchCompletedEvent",
+    "ParallelResult",
+    "ErrorStepResult"
+   ],
+   "members": [
+    {
+     "name": "ParallelStep()",
+     "startLine": 22,
+     "endLine": 25,
+     "does": "Constructor para YAML.",
+     "inputs": "ninguno",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ParallelStep(string name, params IStep[] branches)",
+     "startLine": 28,
+     "endLine": 33,
+     "does": "Copia las ramas.",
+     "inputs": "name, branches",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Branches { get; init; }",
+     "startLine": 38,
+     "endLine": 42,
+     "does": "Lista de ramas.",
+     "inputs": "init",
+     "outputs": "List<IStep>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "MaxDegreeOfParallelism { get; init; }",
+     "startLine": 50,
+     "endLine": 50,
+     "does": "Límite; <=0 usa ProcessorCount.",
+     "inputs": "init",
+     "outputs": "int",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CreateParallelOptions(CancellationToken ct)",
+     "startLine": 56,
+     "endLine": 61,
+     "does": "Construye ParallelOptions con scheduler por defecto y el grado indicado o ProcessorCount.",
+     "inputs": "ct",
+     "outputs": "ParallelOptions",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken ct)",
+     "startLine": 64,
+     "endLine": 151,
+     "does": "Por rama: clona contexto, emite evento de inicio, ejecuta el paso sobre el clon, registra el resultado, anota errores y emite evento de fin; las excepciones se convierten en ErrorStepResult. Al final fija result.Error con los mensajes unidos.",
+     "inputs": "input, context",
+     "outputs": "ParallelResult",
+     "sideEffects": "Eventos, logging, ejecución concurrente de pasos",
+     "throws": "Puede propagar excepciones si falla el envío de eventos dentro del catch"
+    }
+   ]
+  },
+  {
+   "name": "ParallelStep<TIn>",
+   "kind": "class",
+   "path": "Core/Steps/ParallelStep.cs",
+   "startLine": 158,
+   "endLine": 166,
+   "purpose": "Variante tipada que fija InputType a TIn (TIn : StepResult).",
+   "collaborators": [
+    "ParallelStep"
+   ],
+   "members": [
+    {
+     "name": "ParallelStep(string name, params IStep[] branches)",
+     "startLine": 161,
+     "endLine": 165,
+     "does": "Llama a la base y fija InputType.",
+     "inputs": "name, branches",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepBase",
+   "kind": "class",
+   "path": "Core/Steps/StepBase.cs",
+   "startLine": 18,
+   "endLine": 245,
+   "purpose": "Base de todos los pasos con plantilla de hooks; encapsula creación de resultados mediante StepResultFactory.",
+   "collaborators": [
+    "StepResultFactory: crea resultados",
+    "IStepValidator: validadores",
+    "IEnrichable (Enrichable): delegado de hooks",
+    "PipelineContext.ServiceProvider: logger",
+    "StepError"
+   ],
+   "members": [
+    {
+     "name": "StepBase(string name, Type inputType, Type outputType)",
+     "startLine": 18,
+     "endLine": 25,
+     "does": "Constructor primario; prepara el Lazy del activator de resultado con el tipo de salida normalizado.",
+     "inputs": "name, tipos",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Name { get; protected set; }",
+     "startLine": 26,
+     "endLine": 26,
+     "does": "Nombre.",
+     "inputs": "ctor",
+     "outputs": "string",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "MaxRetries { get; set; }",
+     "startLine": 27,
+     "endLine": 27,
+     "does": "Reintentos (3).",
+     "inputs": "set",
+     "outputs": "int",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Resume",
+     "startLine": 28,
+     "endLine": 28,
+     "does": "this por defecto.",
+     "inputs": "ninguno",
+     "outputs": "IResume?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "InputType { get; protected internal set; }",
+     "startLine": 29,
+     "endLine": 36,
+     "does": "Tipo de entrada; el setter rechaza null.",
+     "inputs": "set",
+     "outputs": "Type",
+     "sideEffects": "ninguno",
+     "throws": "ArgumentNullException"
+    },
+    {
+     "name": "OutputType { get; protected internal set; }",
+     "startLine": 37,
+     "endLine": 48,
+     "does": "Tipo de salida; si cambia reemplaza el Lazy del activator.",
+     "inputs": "set",
+     "outputs": "Type",
+     "sideEffects": "Reemplaza _activatorInfo",
+     "throws": "ArgumentNullException"
+    },
+    {
+     "name": "Logger { get; }",
+     "startLine": 53,
+     "endLine": 53,
+     "does": "Devuelve _logger asignando NullLogger si aún es null.",
+     "inputs": "_logger",
+     "outputs": "ILogger",
+     "sideEffects": "Fija _logger a NullLogger si no estaba inicializado",
+     "throws": "ninguno"
+    },
+    {
+     "name": "InitializeLogger(PipelineContext context)",
+     "startLine": 59,
+     "endLine": 64,
+     "does": "Crea el logger desde ILoggerFactory del ServiceProvider solo si _logger es null.",
+     "inputs": "context.ServiceProvider",
+     "outputs": "void",
+     "sideEffects": "Asigna _logger",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Timeout { get; set; }",
+     "startLine": 69,
+     "endLine": 69,
+     "does": "Timeout opcional.",
+     "inputs": "set",
+     "outputs": "TimeSpan?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Validators",
+     "startLine": 72,
+     "endLine": 72,
+     "does": "Vista de los validadores.",
+     "inputs": "_validators",
+     "outputs": "IReadOnlyList<IStepValidator>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AddValidator(IStepValidator validator)",
+     "startLine": 78,
+     "endLine": 82,
+     "does": "Añade un validador.",
+     "inputs": "validator",
+     "outputs": "void",
+     "sideEffects": "Muta _validators",
+     "throws": "ArgumentNullException"
+    },
+    {
+     "name": "InputSchema / OutputSchema",
+     "startLine": 91,
+     "endLine": 96,
+     "does": "Nombres de esquema solo para YAML.",
+     "inputs": "init",
+     "outputs": "string?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Enrichable { get; set; }",
+     "startLine": 99,
+     "endLine": 99,
+     "does": "Delegado opcional de enriquecimiento.",
+     "inputs": "set",
+     "outputs": "IEnrichable?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ValueType / Schema",
+     "startLine": 101,
+     "endLine": 102,
+     "does": "Tipo de valor y esquema JSON del activator.",
+     "inputs": "_activatorInfo",
+     "outputs": "Type / JsonSchema?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CreateResult(object? value, IStepError? error = null)",
+     "startLine": 103,
+     "endLine": 106,
+     "does": "Crea el resultado vía activator.",
+     "inputs": "value, error",
+     "outputs": "IStepResult",
+     "sideEffects": "ninguno",
+     "throws": "Excepciones de la fábrica/cast"
+    },
+    {
+     "name": "CreateErrorResult(string message, Exception? exception = null)",
+     "startLine": 108,
+     "endLine": 115,
+     "does": "CreateResult(null, StepError).",
+     "inputs": "message, exception",
+     "outputs": "IStepResult",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "NormalizeResultType(Type resultType)",
+     "startLine": 117,
+     "endLine": 122,
+     "does": "Sustituye interfaces/abstractos por StepResult<object?>.",
+     "inputs": "resultType",
+     "outputs": "Type",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync (abstracto)",
+     "startLine": 129,
+     "endLine": 129,
+     "does": "Cuerpo del paso.",
+     "inputs": "input, context, attempt, lastStepResult, ct",
+     "outputs": "Task<IStepResult>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EnrichActivityBefore(...)",
+     "startLine": 135,
+     "endLine": 138,
+     "does": "Delega en Enrichable.",
+     "inputs": "activity, input, context",
+     "outputs": "void",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EnrichActivityAfter(...)",
+     "startLine": 144,
+     "endLine": 147,
+     "does": "Delega en Enrichable.",
+     "inputs": "activity, result, context",
+     "outputs": "void",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EnrichStartedEvent(...)",
+     "startLine": 153,
+     "endLine": 156,
+     "does": "Delegado o baseEvent.",
+     "inputs": "baseEvent, input, context",
+     "outputs": "StepStartedEvent",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EnrichCompletedEvent(...)",
+     "startLine": 162,
+     "endLine": 165,
+     "does": "Delegado o baseEvent.",
+     "inputs": "baseEvent, result, context",
+     "outputs": "IStepCompletedEvent",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "FinalizeAsync(...)",
+     "startLine": 172,
+     "endLine": 175,
+     "does": "Hook vacío.",
+     "inputs": "result, context, ct",
+     "outputs": "Task completada",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Validate(IStepResult result, PipelineContext context, CancellationToken ct)",
+     "startLine": 182,
+     "endLine": 193,
+     "does": "Ejecuta los validadores en orden y corta en el primer fallo.",
+     "inputs": "result, context",
+     "outputs": "(bool, string?)",
+     "sideEffects": "Las de los validadores",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Implementaciones explícitas IEnrichable/IStep",
+     "startLine": 196,
+     "endLine": 218,
+     "does": "Reenvían a los miembros protegidos; IStep.ExecuteAsync llama antes a InitializeLogger.",
+     "inputs": "los de cada método",
+     "outputs": "los de cada método",
+     "sideEffects": "Inicializa logger",
+     "throws": "ninguno"
+    },
+    {
+     "name": "IResume.SaveStateAsync / RestoreStateAsync (explícitas)",
+     "startLine": 220,
+     "endLine": 222,
+     "does": "Reenvían a los hooks protegidos.",
+     "inputs": "callingStep/step, state, hitlResponse",
+     "outputs": "Task",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "SaveStateAsync()",
+     "startLine": 228,
+     "endLine": 228,
+     "does": "Devuelve null por defecto.",
+     "inputs": "ninguno",
+     "outputs": "Task<object?>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "RestoreStateAsync(object? state, object? hitlResponse)",
+     "startLine": 234,
+     "endLine": 234,
+     "does": "No hace nada por defecto.",
+     "inputs": "state, hitlResponse",
+     "outputs": "Task completada",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)",
+     "startLine": 236,
+     "endLine": 239,
+     "does": "Devuelve false.",
+     "inputs": "error, context, attempt",
+     "outputs": "bool",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "IFallbackable.SwitchToNextFallback (explícita)",
+     "startLine": 241,
+     "endLine": 244,
+     "does": "Reenvía al método protegido.",
+     "inputs": "error, context, attempt",
+     "outputs": "bool",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "TypedStep<TIn,TOut>",
+   "kind": "class",
+   "path": "Core/Steps/TypedStep.cs",
+   "startLine": 10,
+   "endLine": 57,
+   "purpose": "Adaptador tipado sobre StepBase: ofrece ExecuteAsync con TIn/TOut y convierte la entrada cuando no coincide.",
+   "collaborators": [
+    "StepResultFactory.GetStepActivatorInfo/CreateStepResult",
+    "StepError",
+    "StepBase"
+   ],
+   "members": [
+    {
+     "name": "_activatorInfo (campo)",
+     "startLine": 14,
+     "endLine": 15,
+     "does": "Segundo Lazy del activator para TOut, distinto del de la base.",
+     "inputs": "typeof(TOut)",
+     "outputs": "StepActivatorInfo",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CreateResult(object? value = null, IStepError? error = null) (new)",
+     "startLine": 17,
+     "endLine": 20,
+     "does": "Crea TOut con el activator propio.",
+     "inputs": "value, error",
+     "outputs": "TOut",
+     "sideEffects": "ninguno",
+     "throws": "InvalidCastException si no es TOut"
+    },
+    {
+     "name": "CreateErrorResult(string message, Exception? exception = null) (new)",
+     "startLine": 22,
+     "endLine": 29,
+     "does": "CreateResult con StepError.",
+     "inputs": "message, exception",
+     "outputs": "TOut",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(TIn, PipelineContext, int, TOut?, ct) (abstracto)",
+     "startLine": 31,
+     "endLine": 31,
+     "does": "Cuerpo tipado.",
+     "inputs": "ver firma",
+     "outputs": "Task<TOut>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "IStep<TIn,TOut>.ExecuteAsync (explícita)",
+     "startLine": 33,
+     "endLine": 34,
+     "does": "Reenvía al abstracto.",
+     "inputs": "ver firma",
+     "outputs": "Task<TOut>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken ct)",
+     "startLine": 36,
+     "endLine": 56,
+     "does": "Si la entrada es asignable a TIn llama directamente; si no, intenta convertirla con StepResultFactory.CreateStepResult y ejecuta; cualquier excepción del bloque try se convierte en InvalidOperationException de tipo de entrada incorrecto.",
+     "inputs": "input, lastStepResult (cast a TOut?)",
+     "outputs": "IStepResult",
+     "sideEffects": "ninguno",
+     "throws": "InvalidOperationException; InvalidCastException por (TOut?)lastStepResult"
+    }
+   ]
+  },
+  {
+   "name": "InputMessage",
+   "kind": "class",
+   "path": "LLM/Results/InputMessage.cs",
+   "startLine": 4,
+   "endLine": 8,
+   "purpose": "StepResult<string> vacío en el espacio de nombres global.",
+   "collaborators": [
+    "StepResult<string>"
+   ],
+   "members": [
+    {
+     "name": "InputMessage(IStep step)",
+     "startLine": 4,
+     "endLine": 4,
+     "does": "Constructor primario.",
+     "inputs": "step",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "Intention",
+   "kind": "class",
+   "path": "LLM/Results/Intention.cs",
+   "startLine": 9,
+   "endLine": 25,
+   "purpose": "Resultado del análisis de intención (opción, motivo, feedback, prompt detallado, información extra).",
+   "collaborators": [
+    "UserFeedbackInfo",
+    "IntentionAnalyzerStep (option): consumidor"
+   ],
+   "members": [
+    {
+     "name": "SelectedOption/SelectionReason/UserFeedback/DetailedPrompt/ExtraInformation",
+     "startLine": 11,
+     "endLine": 24,
+     "does": "Propiedades init con valores por defecto.",
+     "inputs": "init",
+     "outputs": "valores",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "UserFeedbackInfo",
+   "kind": "class",
+   "path": "LLM/Results/Intention.cs",
+   "startLine": 28,
+   "endLine": 38,
+   "purpose": "Mensaje al usuario, indicador NeedMoreInfo, preguntas y permiso de texto libre.",
+   "collaborators": [
+    "Question"
+   ],
+   "members": [
+    {
+     "name": "Message/NeedMoreInfo/Questions/AllowFreeText",
+     "startLine": 31,
+     "endLine": 37,
+     "does": "Propiedades init.",
+     "inputs": "init",
+     "outputs": "valores",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "UserChoiceChip",
+   "kind": "class",
+   "path": "LLM/Results/Intention.cs",
+   "startLine": 41,
+   "endLine": 51,
+   "purpose": "Opción seleccionable (Id, Label, Description).",
+   "collaborators": [
+    "Question.ChoiceChips"
+   ],
+   "members": [
+    {
+     "name": "Id/Label/Description",
+     "startLine": 44,
+     "endLine": 50,
+     "does": "Propiedades init.",
+     "inputs": "init",
+     "outputs": "valores",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "Question",
+   "kind": "class",
+   "path": "LLM/Results/Intention.cs",
+   "startLine": 53,
+   "endLine": 61,
+   "purpose": "Pregunta de aclaración con indicador de selección múltiple y chips.",
+   "collaborators": [
+    "UserChoiceChip"
+   ],
+   "members": [
+    {
+     "name": "ClarificationQuestion/Multiple/ChoiceChips",
+     "startLine": 56,
+     "endLine": 60,
+     "does": "Propiedades init.",
+     "inputs": "init",
+     "outputs": "valores",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "LlmStringStepResult",
+   "kind": "class",
+   "path": "LLM/Results/LlmStringStepResult.cs",
+   "startLine": 11,
+   "endLine": 29,
+   "purpose": "Resultado string de un paso LLM con ToolCalls.",
+   "collaborators": [
+    "LlmStepResult<string>",
+    "ToolCall",
+    "RetryMiddleware: llama ValidateAsync"
+   ],
+   "members": [
+    {
+     "name": "LlmStringStepResult(IStep step)",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Constructor primario.",
+     "inputs": "step",
+     "outputs": "instancia",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Content { get; init; }",
+     "startLine": 13,
+     "endLine": 13,
+     "does": "Alias de Value.",
+     "inputs": "Value",
+     "outputs": "string?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ToolCalls { get; init; }",
+     "startLine": 14,
+     "endLine": 14,
+     "does": "Llamadas a herramientas.",
+     "inputs": "init",
+     "outputs": "List<ToolCall>?",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ValidateAsync(PipelineContext context)",
+     "startLine": 16,
+     "endLine": 28,
+     "does": "Válido si hay contenido no vacío o ToolCalls no vacío; si no, error 'Response must have either Content or ToolCalls'.",
+     "inputs": "Content, ToolCalls",
+     "outputs": "Task<(bool, string?)>",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "EventEnrichmentResult<TEvent>",
+   "kind": "struct",
+   "path": "Observability/EventEnrichmentResult.cs",
+   "startLine": 7,
+   "endLine": 10,
+   "purpose": "Record struct readonly con evento y flag Suppress; TEvent : IProgressEvent.",
+   "collaborators": [
+    "IProgressEvent"
+   ],
+   "members": [
+    {
+     "name": "EventEnrichmentResult(TEvent Event, bool Suppress)",
+     "startLine": 7,
+     "endLine": 10,
+     "does": "Constructor posicional del record struct.",
+     "inputs": "Event, Suppress",
+     "outputs": "valor",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "localId": "F1",
+   "kind": "bug",
+   "category": "excepciones-enmascaradas",
+   "title": "TypedStep enmascara cualquier excepción del paso como 'tipo de entrada incorrecto'",
+   "rationale": "En la rama de conversión de entrada, la llamada a ExecuteAsync(newInput, ...) está dentro del mismo try que la conversión, y el catch sin tipo lanza InvalidOperationException con un mensaje de tipo esperado/recibido sin InnerException. Toda excepción real del paso (lógica, E/S, cancelación) cuando la entrada no es del tipo TIn se reporta como error de tipo y se pierde la causa original.",
+   "anchor": {
+    "path": "Core/Steps/TypedStep.cs",
+    "startLine": 45,
+    "endLine": 54,
+    "quote": "return await ExecuteAsync(newInput, context, attempt, (TOut?)lastStepResult, cancellationToken);"
+   },
+   "symbol": "TypedStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Un paso tipado recibe un resultado de otro tipo (p. ej. tras un paso no tipado o YAML) y su cuerpo lanza.",
+   "impact": 3,
+   "likelihood": 3,
+   "confidence": 0.9
+  },
+  {
+   "localId": "F2",
+   "kind": "bug",
+   "category": "cast-invalido",
+   "title": "Cast (TOut?)lastStepResult puede fallar cuando el último resultado es un error genérico",
+   "rationale": "ExecuteAsync castea lastStepResult (IStepResult?) a TOut? sin comprobar tipo. Si el reintento recibe como último resultado un ErrorStepResult o un resultado de otro tipo (RetryMiddleware crea ErrorStepResult.FromException/FromMessage), un TOut concreto como ActionResult produce InvalidCastException. No se ve en el lote qué pasa RetryMiddleware como lastStepResult.",
+   "anchor": {
+    "path": "Core/Steps/TypedStep.cs",
+    "startLine": 41,
+    "endLine": 41,
+    "quote": "return await ExecuteAsync((TIn)input, context, attempt, (TOut?)lastStepResult, cancellationToken);"
+   },
+   "instances": [
+    {
+     "path": "Core/Steps/TypedStep.cs",
+     "startLine": 48,
+     "endLine": 48,
+     "quote": "return await ExecuteAsync(newInput, context, attempt, (TOut?)lastStepResult, cancellationToken);"
+    }
+   ],
+   "symbol": "TypedStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Reintento tras fallo en un TypedStep con TOut concreto, si el middleware pasa el error genérico como último resultado.",
+   "impact": 4,
+   "likelihood": 2,
+   "confidence": 0.4
+  },
+  {
+   "localId": "F3",
+   "kind": "bug",
+   "category": "reflexion-indexador",
+   "title": "StepResult.GetParameters falla con ParallelResult por su indexador público",
+   "rationale": "GetParameters recorre todas las propiedades públicas de instancia y llama prop.GetValue(this) sin índices, excluyendo solo Value y HasError. ParallelResult declara el indexador `this[string]`, que reflexión expone como propiedad 'Item' con parámetro de índice; GetValue(this) sin argumentos lanza TargetParameterCountException. ParallelResult no sobrescribe GetParameters.",
+   "anchor": {
+    "path": "Core/StepResults/StepResult.cs",
+    "startLine": 68,
+    "endLine": 68,
+    "quote": "object? value = prop.GetValue(this);"
+   },
+   "instances": [
+    {
+     "path": "Core/StepResults/ParallelResult.cs",
+     "startLine": 51,
+     "endLine": 52,
+     "quote": "public object? this[string stepName]"
+    }
+   ],
+   "symbol": "StepResult.GetParameters",
+   "seedRef": null,
+   "activationPath": "Renderizar plantillas con parámetros de un ParallelResult, si el consumidor invoca GetParameters sobre él.",
+   "impact": 4,
+   "likelihood": 3,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F4",
+   "kind": "bug",
+   "category": "suspension-perdida",
+   "title": "ParallelStep no propaga la suspensión (HITL) de una rama",
+   "rationale": "Si una rama devuelve SuspendInfo != null, solo se refleja en Success=false del evento. No se añade mensaje a errorMessages ni se copia SuspendInfo al ParallelResult; el resultado devuelto no tiene error ni SuspendInfo, por lo que el pipeline lo ve como completado y la petición humana se pierde, aunque LoopStep sí hace bubble-up de SuspendInfo.",
+   "anchor": {
+    "path": "Core/Steps/ParallelStep.cs",
+    "startLine": 114,
+    "endLine": 114,
+    "quote": "Success = !stepResult.HasError && stepResult.SuspendInfo == null,"
+   },
+   "instances": [
+    {
+     "path": "Core/Steps/ParallelStep.cs",
+     "startLine": 145,
+     "endLine": 148,
+     "quote": "if (!errorMessages.IsEmpty)"
+    }
+   ],
+   "symbol": "ParallelStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Una rama contiene un paso que suspende para intervención humana.",
+   "impact": 4,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F5",
+   "kind": "bug",
+   "category": "cancelacion-tragada",
+   "title": "Catch genérico convierte la cancelación en resultado de error",
+   "rationale": "Los catch (Exception) capturan también OperationCanceledException y la transforman en un resultado de error en lugar de propagar la cancelación. En ParallelStep, además, el catch reenvía BranchCompletedEvent con el token ct ya cancelado, lo que puede lanzar de nuevo desde el catch y escapar de Parallel.ForEachAsync.",
+   "anchor": {
+    "path": "Core/Steps/ActionStep.cs",
+    "startLine": 41,
+    "endLine": 45,
+    "quote": "return ActionResult.FromExceptionAction(this, ex, $\"The action {Name} failed with error: {ex.Message}\");"
+   },
+   "instances": [
+    {
+     "path": "Core/Steps/DelegatedStep.cs",
+     "startLine": 28,
+     "endLine": 31,
+     "quote": "return CreateErrorResult($\"DelegatedStep {Name} failed with error: {ex.Message}\", ex);"
+    },
+    {
+     "path": "Core/Steps/ParallelStep.cs",
+     "startLine": 121,
+     "endLine": 139,
+     "quote": "result.AddResult(step.Name, ErrorStepResult.FromMessage(this, ex.Message));"
+    }
+   ],
+   "symbol": "ActionStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "El pipeline se cancela o expira un timeout mientras corre una acción, delegado o rama.",
+   "impact": 3,
+   "likelihood": 3,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F6",
+   "kind": "bug",
+   "category": "estado-compartido",
+   "title": "LoopStep no restaura la ruta del contexto si falla un paso hijo",
+   "rationale": "AddPathPart y RemovePathPart rodean la ejecución sin try/finally. Si ExecuteStepsWithNextStepsAsync lanza, la parte 'Loop/Iter_i' queda en el contexto compartido y contamina rutas y claves de caché posteriores.",
+   "anchor": {
+    "path": "Core/Steps/LoopStep.cs",
+    "startLine": 63,
+    "endLine": 68,
+    "quote": "context.AddPathPart($\"{Name}/Iter_{i}\");"
+   },
+   "symbol": "LoopStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Excepción no capturada en un paso interno del bucle.",
+   "impact": 3,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F7",
+   "kind": "bug",
+   "category": "fire-and-forget",
+   "title": "Evento LoopExhaustedEvent enviado sin esperar ni observar el resultado",
+   "rationale": "`_ = context.SendEventAsync(...)` descarta la tarea: errores del envío no se observan y el evento puede no haberse entregado cuando el paso devuelve; además se pasa el cancellationToken del paso.",
+   "anchor": {
+    "path": "Core/Steps/LoopStep.cs",
+    "startLine": 86,
+    "endLine": 93,
+    "quote": "_ = context.SendEventAsync(new AITaskAgent.Observability.Events.LoopExhaustedEvent"
+   },
+   "symbol": "LoopStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "El bucle agota MaxIterations.",
+   "impact": 2,
+   "likelihood": 3,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F8",
+   "kind": "bug",
+   "category": "fire-and-forget",
+   "title": "ActionStep fire-and-forget usa input y context fuera del ciclo de vida del paso",
+   "rationale": "En modo fireAndForget, Task.Run captura input y context y el paso devuelve éxito de inmediato. El delegado puede ejecutarse tras terminar el paso o el pipeline, sobre un contexto ya mutado; recibe siempre intento 1 y el token del paso solo evita el arranque, no interrumpe. Los fallos solo se registran y nunca llegan al resultado.",
+   "anchor": {
+    "path": "Core/Steps/ActionStep.cs",
+    "startLine": 21,
+    "endLine": 31,
+    "quote": "await action(input, context, 1, null);"
+   },
+   "symbol": "ActionStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "ActionStep creado con fireAndForget=true.",
+   "impact": 3,
+   "likelihood": 3,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F9",
+   "kind": "bug",
+   "category": "logger-null",
+   "title": "Logger asigna NullLogger de forma permanente si se lee antes de InitializeLogger",
+   "rationale": "La propiedad Logger usa `_logger ??= NullLogger.Instance`, y InitializeLogger solo asigna si _logger es null. Cualquier acceso a Logger antes de IStep.ExecuteAsync (hooks de enriquecimiento, constructor) fija NullLogger y el logger real nunca se inicializa. El comentario XML dice 'Initialized on first access from context's service provider', que el código no hace. Un mismo paso compartido entre pipelines conserva el logger del primero.",
+   "anchor": {
+    "path": "Core/Steps/StepBase.cs",
+    "startLine": 53,
+    "endLine": 53,
+    "quote": "protected ILogger Logger => _logger ??= Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;"
+   },
+   "instances": [
+    {
+     "path": "Core/Steps/StepBase.cs",
+     "startLine": 61,
+     "endLine": 63,
+     "quote": "_logger ??= context.ServiceProvider"
+    }
+   ],
+   "symbol": "StepBase.Logger",
+   "seedRef": null,
+   "activationPath": "Acceso a Logger antes de la primera ejecución del paso.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F10",
+   "kind": "bug",
+   "category": "scoped-incorrecto",
+   "title": "Factory.GetService para servicios scoped devuelve el primero registrado sin filtrar por nombre",
+   "rationale": "El predicado `s => keyName == name` compara dos cadenas externas (nombre de propiedad y argumento), no la clave del servicio, por lo que es casi siempre falso -> First lanza InvalidOperationException, o verdadero para todos y devuelve el primero. Además se resuelve desde el proveedor raíz.",
+   "anchor": {
+    "path": "Core/Abstractions/Factory.cs",
+    "startLine": 47,
+    "endLine": 47,
+    "quote": "ServiceLifetime.Scoped => sp.GetServices<T>().First(s => keyName == name),"
+   },
+   "symbol": "Factory.GetService",
+   "seedRef": null,
+   "activationPath": "Solicitar por nombre un servicio registrado como Scoped.",
+   "impact": 4,
+   "likelihood": 2,
+   "confidence": 0.9
+  },
+  {
+   "localId": "F11",
+   "kind": "bug",
+   "category": "cache-fragil",
+   "title": "BuildCache falla con claves duplicadas o vacías e instancia todos los servicios",
+   "rationale": "GetServiceName devuelve cadena vacía cuando no existe la propiedad; si dos servicios carecen de ella (o comparten nombre), ToDictionary lanza ArgumentException en la primera llamada. BuildCache instancia además todos los T registrados (incluso transient) solo para leer su nombre. `_cache ??= BuildCache()` no es seguro ante concurrencia (construcción duplicada). El lifetime se busca por ImplementationType y los registros por factoría caen en Transient.",
+   "anchor": {
+    "path": "Core/Abstractions/Factory.cs",
+    "startLine": 14,
+    "endLine": 15,
+    "quote": "return sp.GetServices<T>().ToDictionary("
+   },
+   "instances": [
+    {
+     "path": "Core/Abstractions/Factory.cs",
+     "startLine": 38,
+     "endLine": 38,
+     "quote": "_cache ??= BuildCache();"
+    }
+   ],
+   "symbol": "Factory.BuildCache",
+   "seedRef": null,
+   "activationPath": "Primera llamada a GetService con servicios sin propiedad clave o con nombres repetidos.",
+   "impact": 3,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F12",
+   "kind": "debt",
+   "category": "validacion-nombres",
+   "title": "ValidateUniqueStepNames no detecta duplicados entre subárboles hermanos",
+   "rationale": "Para cada contenedor se pasa una copia del diccionario y los nombres hijos no se propagan al nivel padre; un nombre repetido en dos grupos hermanos, o dentro de un grupo y luego en un paso posterior del padre, no se detecta. ParallelResult.AddResult usa TryAdd e ignora en silencio nombres de rama repetidos, por lo que un duplicado entre ramas pierde un resultado.",
+   "anchor": {
+    "path": "Core/Execution/StepValidation.cs",
+    "startLine": 22,
+    "endLine": 22,
+    "quote": "ValidateUniqueStepNames(groupStep.Steps, pipelineName, new Dictionary<string, string>(existingNames));"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/StepValidation.cs",
+     "startLine": 26,
+     "endLine": 26,
+     "quote": "ValidateUniqueStepNames(parallelStep.Branches, pipelineName, new Dictionary<string, string>(existingNames));"
+    },
+    {
+     "path": "Core/Execution/StepValidation.cs",
+     "startLine": 30,
+     "endLine": 30,
+     "quote": "ValidateUniqueStepNames(loopStep.Steps, pipelineName, new Dictionary<string, string>(existingNames));"
+    },
+    {
+     "path": "Core/StepResults/ParallelResult.cs",
+     "startLine": 30,
+     "endLine": 30,
+     "quote": "_results.TryAdd(stepName, result);"
+    }
+   ],
+   "symbol": "StepValidation.ValidateUniqueStepNames",
+   "seedRef": null,
+   "activationPath": "Pipeline con nombres repetidos en distintos contenedores.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.5
+  },
+  {
+   "localId": "F13",
+   "kind": "bug",
+   "category": "mutacion-entrada",
+   "title": "GroupStep modifica el NextSteps del resultado de entrada",
+   "rationale": "ExecuteAsync vacía input.NextSteps y añade los pasos del grupo sobre el propio objeto recibido, que es el resultado del paso anterior. Descarta cualquier NextSteps que éste hubiera fijado (enrutado) y deja efectos laterales en un objeto posiblemente reutilizado o cacheado.",
+   "anchor": {
+    "path": "Core/Steps/GroupStep.cs",
+    "startLine": 47,
+    "endLine": 49,
+    "quote": "input.NextSteps.Clear();"
+   },
+   "symbol": "GroupStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "GroupStep precedido por un paso con NextSteps dinámicos.",
+   "impact": 3,
+   "likelihood": 2,
+   "confidence": 0.5
+  },
+  {
+   "localId": "F14",
+   "kind": "debt",
+   "category": "validacion-argumentos",
+   "title": "GroupStep(name, steps) accede a steps antes de validar null",
+   "rationale": "El inicializador base usa steps.Count y steps[0] antes de ArgumentNullException.ThrowIfNull(steps) del cuerpo; con null se lanza NullReferenceException en lugar de ArgumentNullException.",
+   "anchor": {
+    "path": "Core/Steps/GroupStep.cs",
+    "startLine": 25,
+    "endLine": 26,
+    "quote": ": base(name, steps.Count > 0 ? steps[0].InputType : typeof(IStepResult),"
+   },
+   "symbol": "GroupStep.GroupStep",
+   "seedRef": null,
+   "activationPath": "Construcción programática con steps null.",
+   "impact": 1,
+   "likelihood": 1,
+   "confidence": 0.9
+  },
+  {
+   "localId": "F15",
+   "kind": "debt",
+   "category": "validacion-argumentos",
+   "title": "LoopStep no valida MaxIterations (<=0)",
+   "rationale": "Con maxIterations <= 0 el for no itera, se emite LoopExhaustedEvent con IterationsCompleted=MaxIterations y se devuelve la entrada sin ejecutar nada; no hay validación en ctor ni en init.",
+   "anchor": {
+    "path": "Core/Steps/LoopStep.cs",
+    "startLine": 55,
+    "endLine": 55,
+    "quote": "for (int i = 1; i <= MaxIterations; i++)"
+   },
+   "symbol": "LoopStep.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Configuración YAML o código con MaxIterations 0 o negativo.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F16",
+   "kind": "debt",
+   "category": "duplicacion",
+   "title": "TypedStep duplica el Lazy del activator y oculta con `new` los métodos de StepBase",
+   "rationale": "TypedStep declara su propio _activatorInfo para typeof(TOut) y oculta CreateResult/CreateErrorResult con `new`; una llamada vía StepBase usa otro activator (con normalización) y devuelve IStepResult, con comportamiento distinto según el tipo estático.",
+   "anchor": {
+    "path": "Core/Steps/TypedStep.cs",
+    "startLine": 14,
+    "endLine": 15,
+    "quote": "private readonly Lazy<StepResultFactory.StepActivatorInfo> _activatorInfo ="
+   },
+   "instances": [
+    {
+     "path": "Core/Steps/TypedStep.cs",
+     "startLine": 17,
+     "endLine": 17,
+     "quote": "new protected TOut CreateResult(object? value = null, IStepError? error = null)"
+    }
+   ],
+   "symbol": "TypedStep",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.5
+  },
+  {
+   "localId": "F17",
+   "kind": "debt",
+   "category": "constructores-redundantes",
+   "title": "BreakStep define dos constructores equivalentes",
+   "rationale": "BreakStep() y BreakStep(string name = \"Break\") hacen lo mismo; la llamada sin argumentos resuelve al primero y el segundo con valor por defecto es inalcanzable por esa vía.",
+   "anchor": {
+    "path": "Core/Steps/BreakStep.cs",
+    "startLine": 28,
+    "endLine": 28,
+    "quote": "public BreakStep(string name = \"Break\") : base(name, typeof(IStepResult), typeof(BreakStepResult))"
+   },
+   "symbol": "BreakStep.BreakStep",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 1,
+   "likelihood": 1,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F18",
+   "kind": "debt",
+   "category": "comentario-contradice",
+   "title": "Comentario XML de ActionResult.FromErrorMessage dice ErrorStepResult",
+   "rationale": "La documentación afirma que crea un ErrorStepResult, pero el método devuelve un ActionResult.",
+   "anchor": {
+    "path": "Core/StepResults/ActionResult.cs",
+    "startLine": 23,
+    "endLine": 24,
+    "quote": "/// <summary>Crea un ErrorStepResult desde un mensaje.</summary>"
+   },
+   "symbol": "ActionResult.FromErrorMessage",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 1,
+   "likelihood": 1,
+   "confidence": 0.9
+  },
+  {
+   "localId": "F19",
+   "kind": "debt",
+   "category": "rendimiento-reflexion",
+   "title": "GetParameters reflexiona en cada llamada y expone todas las propiedades públicas",
+   "rationale": "No hay caché de PropertyInfo por tipo; cada renderizado recorre GetProperties y evalúa getters (Error, SuspendInfo, NextSteps, StepName...), pudiendo exponer datos internos a plantillas y evaluando getters con coste o efectos.",
+   "anchor": {
+    "path": "Core/StepResults/StepResult.cs",
+    "startLine": 58,
+    "endLine": 58,
+    "quote": "PropertyInfo[] properties = GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);"
+   },
+   "symbol": "StepResult.GetParameters",
+   "seedRef": null,
+   "activationPath": "Renderizado de plantillas con resultados previos.",
+   "impact": 2,
+   "likelihood": 3,
+   "confidence": 0.5
+  },
+  {
+   "localId": "F20",
+   "kind": "debt",
+   "category": "namespace-global",
+   "title": "InputMessage declarado sin namespace",
+   "rationale": "El fichero no declara namespace, por lo que el tipo queda en el espacio global, a diferencia del resto de tipos de Core; sin referencias en el grafo (Ca=0).",
+   "anchor": {
+    "path": "LLM/Results/InputMessage.cs",
+    "startLine": 4,
+    "endLine": 4,
+    "quote": "public class InputMessage(IStep step) : StepResult<string>(step)"
+   },
+   "symbol": "InputMessage",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 1,
+   "likelihood": 1,
+   "confidence": 0.8
+  }
+ ],
+ "seedVerdicts": [
+  {
+   "seed": "DEAD? Factory<T> (clase, medium)",
+   "verdict": "needs_context",
+   "reason": "Ca=0 en el lote; probable registro DI de genérico abierto o uso por reflexión no visible en el paquete."
+  },
+  {
+   "seed": "DEAD? Factory.BuildCache (private, high)",
+   "verdict": "false_positive",
+   "reason": "Se invoca en GetService (Factory.cs:38) con `_cache ??= BuildCache()`."
+  },
+  {
+   "seed": "DEAD? Factory.GetServiceName (private, high)",
+   "verdict": "false_positive",
+   "reason": "Se invoca desde la lambda de ToDictionary en BuildCache (Factory.cs:15)."
+  },
+  {
+   "seed": "DEAD? Factory.GetService (public, low)",
+   "verdict": "false_positive",
+   "reason": "Implementa IFactory<T>.GetService; se llama por interfaz y es virtual."
+  },
+  {
+   "seed": "DEAD? EventEnrichmentResult<TEvent> (clase, medium)",
+   "verdict": "confirmed",
+   "reason": "Ca=0 y ninguna relación entrante en el paquete; solo podría ser API pública consumida externamente."
+  }
+ ],
+ "relations": [
+  {
+   "from": "ParallelStep.ExecuteAsync",
+   "to": "PipelineContext.CloneForBranch",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Steps/ParallelStep.cs",
+    "startLine": 73,
+    "endLine": 73,
+    "quote": "PipelineContext branchContext = context.CloneForBranch();"
+   }
+  },
+  {
+   "from": "ParallelStep.ExecuteAsync",
+   "to": "PipelineContext.ExecuteStepsWithNextStepsAsync",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Steps/ParallelStep.cs",
+    "startLine": 93,
+    "endLine": 94,
+    "quote": "IStepResult stepResult = await branchContext.ExecuteStepsWithNextStepsAsync("
+   }
+  },
+  {
+   "from": "ParallelStep.ExecuteAsync",
+   "to": "ParallelResult.AddResult",
+   "type": "WRITES",
+   "anchor": {
+    "path": "Core/Steps/ParallelStep.cs",
+    "startLine": 96,
+    "endLine": 96,
+    "quote": "result.AddResult(step.Name, stepResult);"
+   }
+  },
+  {
+   "from": "LoopStep.ExecuteAsync",
+   "to": "PipelineContext.ExecuteStepsWithNextStepsAsync",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Steps/LoopStep.cs",
+    "startLine": 66,
+    "endLine": 66,
+    "quote": "currentResult = await context.ExecuteStepsWithNextStepsAsync(_steps, currentResult, Name, cancellationToken);"
+   }
+  },
+  {
+   "from": "LoopStep.ExecuteAsync",
+   "to": "PipelineContext.Metadata",
+   "type": "WRITES",
+   "anchor": {
+    "path": "Core/Steps/LoopStep.cs",
+    "startLine": 59,
+    "endLine": 59,
+    "quote": "context.Metadata[OutputIterationToMetadata] = i;"
+   }
+  },
+  {
+   "from": "LoopStep.ExecuteAsync",
+   "to": "BreakStepResult",
+   "type": "READS",
+   "anchor": {
+    "path": "Core/Steps/LoopStep.cs",
+    "startLine": 79,
+    "endLine": 79,
+    "quote": "if (currentResult is BreakStepResult)"
+   }
+  },
+  {
+   "from": "GroupStep.ExecuteAsync",
+   "to": "StepResult.NextSteps",
+   "type": "WRITES",
+   "anchor": {
+    "path": "Core/Steps/GroupStep.cs",
+    "startLine": 48,
+    "endLine": 48,
+    "quote": "input.NextSteps.AddRange(_steps);"
+   }
+  },
+  {
+   "from": "StepValidation.ValidateUniqueStepNames",
+   "to": "GroupStep.Steps",
+   "type": "READS",
+   "anchor": {
+    "path": "Core/Execution/StepValidation.cs",
+    "startLine": 22,
+    "endLine": 22,
+    "quote": "ValidateUniqueStepNames(groupStep.Steps, pipelineName, new Dictionary<string, string>(existingNames));"
+   }
+  },
+  {
+   "from": "StepBase.CreateResult",
+   "to": "StepResultFactory.StepActivatorInfo.CreateInstance",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Steps/StepBase.cs",
+    "startLine": 105,
+    "endLine": 105,
+    "quote": "return (IStepResult)_activatorInfo.Value.CreateInstance(this, value, error);"
+   }
+  },
+  {
+   "from": "TypedStep.ExecuteAsync",
+   "to": "StepResultFactory.CreateStepResult",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Steps/TypedStep.cs",
+    "startLine": 47,
+    "endLine": 47,
+    "quote": "TIn newInput = StepResultFactory.CreateStepResult<TIn>(this, input.Value);"
+   }
+  },
+  {
+   "from": "StepBase.InitializeLogger",
+   "to": "ILoggerFactory.CreateLogger",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Steps/StepBase.cs",
+    "startLine": 61,
+    "endLine": 63,
+    "quote": "_logger ??= context.ServiceProvider"
+   }
+  },
+  {
+   "from": "Factory.GetService",
+   "to": "ActivatorUtilities.CreateInstance",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Abstractions/Factory.cs",
+    "startLine": 46,
+    "endLine": 46,
+    "quote": "ServiceLifetime.Transient => (T)ActivatorUtilities.CreateInstance(sp, entry.Type),"
+   }
+  },
+  {
+   "from": "Factory.GetService",
+   "to": "IOptionsMonitor<T>.Get",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Abstractions/Factory.cs",
+    "startLine": 56,
+    "endLine": 56,
+    "quote": "T instance = monitor.Get(name);"
+   }
+  }
+ ],
+ "openQuestions": [
+  {
+   "symbol": "TypedStep.ExecuteAsync",
+   "question": "¿Qué pasa RetryMiddleware como lastStepResult en un reintento: el error genérico (ErrorStepResult) o un resultado del tipo TOut?",
+   "needs": [
+    "Core.Execution.Middlewares.RetryMiddleware.InvokeAsync"
+   ]
+  },
+  {
+   "symbol": "StepResult.GetParameters",
+   "question": "¿Se invoca GetParameters sobre un ParallelResult al renderizar plantillas, o el motor usa el indexador directamente?",
+   "needs": [
+    "TinyTemplate / renderizador de plantillas",
+    "Core.Execution.StepResultFactory"
+   ]
+  },
+  {
+   "symbol": "ParallelStep.ExecuteAsync",
+   "question": "¿Cómo trata el Pipeline un ParallelResult cuyas ramas devolvieron SuspendInfo, y qué hace CloneForBranch con Metadata y conversación?",
+   "needs": [
+    "Core.Models.PipelineContext.CloneForBranch",
+    "Core.Execution.Pipeline"
+   ]
+  },
+  {
+   "symbol": "Factory<T>",
+   "question": "¿Dónde se registra Factory<T> (genérico abierto, fábrica) y con qué keyName?",
+   "needs": [
+    "Registro DI de IFactory<>"
+   ]
+  },
+  {
+   "symbol": "LoopStep.ExecuteAsync",
+   "question": "¿Qué semántica tiene ExecuteStepsWithNextStepsAsync con isBranchScope y la caché por ruta, y se deshace AddPathPart ante excepciones?",
+   "needs": [
+    "Core.Models.PipelineContext.ExecuteStepsWithNextStepsAsync"
+   ]
+  }
+ ]
+}

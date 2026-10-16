@@ -1,0 +1,12 @@
+- ¿Qué problema de negocio resuelve el subsistema y quién lo usa (usuarios, roles, procesos automáticos, sistemas externos)?
+- ¿Cuáles son sus casos de uso y por qué punto de entrada se dispara cada uno?
+- ¿Qué entidades, tablas o modelos de datos crea, lee, modifica o borra, y con qué clave se identifica cada una?
+- ¿Qué reglas de negocio aplica (validaciones, condiciones, cálculos, umbrales, prioridades) y qué ocurre cuando no se cumplen?
+- ¿Qué estados tiene cada entidad principal, qué los cambia y qué transiciones permite o impide el código?
+- ¿Hay estados, valores o ramas que nadie puede alcanzar, o que el código trata de forma distinta a la que sugiere su nombre?
+- ¿Qué configuración, parámetros o catálogos modifican su comportamiento y dónde se leen?
+- ¿Qué procesos temporizados, por lotes o asíncronos forman parte del subsistema y qué disparan?
+- ¿Con qué otros subsistemas o sistemas externos se integra y qué datos intercambia en cada sentido?
+- ¿Qué comportamiento sugieren los nombres o los comentarios que el código no llega a implementar?
+- ¿Qué capacidades principales ofrece el subsistema a quien lo usa (API pública, configuración declarativa como YAML o JSON, extensiones, herramientas) y qué ocurre en cada una cuando faltan datos o configuración obligatorios?
+- ¿Qué elementos públicos del subsistema no tienen ningún consumidor dentro de él y para quién podrían estar pensados?

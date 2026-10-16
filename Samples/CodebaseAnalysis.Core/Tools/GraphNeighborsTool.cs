@@ -11,7 +11,8 @@ namespace CodebaseAnalysis.Core.Tools;
 /// <summary>
 /// Vecinos de un nodo del grafo por sus aristas: llamantes y llamados (<c>CALLS</c>), jerarquía (<c>INHERITS</c>,
 /// <c>IMPLEMENTS</c>), métodos de un tipo (<c>DEFINES_METHOD</c>), rutas (<c>HANDLES</c>), las aristas Struts/JSP y los usos
-/// de tipos y campos del analizador Java (<c>USES_TYPE</c>, <c>READS</c>, <c>WRITES</c>), con un filtro por línea del fichero
+/// de tipos y campos del analizador Java (<c>USES_TYPE</c>, <c>READS</c>, <c>WRITES</c>), y las del análisis (tablas, subsistemas y
+/// notas de investigación: <c>QUERIES</c>, <c>MODIFIES</c>, <c>CONTAINS</c>, <c>DEPENDS_ON</c>, <c>ABOUT</c>, <c>CITES</c>), con un filtro por línea del fichero
 /// de origen. Es de solo lectura y no lee el código: lo que devuelve es del grafo del último análisis. Cada arista dice su
 /// procedencia: resuelta por un enriquecedor (<c>enriched_by</c>), estimada por el fallback del LLM, de la ingesta de Office (sin marca,
 /// con su nodo de origen escrito por OfficeTools), heurística de cbm (sin marca; las <c>CALLS</c> de cbm traen
@@ -35,7 +36,20 @@ public sealed class GraphNeighborsTool : LlmTool
     [
         "CALLS", "INHERITS", "IMPLEMENTS", "DEFINES_METHOD", "HANDLES",
         "FORWARDS_TO", "SUBMITS_TO", "INCLUDES", "RENDERS", "EXTENDS_DEFINITION",
-        "USES_TYPE", "READS", "WRITES"
+        "USES_TYPE", "READS", "WRITES",
+        Enrichment.AnalysisGraph.AnalysisGraphLabels.Queries, Enrichment.AnalysisGraph.AnalysisGraphLabels.Modifies,
+        Enrichment.AnalysisGraph.AnalysisGraphLabels.Cites, Enrichment.AnalysisGraph.AnalysisGraphLabels.Contains,
+        Enrichment.AnalysisGraph.AnalysisGraphLabels.DependsOn, Enrichment.AnalysisGraph.AnalysisGraphLabels.About
+    ];
+
+    /// <summary>
+    /// Marcas de aristas cuyo contenido decidió un LLM: el enriquecimiento semántico (estimadas) y las notas de investigación (la
+    /// arista <c>CITES</c> ancla una cita de forma determinista, pero lo que dice la nota es del modelo). No cuentan como resueltas.
+    /// </summary>
+    private static readonly string[] LlmMarks =
+    [
+        Steps.SemanticEnrichmentStep.EnricherName, Enrichment.AnalysisGraph.AnalysisGraphLabels.NoteEnricher,
+        Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmRegistryEnricher
     ];
 
     /// <summary>
@@ -51,7 +65,7 @@ public sealed class GraphNeighborsTool : LlmTool
     private static string MarkPredicate(string condition = "") =>
         $"EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(properties) THEN properties ELSE '{{}}' END, '$.enriched_by') m{condition})";
 
-    private static readonly string ResolvedPredicate = MarkPredicate($" WHERE m.value <> '{Steps.SemanticEnrichmentStep.EnricherName}'");
+    private static readonly string ResolvedPredicate = MarkPredicate($" WHERE m.value NOT IN ({string.Join(", ", LlmMarks.Select(m => $"'{m}'"))})");
 
     // Las aristas de la ingesta de Office no llevan marca: se reconocen por el origin de su nodo de origen, que OfficeTools
     // escribe en sus nodos de código (DetectAndIndexGraphStep.OfficeOrigins).
@@ -92,6 +106,9 @@ public sealed class GraphNeighborsTool : LlmTool
         "y qué campos lee o escribe (READS, WRITES), con sus líneas. " +
         "Dónde se usa una clase o un campo: direction 'in' sobre la clase (USES_TYPE y CALLS entrantes) o sobre el campo (READS y WRITES entrantes). " +
         "Qué referencia hay en la línea N de un fichero: 'line' con el método que la contiene y direction 'out'. " +
+        "Del análisis: qué tablas lee o escribe un método o una clase (QUERIES, MODIFIES, con sus líneas), a qué subsistema pertenece un tipo " +
+        "(CONTAINS entrante), de qué subsistemas depende uno (DEPENDS_ON) y qué notas de investigación citan un nodo (CITES entrante, con la cita " +
+        "y la frase de la nota; la nota la escribió el LLM). " +
         "Cada arista dice su procedencia: resuelta por un enriquecedor (fiable), heurística de cbm (una pista, con su confianza si la trae) o de estructura. " +
         "Devuelve datos del grafo, no el código: para confirmar un hecho, abre la línea que indica con view_file.";
     public override bool IsReadOnly => true;
@@ -112,7 +129,7 @@ public sealed class GraphNeighborsTool : LlmTool
         "edge_types": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Tipos de arista a incluir. Por defecto: CALLS, INHERITS, IMPLEMENTS, DEFINES_METHOD, HANDLES, FORWARDS_TO, SUBMITS_TO, INCLUDES, RENDERS, EXTENDS_DEFINITION, USES_TYPE, READS, WRITES."
+          "description": "Tipos de arista a incluir. Por defecto: CALLS, INHERITS, IMPLEMENTS, DEFINES_METHOD, HANDLES, FORWARDS_TO, SUBMITS_TO, INCLUDES, RENDERS, EXTENDS_DEFINITION, USES_TYPE, READS, WRITES, QUERIES, MODIFIES, CITES, CONTAINS, DEPENDS_ON, ABOUT."
         },
         "line": {
           "type": "integer",
@@ -224,7 +241,7 @@ public sealed class GraphNeighborsTool : LlmTool
             "WHEN n.qualified_name LIKE @suf ESCAPE '\\' OR n.qualified_name LIKE @ovl ESCAPE '\\' THEN 3 ELSE 4 END AS tier, " +
             $"CASE WHEN n.label IN ({StructuralLabels}) THEN 1 ELSE 0 END AS structural, " +
             $"{InterfaceExpr} AS iface " +
-            "FROM nodes n WHERE n.qualified_name LIKE @any ESCAPE '\\' " +
+            $"FROM nodes n WHERE n.qualified_name LIKE @any ESCAPE '\\' AND NOT {Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmNodePredicate("n")} " +
             "ORDER BY tier, structural, n.qualified_name LIMIT @cap";
 
         var rows = await _graphDb.SelectAsync(sql, p =>
@@ -261,7 +278,9 @@ public sealed class GraphNeighborsTool : LlmTool
             "CASE WHEN json_valid(e.properties) THEN e.properties END AS props, " +
             $"CASE WHEN e.type = 'CALLS' THEN {InterfaceExpr} END AS iface, " +
             $"(SELECT {OriginExpr("s")} FROM nodes s WHERE s.id = e.source_id) AS source_origin " +
-            $"FROM edges e JOIN nodes n ON n.id = e.{other} WHERE e.{self} = @id AND e.type IN ({types}){lineFilter}";
+            $"FROM edges e JOIN nodes n ON n.id = e.{other} WHERE e.{self} = @id AND e.type IN ({types}){lineFilter} " +
+            // Los nodos que escribió el LLM en la pasada compartida (hallazgos, anclas, resúmenes…) solo los ven las vistas findings y llm_contracts.
+            $"AND NOT {Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmNodePredicate("n")}";
 
         var parts = new List<string>();
         if (direction is "out" or "both")
@@ -282,6 +301,10 @@ public sealed class GraphNeighborsTool : LlmTool
         });
     }
 
+    // Por la misma razón que en NeighborsQuery, los recuentos no cuentan las aristas hacia nodos escritos por el LLM.
+    private static string NotLlmEnd(string column) =>
+        $"NOT EXISTS (SELECT 1 FROM nodes o WHERE o.id = edges.{column} AND {Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmNodePredicate("o")})";
+
     private static (string Sql, Action<Microsoft.Data.Sqlite.SqliteParameterCollection> Bind) CountQuery(
         long nodeId, string direction, List<string> edgeTypes, int? line)
     {
@@ -294,9 +317,9 @@ public sealed class GraphNeighborsTool : LlmTool
                          $"SUM(CASE WHEN NOT {MarkPredicate()} AND {OfficeSourcePredicate} THEN 1 ELSE 0 END) AS office";
         var parts = new List<string>();
         if (direction is "out" or "both")
-            parts.Add($"SELECT 'out' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE source_id = @id AND type IN ({types}){lineFilter} GROUP BY type");
+            parts.Add($"SELECT 'out' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE source_id = @id AND type IN ({types}){lineFilter} AND {NotLlmEnd("target_id")} GROUP BY type");
         if (direction is "in" or "both")
-            parts.Add($"SELECT 'in' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE target_id = @id AND type IN ({types}){lineFilter} GROUP BY type");
+            parts.Add($"SELECT 'in' AS dir, type, COUNT(1) AS n, {provenance} FROM edges WHERE target_id = @id AND type IN ({types}){lineFilter} AND {NotLlmEnd("source_id")} GROUP BY type");
         return (string.Join(" UNION ALL ", parts), p =>
         {
             p.AddWithValue("@id", nodeId);
@@ -432,9 +455,11 @@ public sealed class GraphNeighborsTool : LlmTool
             }
 
             var withConfidence = confidence != null ? $" · confianza {confidence}" : "";
-            var resolvedBy = marks.Where(m => m != Steps.SemanticEnrichmentStep.EnricherName).ToList();
+            var resolvedBy = marks.Where(m => !LlmMarks.Contains(m)).ToList();
             if (resolvedBy.Count > 0)
                 return new(ProvenanceKind.Resolved, $"resuelta · {string.Join(", ", resolvedBy)}{withConfidence}", resolvedBy);
+            if (marks.Contains(Enrichment.AnalysisGraph.AnalysisGraphLabels.NoteEnricher))
+                return new(ProvenanceKind.Llm, "nota de investigación (LLM) · cita anclada", marks);
             if (marks.Count > 0)
                 return new(ProvenanceKind.Llm, $"estimada por LLM · {marks[0]}", marks);
             // OfficeTools decide el destino de una llamada VBA por el nombre del procedimiento: no es de cbm, y tampoco está resuelta.
@@ -546,6 +571,28 @@ public sealed class GraphNeighborsTool : LlmTool
                     parts.Add($"`{verb}`");
                 if (Text(root, "route_path") is { } path)
                     parts.Add($"`{path}`");
+                break;
+            case "QUERIES":
+            case "MODIFIES":
+                parts.Add(type == "QUERIES" ? "lee la tabla" : "escribe en la tabla");
+                if (Strings(root, "statements") is { Count: > 0 } statements)
+                    parts.Add(string.Join(", ", statements));
+                break;
+            case "CITES":
+                if (Text(root, "report") is { } report)
+                    parts.Add($"informe `{report}`");
+                if (Strings(root, "refs") is { Count: > 0 } refs)
+                    parts.Add("cita " + string.Join(", ", refs.Take(MaxEdgeLines).Select(x => $"`{x}`")));
+                if (Strings(root, "excerpts") is { Count: > 0 } excerpts)
+                    parts.Add($"«{excerpts[0]}»");
+                break;
+            case "DEPENDS_ON":
+                if (root.TryGetProperty("weight", out var weight) && weight.TryGetInt32(out var w))
+                    parts.Add(w == 1 ? "1 arista de código" : $"{w} aristas de código");
+                break;
+            case "CONTAINS":
+                if (Text(root, "member") is { } member)
+                    parts.Add(member switch { "route" => "ruta que atiende", "file" => "fichero", _ => "miembro" });
                 break;
         }
 

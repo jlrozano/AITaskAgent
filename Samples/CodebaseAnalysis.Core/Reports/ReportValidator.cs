@@ -2,6 +2,7 @@ using CodebaseAnalysis.Core.Chat;
 using CodebaseAnalysis.Core.Documents;
 using CodebaseAnalysis.Core.Knowledge;
 using CodebaseAnalysis.Core.Models;
+using CodebaseAnalysis.Core.Preparation;
 using CodebaseAnalysis.Core.Support;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
@@ -61,19 +62,48 @@ public static partial class ReportValidator
     [GeneratedRegex(@"^(?<fence>`{3,}|~{3,})\s*(?<lang>[\w-]*)")]
     private static partial Regex FenceRegex();
 
-    /// <summary>Identificador de hallazgo de <c>_common_rules.md</c>: 2 a 4 mayúsculas, guion y tres dígitos.</summary>
-    [GeneratedRegex(@"(?<![A-Za-z0-9_-])(?<id>[A-Z]{2,4}-\d{3})(?![0-9])")]
+    /// <summary>
+    /// Identificador de hallazgo de <c>_common_rules.md</c>: <c>NN-CAT-nnn</c> (número del informe, 2 a 4 mayúsculas, guion y tres
+    /// dígitos: <c>05-SEC-002</c>). El número de informe es opcional para reconocer los informes anteriores a V7 (<c>SEC-002</c>).
+    /// </summary>
+    [GeneratedRegex(@"(?<![A-Za-z0-9_-])(?<id>(?:\d{2}-)?[A-Z]{2,4}-\d{3})(?![0-9])")]
     private static partial Regex FindingIdRegex();
 
     /// <summary>Un identificador casi bien formado: prefijo en mayúsculas y un número que no tiene tres dígitos, o con <c>_</c>.</summary>
-    [GeneratedRegex(@"(?<![A-Za-z0-9_-])(?<id>(?<p>[A-Z]{2,4})(?:-(?<n>\d{1,2}|\d{4,6})|_(?<n>\d{1,6})))(?![0-9A-Za-z])")]
+    [GeneratedRegex(@"(?<![A-Za-z0-9_-])(?<id>(?:\d{2}-)?(?<p>[A-Z]{2,4})(?:-(?<n>\d{1,2}|\d{4,6})|_(?<n>\d{1,6})))(?![0-9A-Za-z])")]
     private static partial Regex LooseIdRegex();
 
-    [GeneratedRegex(@"^(?<id>[A-Z]{2,4}-\d{3})(?![0-9])")]
+    [GeneratedRegex(@"^(?<id>(?:\d{2}-)?[A-Z]{2,4}-\d{3})(?![0-9])")]
     private static partial Regex LeadingIdRegex();
 
-    [GeneratedRegex(@"^(?<id>[A-Z]{2,4}(?:-\d{1,2}|-\d{4,6}|_\d{1,6}))(?![0-9])")]
+    [GeneratedRegex(@"^(?<id>(?:\d{2}-)?[A-Z]{2,4}(?:-\d{1,2}|-\d{4,6}|_\d{1,6}))(?![0-9])")]
     private static partial Regex LeadingLooseIdRegex();
+
+    /// <summary>
+    /// Un hallazgo definido en un párrafo o elemento de lista que empieza por su identificador en negrita
+    /// (<c>**COH-001, título.**</c>, <c>**GOD-001 · título.**</c>): el formato de 02 y 08 y de cualquier informe sin encabezado
+    /// por hallazgo. Una referencia a mitad de frase no lo es.
+    /// </summary>
+    [GeneratedRegex(@"^\s*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?(?<id>(?:\d{2}-)?[A-Z]{2,4}-\d{3})(?![0-9])(?<rest>[^*]*)\*\*")]
+    private static partial Regex BoldDefinitionRegex();
+
+    [GeneratedRegex("<action\\b[^>]*?\\bpath\\s*=\\s*[\"'](?<path>[^\"']+)[\"']", RegexOptions.Singleline)]
+    private static partial Regex StrutsActionPathRegex();
+
+    /// <summary>Los valores de un fichero XML de configuración: atributos entrecomillados y texto de elementos (<c>path="/WEB-INF/x.jsp"</c>, <c>&lt;location&gt;x.jsp&lt;/location&gt;</c>).</summary>
+    [GeneratedRegex(@"=\s*""(?<a>[^""]*)""|=\s*'(?<b>[^']*)'|>(?<c>[^<>]*)<")]
+    private static partial Regex XmlValueRegex();
+
+    [GeneratedRegex("<!--.*?-->", RegexOptions.Singleline)]
+    private static partial Regex XmlCommentRegex();
+
+    /// <summary>Un valor que parece la ruta de un recurso: sin espacios, con extensión (<c>/WEB-INF/jsp/x.jsp</c>, <c>x.jsp</c>).</summary>
+    [GeneratedRegex(@"^[\w$@{}\-./\\]+\.[A-Za-z0-9]{1,6}$")]
+    private static partial Regex ResourcePathRegex();
+
+    /// <summary><c>ruta:11,16-21</c>: varias líneas o rangos separados por comas (la sintaxis del chat solo admite uno).</summary>
+    [GeneratedRegex(@"^(?<path>(?:[A-Za-z]:[\\/])?[^\s:*?""<>|`]+?):(?<ranges>\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)+)$")]
+    private static partial Regex MultiRangeCitationRegex();
 
     [GeneratedRegex(@"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+(?:\([^()]*\))?$")]
     private static partial Regex QualifiedNameRegex();
@@ -102,7 +132,7 @@ public static partial class ReportValidator
         {
             var path = Path.Combine(reportsPath, name);
             if (File.Exists(path))
-                parsed.Add(ParsedReport.Parse(name, File.ReadAllText(path)));
+                parsed.Add(ParsedReport.Parse(name, ReportVerification.WithoutChangesSection(File.ReadAllText(path))));
         }
         if (parsed.Count == 0)
             result.Notes.Add($"No hay informes del catálogo en '{reportsPath}'.");
@@ -131,6 +161,59 @@ public static partial class ReportValidator
         return result;
     }
 
+    /// <summary>
+    /// Validador de un informe a partir de su texto, sin leer ni escribir informes en disco: es lo que usa el verificador para
+    /// comprobar el borrador antes de mandarlo al modelo y el resultado antes de guardarlo. Construir uno indexa los ficheros
+    /// del repositorio (para resolver las citas) y carga el grafo si hay BD; se reutiliza para varios informes.
+    /// </summary>
+    public static ReportContentValidator CreateContentValidator(ReportValidationRequest request) => new(request);
+
+    /// <summary>
+    /// Los hallazgos que define un informe, con su severidad y el código que citan, sin tocar el disco ni el grafo. Es la entrada de
+    /// <see cref="SeverityContrast"/>.
+    /// </summary>
+    public static IReadOnlyList<FindingSummary> SummarizeFindings(string fileName, string content)
+    {
+        var report = ParsedReport.Parse(fileName, content);
+        return [.. report.DefinedIds()
+            .OrderBy(id => report.FirstDefinitionLine(id))
+            .Select(id =>
+            {
+                var text = report.TextOf(report.FindingLines(id));
+                // Sin P0-P3 en el encabezado ni en la tabla, el informe puede decirlo en prosa («Prioridad P3.»).
+                var priority = report.PriorityOf(id) ?? (PriorityProseRegex().Match(text) is { Success: true } m ? int.Parse(m.Groups["p"].Value, CultureInfo.InvariantCulture) : (int?)null);
+                return new FindingSummary(id, priority, SeverityContrast.SpansOf(text));
+            })];
+    }
+
+    [GeneratedRegex(@"\bPrioridad\s+P(?<p>[0-3])\b")]
+    private static partial Regex PriorityProseRegex();
+
+    /// <summary>Ver <see cref="CreateContentValidator"/>. Las comprobaciones son las de <see cref="Validate"/>, salvo las que cruzan informes.</summary>
+    public sealed class ReportContentValidator
+    {
+        private readonly ValidationContext _context;
+
+        internal ReportContentValidator(ReportValidationRequest request)
+        {
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.RepositoryPath));
+            var reportsPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.ReportsPath));
+            var dbPath = string.IsNullOrWhiteSpace(request.DatabasePath) ? null : Path.GetFullPath(request.DatabasePath);
+            Root = root;
+            _context = new ValidationContext(root, reportsPath, new RepositoryFileIndex(root, reportsPath), GraphNameIndex.TryLoad(dbPath, out _));
+        }
+
+        /// <summary>Raíz del repositorio contra la que se resuelven las citas.</summary>
+        public string Root { get; }
+
+        /// <summary>
+        /// Valida <paramref name="content"/> como el informe <paramref name="fileName"/> (los IDs que cita no se cruzan con otros
+        /// informes). Sin el apartado «Cambios de la verificación», que no es contenido del auditor (<see cref="ReportVerification.WithoutChangesSection"/>).
+        /// </summary>
+        public ReportFileValidation Validate(string fileName, string content) =>
+            ValidateReport(ParsedReport.Parse(fileName, ReportVerification.WithoutChangesSection(content)), _context, crossReportIds: null);
+    }
+
     private static void Summarize(ReportValidationResult result)
     {
         var t = result.Totals;
@@ -142,10 +225,14 @@ public static partial class ReportValidator
             t.CitationsValid += s.CitationsValid;
             t.SourceReferencesTotal += s.SourceReferencesTotal;
             t.SourceReferencesBroken += s.SourceReferencesTotal - s.SourceReferencesValid;
+            t.DeclaredPathsMissing += s.DeclaredPathsMissing;
             t.SevereFindings += s.SevereFindings;
             t.SevereFindingsWithoutLocation += s.SevereFindingsWithoutLocation;
             t.DuplicateIds += s.DuplicateIds;
             t.MalformedIds += s.MalformedIds;
+            t.FindingsUncited += s.FindingsUncited;
+            if (r.Checks.Any(c => c.Check == ReportValidationChecks.CitationsRequired) && s.CitationsTotal == 0)
+                t.ReportsWithoutCitations++;
             t.MermaidInvalid += s.MermaidInvalid;
             if (!s.MetaPresent || s.MetaMissingKeys.Count > 0)
                 t.ReportsWithoutProvenance++;
@@ -166,6 +253,25 @@ public static partial class ReportValidator
     private sealed record ValidationContext(string Root, string ReportsPath, RepositoryFileIndex Files, GraphNameIndex? Graph)
     {
         private IReadOnlyList<(string Id, string Title, string Path)>? _sources;
+        private bool _planLoaded;
+        private CoveragePlan? _plan;
+
+        /// <summary>
+        /// El plan de cobertura del disco (<c>_coverage_plan.json</c> junto a los informes); null si no hay, no se puede leer o no es de
+        /// este formato: entonces no se comprueba la cobertura. Se lee una vez por validación. Solo lee: no crea la carpeta.
+        /// </summary>
+        public CoveragePlan? CoveragePlan
+        {
+            get
+            {
+                if (!_planLoaded)
+                {
+                    _plan = PreparationArtifacts.TryRead<CoveragePlan>(ReportsPath, out _);
+                    _planLoaded = true;
+                }
+                return _plan;
+            }
+        }
 
         /// <summary>Informes del catálogo y propios, con su título, y documentos: los destinos posibles de <c>nombre › sección</c>.</summary>
         public IReadOnlyList<(string Id, string Title, string Path)> Sources => _sources ??= LoadSources();
@@ -219,8 +325,25 @@ public static partial class ReportValidator
             if (AsCodeCitation(text, context.Files) is { } code)
             {
                 var citation = ResolveCitation(text, line, code, context.Files);
+
+                // Una ruta de recurso sin línea que ningún fichero del repositorio es, pero que una configuración declara (el `forward` de un
+                // struts-config a un JSP que el repositorio no trae), no es una cita de código rota: se cuenta aparte, con su aviso.
+                if (citation.Status == CitationStatuses.Missing && code.Start == null && context.Files.DeclaredResource(code.Path) is { } declaredIn)
+                {
+                    validation.DeclaredPaths.Add(new ReportDeclaredPath(text, line, declaredIn));
+                    continue;
+                }
+
                 validation.Citations.Add(citation);
                 citationsByLine.Add(citation);
+                continue;
+            }
+
+            // Un nombre de recurso suelto (`products.jsp`) parece un `Clase.método` y saldría como «no está en el grafo»: si una configuración
+            // lo declara, es una ruta declarada. Solo con extensión de recurso: `Clase.método` no puede confundirse con ellas.
+            if (HasResourceExtension(text) && !context.Files.HasFileNamed(text) && context.Files.DeclaredResource(text) is { } declaredResource)
+            {
+                validation.DeclaredPaths.Add(new ReportDeclaredPath(text, line, declaredResource));
                 continue;
             }
 
@@ -237,11 +360,20 @@ public static partial class ReportValidator
         CheckCitations(validation);
         CheckSourceReferences(validation);
         CheckFindings(report, validation, citationsByLine, crossReportIds);
+        CheckRequiredCitations(report, validation);
         CheckGraphNames(validation, context.Graph != null);
         CheckMetadata(report, validation);
         CheckMermaid(report, validation);
+        CheckCoverage(report, validation, context);
         return validation;
     }
+
+    /// <summary>Extensiones de los recursos que una configuración declara (vistas, plantillas, ficheros de propiedades...): lo que no es código.</summary>
+    private static readonly string[] ResourceExtensions =
+        [".jsp", ".jspf", ".jspx", ".html", ".htm", ".xhtml", ".tld", ".xml", ".properties", ".css", ".js", ".ftl", ".vm", ".tag", ".tagx"];
+
+    private static bool HasResourceExtension(string text) =>
+        text.IndexOfAny([' ', ':', '(', ')']) < 0 && ResourceExtensions.Any(e => text.EndsWith(e, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsCustomReportName(string text) =>
         text.StartsWith(ReportLibrary.CustomIdPrefix, StringComparison.OrdinalIgnoreCase)
@@ -259,10 +391,24 @@ public static partial class ReportValidator
     /// el último tramo (<c>P0/P1</c> y <c>Green/Amber</c> no son rutas), y con línea la ruta tiene que parecer un fichero
     /// (punto o separador) o llamarse como alguno del repositorio (<c>1:1</c> no es una cita).
     /// </summary>
-    private static (string Path, int? Start, int? End)? AsCodeCitation(string text, RepositoryFileIndex files)
+    private static (string Path, int? Start, int? End, IReadOnlyList<CitationRange>? Ranges)? AsCodeCitation(string text, RepositoryFileIndex files)
     {
-        if (ClaimAuditor.ParseCodeReference(text) is not { } code)
+        var multi = MultiRangeCitationRegex().Match(text.Trim());
+        if (multi.Success)
+        {
+            var ranges = multi.Groups["ranges"].Value.Split(',')
+                .Select(r => r.Split('-', '–').Select(n => int.Parse(n.Trim(), CultureInfo.InvariantCulture)).ToArray())
+                .Select(n => new CitationRange(n[0], n.Length > 1 ? n[1] : n[0]))
+                .ToList();
+            var multiPath = multi.Groups["path"].Value;
+            return multiPath.IndexOfAny(['.', '/', '\\']) >= 0 || files.HasFileNamed(multiPath)
+                ? (multiPath, ranges.Min(r => r.Start), ranges.Max(r => r.End), ranges)
+                : null;
+        }
+
+        if (ClaimAuditor.ParseCodeReference(text) is not { } single)
             return null;
+        var code = (single.Path, single.Start, single.End, Ranges: (IReadOnlyList<CitationRange>?)null);
 
         var lastSegment = code.Path.Replace('\\', '/').TrimEnd('/').Split('/')[^1];
         if (code.Start == null)
@@ -270,17 +416,19 @@ public static partial class ReportValidator
         return code.Path.IndexOfAny(['.', '/', '\\']) >= 0 || files.HasFileNamed(lastSegment) ? code : null;
     }
 
-    private static ReportCitation ResolveCitation(string text, int line, (string Path, int? Start, int? End) code, RepositoryFileIndex files)
+    private static ReportCitation ResolveCitation(string text, int line, (string Path, int? Start, int? End, IReadOnlyList<CitationRange>? Ranges) code, RepositoryFileIndex files)
     {
         var resolved = files.Resolve(code.Path);
         if (resolved.Status != CitationStatuses.Ok)
             return new ReportCitation(text, line, resolved.Status, null, code.Start, code.End, false, null,
-                resolved.Candidates.Count > 0 ? resolved.Candidates : null);
+                resolved.Candidates.Count > 0 ? resolved.Candidates : null) { Ranges = code.Ranges };
 
-        int? total = code.Start == null ? null : files.LineCount(resolved.Full!);
-        var inRange = code.Start is not { } s || code.End is not { } e || total is not { } lines || (s >= 1 && e >= s && e <= lines);
+        // Sin fichero (una ruta declarada) o con un directorio, no hay líneas que comprobar.
+        int? total = code.Start == null || resolved.Full == null || !File.Exists(resolved.Full) ? null : files.LineCount(resolved.Full);
+        IReadOnlyList<CitationRange> checkedRanges = code.Ranges ?? (code.Start is { } a && code.End is { } b ? [new CitationRange(a, b)] : []);
+        var inRange = total is not { } lines || checkedRanges.All(r => r.Start >= 1 && r.End >= r.Start && r.End <= lines);
         return new ReportCitation(text, line, inRange ? CitationStatuses.Ok : CitationStatuses.OutOfRange, resolved.Relative,
-            code.Start, code.End, resolved.BySuffix, total, null);
+            code.Start, code.End, resolved.BySuffix, total, null) { Ranges = code.Ranges };
     }
 
     private static ReportSourceReference ResolveSource(string text, int line, ValidationContext context)
@@ -328,6 +476,52 @@ public static partial class ReportValidator
 
         AddCheck(validation, ReportValidationChecks.Citations, s.CitationsValid, s.CitationsTotal - s.CitationsValid,
             s.CitationsTotal == 0 ? "El informe no cita ninguna ubicación de código." : $"{s.CitationsValid} de {s.CitationsTotal} válidas ({ReportValidationSummary.Percent(s.CitationsValidPercent)}).");
+
+        // Las rutas declaradas en una configuración que el repositorio no tiene: un aviso por ruta, sin tocar el porcentaje de citas.
+        s.DeclaredPathsMissing = validation.DeclaredPaths.Count;
+        if (validation.DeclaredPaths.Count > 0)
+        {
+            foreach (var declared in validation.DeclaredPaths)
+            {
+                validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.DeclaredPaths, ReportValidationLevels.Warning, declared.Line,
+                    $"`{declared.Text}`: ruta declarada en `{declared.DeclaredIn}` que no existe en el repositorio (no es una cita de código)."));
+            }
+            AddCheck(validation, ReportValidationChecks.DeclaredPaths, 0, validation.DeclaredPaths.Count,
+                $"{validation.DeclaredPaths.Count} ruta(s) declarada(s) en la configuración que no existen en el repositorio.");
+        }
+    }
+
+    /// <summary>
+    /// V6: todo informe de auditoría cita de dónde sale cada afirmación (<c>ruta:línea</c>). Solo avisa (no falla): sin ninguna cita,
+    /// o con hallazgos que no citan ninguna. El resumen ejecutivo cita informes, no código, y queda fuera.
+    /// </summary>
+    private static void CheckRequiredCitations(ParsedReport report, ReportFileValidation validation)
+    {
+        if (string.Equals(report.FileName, ReportCatalog.ExecutiveReportFileName, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var s = validation.Scores;
+        var uncited = validation.Findings.Where(f => f.Citations == 0).ToList();
+        s.FindingsUncited = uncited.Count;
+        string? detail;
+        if (validation.Citations.Count == 0)
+        {
+            validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.CitationsRequired, ReportValidationLevels.Warning, 1,
+                "El informe no cita ninguna ubicación de código (`ruta:línea`): cada afirmación debe poder comprobarse."));
+            detail = "Sin ninguna cita de código.";
+        }
+        else if (uncited.Count > 0)
+        {
+            validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.CitationsRequired, ReportValidationLevels.Warning, uncited[0].Line,
+                $"{uncited.Count} hallazgo(s) sin ninguna cita de código (`ruta:línea`): {string.Join(", ", uncited.Take(8).Select(f => $"`{f.Id}`"))}"
+                + (uncited.Count > 8 ? ", ..." : string.Empty) + "."));
+            detail = $"{validation.Findings.Count - uncited.Count} de {validation.Findings.Count} hallazgos citan código.";
+        }
+        else
+        {
+            detail = $"{validation.Citations.Count} citas de código.";
+        }
+        AddCheck(validation, ReportValidationChecks.CitationsRequired, validation.Findings.Count - uncited.Count, uncited.Count, detail);
     }
 
     private static void CheckSourceReferences(ReportFileValidation validation)
@@ -390,6 +584,25 @@ public static partial class ReportValidator
         }
         s.DuplicateIds = duplicates;
 
+        // V7: un identificador con prefijo de informe lleva el número de su propio fichero, y un informe no mezcla ambos formatos.
+        // Un informe anterior a V7, entero sin prefijo, no se avisa.
+        var isExecutive = string.Equals(report.FileName, ReportCatalog.ExecutiveReportFileName, StringComparison.OrdinalIgnoreCase);
+        var fileNumber = ReportNumberOfFile(report.FileName);
+        var withNumber = defined.Where(id => ReportNumberOf(id) != null).OrderBy(id => report.FirstDefinitionLine(id)).ToList();
+        if (withNumber.Count > 0 && !isExecutive)
+        {
+            foreach (var id in withNumber.Where(id => fileNumber != null && ReportNumberOf(id) != fileNumber))
+            {
+                validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.FindingIds, ReportValidationLevels.Warning, report.FirstDefinitionLine(id),
+                    $"`{id}` no lleva el número de informe {fileNumber} de este fichero (`{fileNumber}-{id[3..]}`)."));
+            }
+            foreach (var id in defined.Where(id => ReportNumberOf(id) == null).OrderBy(id => report.FirstDefinitionLine(id)))
+            {
+                validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.FindingIds, ReportValidationLevels.Warning, report.FirstDefinitionLine(id),
+                    $"`{id}` va sin prefijo de informe en un informe que ya usa el formato NN-CAT-nnn."));
+            }
+        }
+
         // Los hallazgos, con su prioridad y sus citas.
         foreach (var id in defined.OrderBy(i => report.FirstDefinitionLine(i)))
         {
@@ -441,12 +654,21 @@ public static partial class ReportValidator
             notApplicable: severe.Count == 0);
     }
 
-    private static string PrefixOf(string id) => id[..id.IndexOf('-')];
+    /// <summary>La categoría del identificador (<c>SEC</c> en <c>SEC-001</c> y en <c>05-SEC-001</c>).</summary>
+    private static string PrefixOf(string id) => ReportNumberOf(id) is null ? id[..id.IndexOf('-')] : id.Split('-')[1];
 
-    /// <summary><c>SEC-1</c> o <c>SEC_001</c> escrito como <c>SEC-001</c>.</summary>
+    /// <summary>El número de informe de un identificador <c>NN-CAT-nnn</c>; null en el formato anterior (<c>CAT-nnn</c>).</summary>
+    private static string? ReportNumberOf(string id) =>
+        id.Length > 3 && char.IsAsciiDigit(id[0]) && char.IsAsciiDigit(id[1]) && id[2] == '-' ? id[..2] : null;
+
+    /// <summary>El número del fichero de un informe (<c>05</c> en <c>05_errores_y_bugs.md</c>); null si no empieza por dos dígitos y guion bajo.</summary>
+    private static string? ReportNumberOfFile(string fileName) =>
+        fileName.Length > 3 && char.IsAsciiDigit(fileName[0]) && char.IsAsciiDigit(fileName[1]) && fileName[2] == '_' ? fileName[..2] : null;
+
+    /// <summary><c>SEC-1</c> o <c>SEC_001</c> escrito como <c>SEC-001</c>; <c>05-SEC-1</c>, como <c>05-SEC-001</c>.</summary>
     private static string Canonical(string id)
     {
-        var separator = id.IndexOfAny(['-', '_']);
+        var separator = id.LastIndexOfAny(['-', '_']);
         return int.TryParse(id[(separator + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number < 1000
             ? $"{id[..separator]}-{number:D3}"
             : id;
@@ -478,6 +700,41 @@ public static partial class ReportValidator
         AddCheck(validation, ReportValidationChecks.GraphNames, s.GraphNamesFound.Value, s.GraphNamesChecked.Value - s.GraphNamesFound.Value,
             $"{s.GraphNamesFound} de {s.GraphNamesChecked} en el grafo; {s.GraphNamesSkipped} sin comprobar porque su primer tramo no es un nodo.",
             notApplicable: s.GraphNamesChecked == 0);
+    }
+
+    /// <summary>
+    /// Un informe en modo B (el plan del disco le eligió subsistemas) lleva un apartado «Cobertura» y nombra en él cada subsistema
+    /// elegido, comparado sin distinguir mayúsculas. Solo avisa (el informe se escribió igual), y no hay comprobación, ni entrada en
+    /// <see cref="ReportFileValidation.Checks"/>, si no es un informe del catálogo, no hay plan legible en la carpeta de informes (la
+    /// preparación estaba apagada, o es un informe anterior) o el plan no eligió ninguno para él (degradó a un auditor normal). El plan
+    /// del disco es el efectivo: <c>TimeBudgetStep</c> lo reescribe sin los subsistemas que recorta.
+    /// </summary>
+    private static void CheckCoverage(ParsedReport report, ReportFileValidation validation, ValidationContext context)
+    {
+        if (!ReportCatalog.TryGetByFileName(report.FileName, out var descriptor))
+            return;
+        if (context.CoveragePlan?.Reports.FirstOrDefault(r => r.Report == descriptor.Type) is not { Chosen.Count: > 0 } coverage)
+            return;
+
+        var before = validation.Issues.Count;
+        var chosen = coverage.Chosen;
+        if (CoverageSection.Find(report.Lines) is not { } section)
+        {
+            validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.Coverage, ReportValidationLevels.Warning, 1,
+                $"El informe investigó {chosen.Count} subsistema(s) y no lleva el apartado «Cobertura» con lo cubierto, lo excluido y lo no cubierto."));
+            AddCheck(validation, ReportValidationChecks.Coverage, 0, chosen.Count, "Sin apartado «Cobertura».", issuesFrom: before);
+            return;
+        }
+
+        var text = string.Join('\n', report.Lines[(section.Heading + 1)..section.End]);
+        var missing = chosen.Where(c => !text.Contains(c.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var subsystem in missing)
+        {
+            validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.Coverage, ReportValidationLevels.Warning, section.Heading + 1,
+                $"El apartado «Cobertura» no nombra el subsistema «{subsystem.Name}», que el plan de cobertura eligió para este informe."));
+        }
+        AddCheck(validation, ReportValidationChecks.Coverage, chosen.Count - missing.Count, missing.Count,
+            $"{chosen.Count - missing.Count} de {chosen.Count} subsistemas elegidos aparecen en el apartado «Cobertura».", issuesFrom: before);
     }
 
     private static void CheckMetadata(ParsedReport report, ReportFileValidation validation)
@@ -514,6 +771,14 @@ public static partial class ReportValidator
                 validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.Metadata, ReportValidationLevels.Warning, metaLine,
                     "La línea `analysis-meta` no es la última del informe."));
             }
+        }
+
+        // Texto suelto antes del título (frases de las iteraciones con herramientas): el pipeline lo quita al escribir, pero un informe
+        // anterior o editado a mano puede traerlo.
+        if (ReportMarkdown.RemoveTextBeforeTitle(report.Content) is var withoutPreface && withoutPreface.Length != report.Content.Length)
+        {
+            validation.Issues.Add(new ReportValidationIssue(ReportValidationChecks.Metadata, ReportValidationLevels.Warning, 1,
+                "El informe empieza con texto suelto antes del título de nivel 1."));
         }
 
         var failed = validation.Issues.Skip(before).Count(i => i.Level == ReportValidationLevels.Error);
@@ -633,6 +898,7 @@ public static partial class ReportValidator
             string? fence = null;
             List<string>? mermaid = null;
             var mermaidStart = 0;
+            var boldCandidates = new List<(int Index, string Id, string Remainder)>();
             for (var i = 0; i < Lines.Length; i++)
             {
                 var trimmed = Lines[i].TrimStart();
@@ -667,6 +933,9 @@ public static partial class ReportValidator
                 foreach (Match m in InlineCodeRegex().Matches(Lines[i]))
                     Spans.Add((i + 1, m.Groups["code"].Value.Trim()));
 
+                if (BoldDefinitionRegex().Match(Lines[i]) is { Success: true } bold)
+                    boldCandidates.Add((i, bold.Groups["id"].Value, bold.Groups["rest"].Value));
+
                 // Identificadores del texto, también dentro de spans de código.
                 foreach (Match m in FindingIdRegex().Matches(Lines[i]))
                     IdMentions.Add((m.Groups["id"].Value, i + 1));
@@ -694,6 +963,45 @@ public static partial class ReportValidator
                 var rest = CleanHeading(text)[match.Length..];
                 HeadingDefinitions.Add((match.Groups["id"].Value, index + 1, ReportMarkdown.MinSeverity(rest), index, end));
             }
+
+            // Definiciones en negrita: el párrafo llega hasta la línea en blanco, el siguiente encabezado o la siguiente definición.
+            var headingLines = headings.Select(h => h.Index).ToHashSet();
+            var headingRanges = HeadingDefinitions.ToList();
+            // Los identificadores que algo define con título: un encabezado o una negrita que lleva algo más que el identificador.
+            var titledIds = headingRanges.Select(d => d.Id)
+                .Concat(boldCandidates.Where(c => !IsBareReference(c.Remainder)).Select(c => c.Id))
+                .ToHashSet(StringComparer.Ordinal);
+            for (var b = 0; b < boldCandidates.Count; b++)
+            {
+                var (index, id, remainder) = boldCandidates[b];
+                // Un elemento en negrita que repite un identificador ya definido por un encabezado (el plan de acción: «1. **03-CDM-001:**
+                // retirar…») lo cita, no lo define otra vez.
+                if (headingRanges.Any(d => d.Id == id))
+                    continue;
+                // Igual si la negrita es solo el identificador (con «:» o enlazado a otros: «**04-PRO-003 y 04-PRO-004:**», las viñetas de
+                // la prioridad de ejecución) y otra negrita con título ya lo define, esté antes o después. Sin ninguna otra definición,
+                // esa negrita sí es la definición.
+                if (titledIds.Contains(id) && IsBareReference(remainder))
+                    continue;
+                var nextBold = b + 1 < boldCandidates.Count ? boldCandidates[b + 1].Index : Lines.Length;
+                var end = index + 1;
+                while (end < nextBold && end < Lines.Length && Lines[end].Trim().Length > 0 && !headingLines.Contains(end))
+                    end++;
+                HeadingDefinitions.Add((id, index + 1, ReportMarkdown.MinSeverity(remainder), index, end));
+            }
+        }
+
+        /// <summary>
+        /// La negrita de un elemento de lista que empieza por un identificador no lleva título: tras él solo hay puntuación y, a lo sumo,
+        /// otros identificadores unidos por «y», «e», «o» (<c>**04-PRO-001:**</c>, <c>**04-PRO-003 y 04-PRO-004:**</c>). Una definición
+        /// lleva su título en la negrita (<c>**04-PRO-001, alto, factura sin líneas:**</c>).
+        /// </summary>
+        private static bool IsBareReference(string remainder)
+        {
+            var words = FindingIdRegex().Replace(remainder, " ")
+                .Split([' ', ',', ';', ':', '.', '·', '–', '—', '-', '\t'], StringSplitOptions.RemoveEmptyEntries);
+            return words.All(w => w.Equals("y", StringComparison.OrdinalIgnoreCase) || w.Equals("e", StringComparison.OrdinalIgnoreCase)
+                || w.Equals("o", StringComparison.OrdinalIgnoreCase) || w.Equals("and", StringComparison.OrdinalIgnoreCase));
         }
 
         private static string CleanHeading(string text) => ReportMarkdown.CleanCell(text).TrimStart('[', ' ');
@@ -802,6 +1110,8 @@ public static partial class ReportValidator
         private readonly string _reportsPath;
         private readonly Dictionary<string, int?> _lineCounts = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, List<string>>? _byName;
+        private Dictionary<string, string>? _routes;
+        private List<(string Key, string File)>? _declaredResources;
 
         public RepositoryFileIndex(string root, string reportsPath)
         {
@@ -820,6 +1130,14 @@ public static partial class ReportValidator
             if (full != null && File.Exists(full))
                 return (CitationStatuses.Ok, Relative(full), full, false, []);
 
+            // Un directorio existente no es una cita rota (`src/Orders.Core/`), aunque no se pueda abrir en una línea.
+            if (full != null && TurnEvidence.IsInside(_root, full) && Directory.Exists(full))
+                return (CitationStatuses.Ok, Relative(full), full, false, []);
+
+            // Una URL declarada (`/listOrders.do` en un struts-config) es una ruta del sistema, no un fichero que falte.
+            if (DeclaredRoute(raw) is { } declaredIn)
+                return (CitationStatuses.Ok, declaredIn, null, false, []);
+
             var wanted = raw.Trim().Replace('\\', '/');
             if (full != null && TurnEvidence.IsInside(_root, full))
                 wanted = Relative(full);
@@ -836,6 +1154,108 @@ public static partial class ReportValidator
                 1 => (CitationStatuses.Ok, matches[0], Path.Combine(_root, matches[0]), true, []),
                 _ => (CitationStatuses.Ambiguous, null, null, false, [.. matches.Order(StringComparer.Ordinal).Take(MaxCandidates)])
             };
+        }
+
+        /// <summary>
+        /// El fichero de configuración que declara la ruta <c>/x/y.do</c> (un <c>&lt;action path="/x/y"&gt;</c> de un
+        /// <c>struts-config*.xml</c> del repositorio), o null si la ruta no es <c>.do</c> o nadie la declara.
+        /// </summary>
+        public string? DeclaredRoute(string raw)
+        {
+            var route = raw.Trim().Replace('\\', '/');
+            if (!route.EndsWith(".do", StringComparison.OrdinalIgnoreCase))
+                return null;
+            route = "/" + route.TrimStart('.', '/');
+            var routes = _routes ??= LoadRoutes();
+            if (routes.TryGetValue(route, out var exact))
+                return exact;
+            // Con prefijo de módulo o de contexto (`/app/listOrders.do`), vale el sufijo.
+            return routes.FirstOrDefault(r => route.EndsWith(r.Key, StringComparison.OrdinalIgnoreCase)).Value;
+        }
+
+        /// <summary>XML de configuración que se leen como mucho, y su tamaño máximo: el índice no debe tardar en un repositorio enorme.</summary>
+        private const int MaxConfigFiles = 400;
+        private const long MaxConfigBytes = 2 * 1024 * 1024;
+
+        /// <summary>
+        /// El fichero XML de configuración que declara el recurso <paramref name="raw"/> (<c>/WEB-INF/jsp/x.jsp</c>: un <c>path="..."</c> de un
+        /// <c>forward</c>, un <c>&lt;location&gt;</c>...), o null si nadie lo declara. Casa la ruta entera o una cola de ella por tramos
+        /// (la citada sin el prefijo de contexto, o con más). Se lee una vez, sin los comentarios XML, con tope de ficheros y de tamaño.
+        /// </summary>
+        public string? DeclaredResource(string raw)
+        {
+            var wanted = NormalizeResource(raw);
+            if (wanted.Length == 0)
+                return null;
+            foreach (var (key, file) in _declaredResources ??= LoadDeclaredResources())
+            {
+                if (key.Equals(wanted, StringComparison.OrdinalIgnoreCase)
+                    || key.EndsWith("/" + wanted, StringComparison.OrdinalIgnoreCase)
+                    || wanted.EndsWith("/" + key, StringComparison.OrdinalIgnoreCase))
+                    return file;
+            }
+            return null;
+        }
+
+        private static string NormalizeResource(string raw) => raw.Trim().Replace('\\', '/').TrimStart('.', '/');
+
+        private List<(string Key, string File)> LoadDeclaredResources()
+        {
+            var declared = new List<(string, string)>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var read = 0;
+            // En orden estable: que la configuración que se nombra no dependa de cómo enumere el disco.
+            foreach (var relative in ByName.Where(e => e.Key.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                         .SelectMany(e => e.Value).Order(StringComparer.Ordinal))
+            {
+                if (++read > MaxConfigFiles)
+                    break;
+                try
+                {
+                    var full = Path.Combine(_root, relative);
+                    if (new FileInfo(full).Length > MaxConfigBytes)
+                        continue;
+                    var xml = XmlCommentRegex().Replace(File.ReadAllText(full), string.Empty);
+                    foreach (Match m in XmlValueRegex().Matches(xml))
+                    {
+                        var value = (m.Groups["a"].Success ? m.Groups["a"].Value : m.Groups["b"].Success ? m.Groups["b"].Value : m.Groups["c"].Value).Trim();
+                        if (value.Length > 0 && !value.Contains("://", StringComparison.Ordinal) && ResourcePathRegex().IsMatch(value)
+                            && NormalizeResource(value) is { Length: > 0 } key && seen.Add(key))
+                            declared.Add((key, relative));
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Una configuración ilegible no declara nada.
+                }
+            }
+            return declared;
+        }
+
+        private Dictionary<string, string> LoadRoutes()
+        {
+            var routes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, paths) in ByName)
+            {
+                if (!name.StartsWith("struts-config", StringComparison.OrdinalIgnoreCase) || !name.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                foreach (var relative in paths)
+                {
+                    try
+                    {
+                        foreach (Match m in StrutsActionPathRegex().Matches(File.ReadAllText(Path.Combine(_root, relative))))
+                        {
+                            var path = m.Groups["path"].Value.Trim();
+                            routes.TryAdd((path.StartsWith('/') ? path : "/" + path) + ".do", relative);
+                        }
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // Un fichero ilegible no declara rutas.
+                    }
+                }
+            }
+            return routes;
         }
 
         public int? LineCount(string full)

@@ -3,6 +3,7 @@ using AITaskAgent.FileTools.Tools;
 using AITaskAgent.LLM.Tools.Implementation;
 using CodebaseAnalysis.Core.Enrichment;
 using CodebaseAnalysis.Core.Models;
+using CodebaseAnalysis.Core.Notes;
 using CodebaseAnalysis.Core.Tools;
 using OfficeTools.Extensions;
 
@@ -36,6 +37,7 @@ public static class AnalysisToolRegistration
         // pom.xml) o, si no declara ninguna, con Latin-1: las tildes de un repositorio ISO-8859-1 salían como U+FFFD (H-8).
         FileToolsConfiguration.DefaultEncoding = SourceEncoding.ResolveReadFallback(input.RepositoryPath, input.SourceDefaultEncoding);
         AvailableTools.Instance.Register(new ViewFileTool());
+        AvailableTools.Instance.Register(new ViewFileOutlineTool());
         // view_code_item fuera de C#: el rango de líneas del nodo del grafo (en Java, el de javac que escribe el analizador) y,
         // sin grafo o sin nodo, el localizador por llaves para Java. Los .cs siguen con Roslyn.
         AvailableTools.Instance.Register(new ViewCodeItemTool(
@@ -71,6 +73,14 @@ public static class AnalysisToolRegistration
         AvailableTools.Instance.Register(new ReadDocumentTool(knowledge));
         AvailableTools.Instance.Register(new DescribeImageTool(knowledge));
         AvailableTools.Instance.Register(new SemanticSearchTool());
+
+        // Protocolo de notas: las tools de lectura de los auditores, envueltas para marcar cada resultado con [Rn] cuando el paso
+        // que las llama tiene sesión de notas. Sin sesión (el chat, el verificador) devuelven lo mismo que sin envolver.
+        foreach (var name in AnalysisPipelineFactory.AuditorToolNames)
+        {
+            if (AvailableTools.Instance.GetTool(name) is { } tool)
+                AvailableTools.Instance.Register(NoteProtocolTool.Wrap(tool));
+        }
     }
 
     /// <summary>Excluir la raíz dejaría la búsqueda vacía: una BD o unos informes en la raíz no se excluyen.</summary>

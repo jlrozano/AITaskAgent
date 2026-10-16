@@ -8,7 +8,7 @@ using System.Text.Json;
 
 namespace CodebaseAnalysis.Core.Tools;
 
-public sealed class GraphDomainTool : LlmTool
+public sealed partial class GraphDomainTool : LlmTool
 {
     private readonly CbmGraphDb _graphDb;
 
@@ -18,7 +18,7 @@ public sealed class GraphDomainTool : LlmTool
     }
 
     public override string Name => "graph_domain";
-    public override string Description => "Explora elementos de dominio y framework: endpoints HTTP y contratos de seguridad ('routes'), registros del contenedor de inyección de dependencias ('di'), o atributos C# materializados ('attributes').";
+    public override string Description => "Explora elementos de dominio, framework y estructura: endpoints HTTP y contratos de seguridad ('routes'), registros del contenedor de inyección de dependencias con su lifetime ('di'), atributos C# materializados ('attributes'), proyectos C# con su acoplamiento, rol y dependencias contrastadas con los ProjectReference ('projects'), y contratos frente a implementaciones ('contracts': las implementaciones y consumidores de una interfaz o clase, o de qué tipos de otros proyectos depende un proyecto y si son contratos o implementaciones concretas), subsistemas del mapa de dominios del análisis ('subsystems': sin 'name', la lista con su descripción y tamaño; con el nombre o id de uno, sus miembros principales, puntos de entrada, tablas, dependencias y las notas de sus investigaciones) y tablas del SQL escrito en el código ('tables': sin 'name', la lista con lecturas y escrituras; con el nombre de una tabla, qué métodos o clases la leen y cuáles la escriben, con ruta:línea), hallazgos del registro del LLM ('findings': bugs, deuda y seguridad con severidad P0-P3, ancla en el código y estado; filtra por 'severity', 'kind' y 'name' = un símbolo o tipo) y contratos de métodos escritos por el LLM ('llm_contracts': qué hace, qué recibe, qué devuelve, efectos y excepciones de un método o de los de un tipo, con 'name').";
     public override bool IsReadOnly => true;
 
     protected override BinaryData ParametersSchema => BinaryData.FromString("""
@@ -27,12 +27,26 @@ public sealed class GraphDomainTool : LlmTool
       "properties": {
         "view": {
           "type": "string",
-          "enum": ["routes", "di", "attributes"],
-          "description": "Aspecto de dominio a inspeccionar: 'routes' (superficie HTTP con auth y contratos), 'di' (registros y lifetimes de IoC/DI), 'attributes' (atributos decoradores C#)."
+          "enum": ["routes", "di", "attributes", "projects", "contracts", "subsystems", "tables", "findings", "llm_contracts"],
+          "description": "Aspecto a inspeccionar: 'routes' (superficie HTTP con auth y contratos), 'di' (registros y lifetimes de IoC/DI), 'attributes' (atributos decoradores C#), 'projects' (proyectos C#: Ca/Ce/inestabilidad, abstracción, rol, dependencias observadas frente a ProjectReference y paquetes), 'contracts' (contratos frente a implementaciones; sin 'name' es un resumen por proyecto), 'subsystems' (subsistemas del mapa de dominios; sin 'name' la lista), 'tables' (tablas del SQL del código con quién las lee y quién las escribe; sin 'name' la lista), 'findings' (hallazgos del registro del LLM; sin 'name' la lista ordenada por severidad, con 'name' los de un símbolo o tipo y su detalle), 'llm_contracts' (contratos de métodos que escribió el LLM; con 'name' = un método o un tipo)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Para view='projects', 'contracts', 'subsystems' y 'tables'. En 'projects', filtra por el nombre de un proyecto. En 'contracts', el nombre de una interfaz o clase (sus implementaciones y consumidores; el Qualified Name exacto si el nombre es ambiguo) o de un proyecto (qué tipos de otros proyectos usa y si son contratos o implementaciones concretas). En 'subsystems', el nombre o el id de un subsistema (su detalle). En 'tables', el nombre de una tabla (quién la lee y quién la escribe). En 'findings' y 'llm_contracts', un símbolo (Tipo.Miembro) o un tipo."
         },
         "attr": {
           "type": "string",
           "description": "Filtro opcional para el nombre del atributo cuando view='attributes' (ej. 'Authorize', 'Obsolete', 'ApiController')."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"],
+          "description": "Solo para view='findings': filtra por severidad."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["bug", "debt", "security"],
+          "description": "Solo para view='findings': filtra por clase de hallazgo."
         },
         "limit": {
           "type": "integer",
@@ -52,7 +66,10 @@ public sealed class GraphDomainTool : LlmTool
         var dbPath = context.Get<string>(AnalysisContextKeys.CbmDbPath);
         var view = "routes";
         var attr = "";
+        var name = "";
         var limit = 40;
+        var severity = "";
+        var kind = "";
 
         try
         {
@@ -64,6 +81,18 @@ public sealed class GraphDomainTool : LlmTool
             if (doc.RootElement.TryGetProperty("attr", out var a))
             {
                 attr = a.GetString() ?? "";
+            }
+            if (doc.RootElement.TryGetProperty("name", out var n))
+            {
+                name = n.GetString() ?? "";
+            }
+            if (doc.RootElement.TryGetProperty("severity", out var sev))
+            {
+                severity = sev.GetString() ?? "";
+            }
+            if (doc.RootElement.TryGetProperty("kind", out var kd))
+            {
+                kind = kd.GetString() ?? "";
             }
             if (doc.RootElement.TryGetProperty("limit", out var l) && l.TryGetInt32(out var lInt))
             {
@@ -79,6 +108,12 @@ public sealed class GraphDomainTool : LlmTool
         {
             "di" => await DomainDiAsync(dbPath, limit, cancellationToken),
             "attributes" => await DomainAttributesAsync(dbPath, attr, limit, cancellationToken),
+            "projects" => await DomainProjectsAsync(dbPath, name, limit, cancellationToken),
+            "contracts" => await DomainContractsAsync(dbPath, name, limit, cancellationToken),
+            "subsystems" => await DomainSubsystemsAsync(dbPath, name, limit, cancellationToken),
+            "tables" => await DomainTablesAsync(dbPath, name, limit, cancellationToken),
+            "findings" => await DomainFindingsAsync(dbPath, name, severity, kind, limit, cancellationToken),
+            "llm_contracts" => await DomainLlmContractsAsync(dbPath, name, limit, cancellationToken),
             _ => await DomainRoutesAsync(dbPath, limit, cancellationToken)
         };
     }
@@ -133,7 +168,8 @@ public sealed class GraphDomainTool : LlmTool
     {
         var rows = await _graphDb.SelectAsync(
             "SELECT name, qualified_name AS qn, " +
-            $"json_extract({CbmGraphDb.SafeProperties},'$.di_lifetime') AS lifetime, " +
+            // DiEnricher escribe `lifetime` en el registro y `di_lifetime` en la implementación: se leen los dos.
+            $"coalesce(json_extract({CbmGraphDb.SafeProperties},'$.lifetime'), json_extract({CbmGraphDb.SafeProperties},'$.di_lifetime')) AS lifetime, " +
             $"json_extract({CbmGraphDb.SafeProperties},'$.is_external') AS is_external " +
             "FROM nodes WHERE label = 'DiRegistration' ORDER BY name LIMIT @lim",
             p => p.AddWithValue("@lim", limit), dbPath, ct);
@@ -152,7 +188,8 @@ public sealed class GraphDomainTool : LlmTool
         {
             var name = r.GetValueOrDefault("name") ?? "";
             var qn = r.GetValueOrDefault("qn") ?? "";
-            var lifetime = r.GetValueOrDefault("lifetime") ?? "Transient";
+            // Sin el dato no se sabe: «Transient» por defecto presentaba como transitorio un registro cuyo lifetime no se leyó.
+            var lifetime = r.GetValueOrDefault("lifetime") ?? "desconocido";
             var isExt = r.GetValueOrDefault("is_external")?.ToString() is "true" or "1" ? "Sí" : "No";
 
             sb.AppendLine($"| `{name}` | **{lifetime}** | {isExt} | `{qn}` |");

@@ -15,16 +15,19 @@ public sealed class AnalysisHost
     public AnalysisHost(IConfiguration configuration, IServiceProvider serviceProvider, ILogger<AnalysisHost> logger)
     {
         Roles = LlmRoleFactory.BuildRoles(
-            configuration,
             serviceProvider,
             AnalysisConfiguration.GetEnvVar,
             message => logger.LogInformation("{Message}", message),
-            [.. LlmRoleFactory.RequiredRoles, ChatAgent.RoleName]);
-        ChatRole = ChatAgent.EnsureRole(Roles, configuration);
+            [.. LlmRoleFactory.RequiredRoles, .. LlmRoleFactory.SharedPassRoles(configuration), ChatAgent.RoleName]);
+        ChatRole = ChatAgent.EnsureRole(Roles);
+        // Los modelos seleccionables del chat: lo incoherente se avisa y se omite, nunca aborta el arranque.
+        ChatModels = ChatModelCatalog.Build(configuration, Roles, message => logger.LogWarning("{Message}", message));
+        logger.LogInformation("💬 Modelos del chat: {Models} (por defecto '{Default}').",
+            string.Join(", ", ChatModels.Models.Select(m => $"{m.Id} → {m.Model}")), ChatModels.Default.Id);
         TemplateProvider = AnalysisPipelineFactory.CreateDefaultTemplateProvider();
         ChatOptions = ChatOptions.FromConfiguration(configuration);
         // Los del chat al arrancar el host; los del análisis, al arrancar cada análisis (AnalysisRunner).
-        logger.LogInformation("{Limits}", EffectiveLimits.DescribeChat(ChatOptions, ChatRole));
+        logger.LogInformation("{Limits}", EffectiveLimits.DescribeChat(ChatOptions, ChatModels.Default.Role));
         logger.LogInformation("{Limits}", EffectiveLimits.DescribeFramework(serviceProvider));
 
         // Describir imágenes (plan v2 §7.4): el rol de CodebaseAnalysis:Documents:VisionRole con su proveedor y clave.
@@ -50,6 +53,9 @@ public sealed class AnalysisHost
 
     public Dictionary<string, LlmRole> Roles { get; }
     public LlmRole ChatRole { get; }
+
+    /// <summary>Modelos con que se puede responder en el chat (<see cref="ChatModelCatalog"/>).</summary>
+    public ChatModelCatalog ChatModels { get; }
     public ITemplateProvider TemplateProvider { get; }
     public ChatOptions ChatOptions { get; }
 }

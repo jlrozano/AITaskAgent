@@ -1,0 +1,1829 @@
+{
+ "batch": "event",
+ "files": [
+  {
+   "path": "Observability/Events/BranchCompletedEvent.cs",
+   "role": "evento",
+   "summary": "Registro sellado que notifica la finalizacion de una rama de ejecucion, con exito, duracion y mensaje de error. Expone la constante EventTypeName = \"branch.completed\"."
+  },
+  {
+   "path": "Observability/Events/BranchStartedEvent.cs",
+   "role": "evento",
+   "summary": "Registro sellado que notifica el inicio de una rama. EventTypeName = \"branch.started\"."
+  },
+  {
+   "path": "Observability/Events/LlmResponseEvent.cs",
+   "role": "evento",
+   "summary": "Evento de respuesta del LLM: chunk de streaming (FinishReason = Streaming) o respuesta final. Transporta contenido, motivo de finalizacion, tokens (total, prompt, completion, cacheados), coste USD, modelo, proveedor y tool calls."
+  },
+  {
+   "path": "Observability/Events/LoopExhaustedEvent.cs",
+   "role": "evento",
+   "summary": "Evento que indica que un bucle agoto sus iteraciones maximas."
+  },
+  {
+   "path": "Observability/Events/PipelineCompletedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de finalizacion de pipeline con nombre, exito, duracion y error."
+  },
+  {
+   "path": "Observability/Events/PipelineResumedEvent.cs",
+   "role": "evento",
+   "summary": "Evento emitido tras reanudar un pipeline. EventTypeName = \"pipeline.resumed\"."
+  },
+  {
+   "path": "Observability/Events/PipelineResumingEvent.cs",
+   "role": "evento",
+   "summary": "Evento emitido al empezar a reanudar un pipeline. EventTypeName = \"pipeline.resuming\"."
+  },
+  {
+   "path": "Observability/Events/PipelineStartedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de inicio de pipeline con nombre y numero de pasos."
+  },
+  {
+   "path": "Observability/Events/PipelineSuspendedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de suspension HITL del pipeline a la espera de entrada humana."
+  },
+  {
+   "path": "Observability/Events/ProgressEventBase.cs",
+   "role": "contrato",
+   "summary": "Record abstracto base de los eventos de progreso. Implementa IProgressEvent con StepName, EventType abstracto, Timestamp (UtcNow en construccion), CorrelationId, SuppressFromUser y SchemaVersion \"1.0\"."
+  },
+  {
+   "path": "Observability/Events/StepCachedHitEvent.cs",
+   "role": "evento",
+   "summary": "Evento de acierto de cache de un paso."
+  },
+  {
+   "path": "Observability/Events/StepCompletedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de finalizacion de paso. Incluye exito, duracion, error, AdditionalData y el IStepResult."
+  },
+  {
+   "path": "Observability/Events/StepProgressEvent.cs",
+   "role": "evento",
+   "summary": "Evento generico de progreso para notificaciones personalizadas. Implementa IProgressEvent directamente, sin heredar de ProgressEventBase."
+  },
+  {
+   "path": "Observability/Events/StepRoutingEvent.cs",
+   "role": "evento",
+   "summary": "Evento de decision de enrutado de un router."
+  },
+  {
+   "path": "Observability/Events/StepStartedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de inicio de paso con numero de intento y datos adicionales."
+  },
+  {
+   "path": "Observability/Events/StepTimeoutEvent.cs",
+   "role": "evento",
+   "summary": "Evento de timeout de un paso."
+  },
+  {
+   "path": "Observability/Events/StepValidationEvent.cs",
+   "role": "evento",
+   "summary": "Evento de validacion de resultado de un paso (estructural o semantica)."
+  },
+  {
+   "path": "Observability/Events/TagCompletedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de finalizacion de tag de streaming."
+  },
+  {
+   "path": "Observability/Events/TagStartedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de inicio de tag de streaming."
+  },
+  {
+   "path": "Observability/Events/ToolCompletedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de finalizacion de herramienta."
+  },
+  {
+   "path": "Observability/Events/ToolStartedEvent.cs",
+   "role": "evento",
+   "summary": "Evento de inicio de herramienta."
+  }
+ ],
+ "types": [
+  {
+   "name": "BranchCompletedEvent",
+   "kind": "record",
+   "path": "Observability/Events/BranchCompletedEvent.cs",
+   "startLine": 3,
+   "endLine": 20,
+   "purpose": "Registro sellado que notifica la finalizacion de una rama de ejecucion, con exito, duracion y mensaje de error. Expone la constante EventTypeName = \"branch.completed\".",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventTypeName",
+     "startLine": 5,
+     "endLine": 5,
+     "does": "Constante de tipo de evento 'branch.completed'",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 7,
+     "endLine": 7,
+     "does": "Ruta del paso (nullable)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BranchName",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Nombre de la rama",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BranchId",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Id de la rama",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Success",
+     "startLine": 13,
+     "endLine": 13,
+     "does": "Resultado de la rama",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Duration",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Duracion",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ErrorMessage",
+     "startLine": 17,
+     "endLine": 17,
+     "does": "Mensaje de error opcional",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EventType",
+     "startLine": 19,
+     "endLine": 19,
+     "does": "Devuelve EventTypeName",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "BranchStartedEvent",
+   "kind": "record",
+   "path": "Observability/Events/BranchStartedEvent.cs",
+   "startLine": 3,
+   "endLine": 14,
+   "purpose": "Registro sellado que notifica el inicio de una rama. EventTypeName = \"branch.started\".",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventTypeName",
+     "startLine": 5,
+     "endLine": 5,
+     "does": "Constante 'branch.started'",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 7,
+     "endLine": 7,
+     "does": "Ruta del paso",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BranchName",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Nombre de la rama",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BranchId",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Id de la rama",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EventType",
+     "startLine": 13,
+     "endLine": 13,
+     "does": "Devuelve EventTypeName",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "LlmResponseEvent",
+   "kind": "record",
+   "path": "Observability/Events/LlmResponseEvent.cs",
+   "startLine": 10,
+   "endLine": 68,
+   "purpose": "Evento de respuesta del LLM: chunk de streaming (FinishReason = Streaming) o respuesta final. Transporta contenido, motivo de finalizacion, tokens (total, prompt, completion, cacheados), coste USD, modelo, proveedor y tool calls.",
+   "collaborators": [
+    "ProgressEventBase: base comun",
+    "FinishReason (LLM.Constants): enum del motivo",
+    "ToolCall (LLM.Models): elementos de ToolCalls"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 13,
+     "endLine": 13,
+     "does": "Devuelve la constante EventTypes.LlmResponse",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Content",
+     "startLine": 16,
+     "endLine": 16,
+     "does": "Contenido del chunk o respuesta (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "FinishReason",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "Motivo de finalizacion; por defecto Streaming",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ChoiceIndex",
+     "startLine": 26,
+     "endLine": 26,
+     "does": "Indice de la eleccion",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "RawFinishReason",
+     "startLine": 31,
+     "endLine": 31,
+     "does": "Cadena cruda del proveedor",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "IsThinking",
+     "startLine": 34,
+     "endLine": 34,
+     "does": "Marca contenido de razonamiento",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "TokensUsed",
+     "startLine": 37,
+     "endLine": 37,
+     "does": "Tokens totales (solo final)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "PromptTokens",
+     "startLine": 43,
+     "endLine": 43,
+     "does": "Tokens de prompt, nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CompletionTokens",
+     "startLine": 46,
+     "endLine": 46,
+     "does": "Tokens de completion, nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CachedPromptTokens",
+     "startLine": 52,
+     "endLine": 52,
+     "does": "Tokens de prompt servidos desde cache, nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CostUsd",
+     "startLine": 58,
+     "endLine": 58,
+     "does": "Coste en USD, nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Model",
+     "startLine": 61,
+     "endLine": 61,
+     "does": "Modelo usado",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Provider",
+     "startLine": 64,
+     "endLine": 64,
+     "does": "Proveedor usado",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ToolCalls",
+     "startLine": 67,
+     "endLine": 67,
+     "does": "Lista mutable de ToolCall solicitadas",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "LoopExhaustedEvent",
+   "kind": "record",
+   "path": "Observability/Events/LoopExhaustedEvent.cs",
+   "startLine": 3,
+   "endLine": 12,
+   "purpose": "Evento que indica que un bucle agoto sus iteraciones maximas.",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 5,
+     "endLine": 5,
+     "does": "Devuelve EventTypes.LoopExhausted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "LoopName",
+     "startLine": 7,
+     "endLine": 7,
+     "does": "Nombre del bucle",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "IterationsCompleted",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Iteraciones realizadas",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "MaxIterations",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Maximo configurado",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "PipelineCompletedEvent",
+   "kind": "record",
+   "path": "Observability/Events/PipelineCompletedEvent.cs",
+   "startLine": 6,
+   "endLine": 22,
+   "purpose": "Evento de finalizacion de pipeline con nombre, exito, duracion y error.",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.PipelineCompleted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "PipelineName",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Nombre (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Success",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Resultado",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Duration",
+     "startLine": 18,
+     "endLine": 18,
+     "does": "Duracion total",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ErrorMessage",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "Error opcional",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "PipelineResumedEvent",
+   "kind": "record",
+   "path": "Observability/Events/PipelineResumedEvent.cs",
+   "startLine": 3,
+   "endLine": 12,
+   "purpose": "Evento emitido tras reanudar un pipeline. EventTypeName = \"pipeline.resumed\".",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventTypeName",
+     "startLine": 5,
+     "endLine": 5,
+     "does": "Constante 'pipeline.resumed'",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 7,
+     "endLine": 7,
+     "does": "Ruta del paso",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "TargetStepPath",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Ruta del paso destino",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EventType",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Devuelve EventTypeName",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "PipelineResumingEvent",
+   "kind": "record",
+   "path": "Observability/Events/PipelineResumingEvent.cs",
+   "startLine": 3,
+   "endLine": 12,
+   "purpose": "Evento emitido al empezar a reanudar un pipeline. EventTypeName = \"pipeline.resuming\".",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventTypeName",
+     "startLine": 5,
+     "endLine": 5,
+     "does": "Constante 'pipeline.resuming'",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 7,
+     "endLine": 7,
+     "does": "Ruta del paso",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "TargetStepPath",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Ruta del paso destino",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EventType",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Devuelve EventTypeName",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "PipelineStartedEvent",
+   "kind": "record",
+   "path": "Observability/Events/PipelineStartedEvent.cs",
+   "startLine": 6,
+   "endLine": 16,
+   "purpose": "Evento de inicio de pipeline con nombre y numero de pasos.",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.PipelineStarted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "PipelineName",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Nombre (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "TotalSteps",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Numero total de pasos",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "PipelineSuspendedEvent",
+   "kind": "record",
+   "path": "Observability/Events/PipelineSuspendedEvent.cs",
+   "startLine": 6,
+   "endLine": 20,
+   "purpose": "Evento de suspension HITL del pipeline a la espera de entrada humana.",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.PipelineSuspended",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "TargetStepPath",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Ruta del paso destino (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "IsBranchSuspension",
+     "startLine": 14,
+     "endLine": 14,
+     "does": "Indica suspension de una rama",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BranchName",
+     "startLine": 16,
+     "endLine": 16,
+     "does": "Rama suspendida",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ErrorMessage",
+     "startLine": 19,
+     "endLine": 19,
+     "does": "Error que motivo la suspension",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ProgressEventBase",
+   "kind": "record",
+   "path": "Observability/Events/ProgressEventBase.cs",
+   "startLine": 8,
+   "endLine": 27,
+   "purpose": "Record abstracto base de los eventos de progreso. Implementa IProgressEvent con StepName, EventType abstracto, Timestamp (UtcNow en construccion), CorrelationId, SuppressFromUser y SchemaVersion \"1.0\".",
+   "collaborators": [
+    "IProgressEvent: contrato que implementa",
+    "19 eventos derivados"
+   ],
+   "members": [
+    {
+     "name": "StepName",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Nombre del paso; por defecto cadena vacia",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EventType",
+     "startLine": 14,
+     "endLine": 14,
+     "does": "Propiedad abstracta de tipo de evento",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Timestamp",
+     "startLine": 17,
+     "endLine": 17,
+     "does": "Marca temporal inicializada a DateTimeOffset.UtcNow",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CorrelationId",
+     "startLine": 20,
+     "endLine": 20,
+     "does": "Id de correlacion opcional",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "SuppressFromUser",
+     "startLine": 23,
+     "endLine": 23,
+     "does": "Oculta el evento al usuario",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "SchemaVersion",
+     "startLine": 26,
+     "endLine": 26,
+     "does": "Version de esquema fija '1.0'",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepCachedHitEvent",
+   "kind": "record",
+   "path": "Observability/Events/StepCachedHitEvent.cs",
+   "startLine": 6,
+   "endLine": 13,
+   "purpose": "Evento de acierto de cache de un paso.",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve literal 'step.cached_hit'",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Ruta del paso",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepCompletedEvent",
+   "kind": "record",
+   "path": "Observability/Events/StepCompletedEvent.cs",
+   "startLine": 8,
+   "endLine": 33,
+   "purpose": "Evento de finalizacion de paso. Incluye exito, duracion, error, AdditionalData y el IStepResult.",
+   "collaborators": [
+    "IStepCompletedEvent: contrato implementado",
+    "IStepResult: resultado referenciado",
+    "ObservabilityMiddleware: lo emite"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Devuelve EventTypes.StepCompleted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 13,
+     "endLine": 13,
+     "does": "Ruta del paso",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Success",
+     "startLine": 16,
+     "endLine": 16,
+     "does": "Resultado",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Duration",
+     "startLine": 19,
+     "endLine": 19,
+     "does": "Duracion",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ErrorMessage",
+     "startLine": 22,
+     "endLine": 22,
+     "does": "Error opcional",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AdditionalData",
+     "startLine": 28,
+     "endLine": 28,
+     "does": "Diccionario mutable inicializado vacio",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepResult",
+     "startLine": 32,
+     "endLine": 32,
+     "does": "Resultado del paso, nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepProgressEvent",
+   "kind": "record",
+   "path": "Observability/Events/StepProgressEvent.cs",
+   "startLine": 6,
+   "endLine": 37,
+   "purpose": "Evento generico de progreso para notificaciones personalizadas. Implementa IProgressEvent directamente, sin heredar de ProgressEventBase.",
+   "collaborators": [
+    "IProgressEvent: contrato implementado"
+   ],
+   "members": [
+    {
+     "name": "StepName",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Nombre del paso (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EventType",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Tipo de evento (required, settable)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Timestamp",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "UtcNow por defecto",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CorrelationId",
+     "startLine": 18,
+     "endLine": 18,
+     "does": "Id de correlacion",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "SchemaVersion",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "'1.0'",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "SuppressFromUser",
+     "startLine": 24,
+     "endLine": 24,
+     "does": "Oculta al usuario",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Message",
+     "startLine": 27,
+     "endLine": 27,
+     "does": "Mensaje (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CurrentProgress",
+     "startLine": 30,
+     "endLine": 30,
+     "does": "Progreso actual opcional",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "TotalProgress",
+     "startLine": 33,
+     "endLine": 33,
+     "does": "Progreso total opcional",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Metadata",
+     "startLine": 36,
+     "endLine": 36,
+     "does": "Metadatos opcionales",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepRoutingEvent",
+   "kind": "record",
+   "path": "Observability/Events/StepRoutingEvent.cs",
+   "startLine": 6,
+   "endLine": 16,
+   "purpose": "Evento de decision de enrutado de un router.",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.StepRouting",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "SelectedRoute",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Ruta elegida (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "RoutingReason",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Motivo (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepStartedEvent",
+   "kind": "record",
+   "path": "Observability/Events/StepStartedEvent.cs",
+   "startLine": 6,
+   "endLine": 18,
+   "purpose": "Evento de inicio de paso con numero de intento y datos adicionales.",
+   "collaborators": [
+    "ProgressEventBase: base",
+    "StepBase / IEnrichable / ObservabilityMiddleware: lo crean o enriquecen"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.StepStarted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 11,
+     "endLine": 11,
+     "does": "Ruta del paso",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AttemptNumber",
+     "startLine": 14,
+     "endLine": 14,
+     "does": "Intento, por defecto 1",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AdditionalData",
+     "startLine": 17,
+     "endLine": 17,
+     "does": "Diccionario nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepTimeoutEvent",
+   "kind": "record",
+   "path": "Observability/Events/StepTimeoutEvent.cs",
+   "startLine": 6,
+   "endLine": 16,
+   "purpose": "Evento de timeout de un paso.",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve literal 'step.timeout'",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Ruta del paso",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ConfiguredTimeout",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Timeout configurado",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "StepValidationEvent",
+   "kind": "record",
+   "path": "Observability/Events/StepValidationEvent.cs",
+   "startLine": 6,
+   "endLine": 24,
+   "purpose": "Evento de validacion de resultado de un paso (estructural o semantica).",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.StepValidation",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "IsValid",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Resultado",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepPath",
+     "startLine": 14,
+     "endLine": 14,
+     "does": "Ruta del paso",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ValidationError",
+     "startLine": 17,
+     "endLine": 17,
+     "does": "Error de validacion",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ValidationType",
+     "startLine": 20,
+     "endLine": 20,
+     "does": "Tipo como string; por defecto Structural",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AttemptNumber",
+     "startLine": 23,
+     "endLine": 23,
+     "does": "Intento, por defecto 1",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "TagCompletedEvent",
+   "kind": "record",
+   "path": "Observability/Events/TagCompletedEvent.cs",
+   "startLine": 6,
+   "endLine": 25,
+   "purpose": "Evento de finalizacion de tag de streaming.",
+   "collaborators": [
+    "ProgressEventBase: base",
+    "TagHandlerBase: lo crea/enriquece"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.TagCompleted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "TagName",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Nombre (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Success",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Exito; por defecto true",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Duration",
+     "startLine": 18,
+     "endLine": 18,
+     "does": "Duracion",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ErrorMessage",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "Error opcional",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AdditionalData",
+     "startLine": 24,
+     "endLine": 24,
+     "does": "Diccionario nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "TagStartedEvent",
+   "kind": "record",
+   "path": "Observability/Events/TagStartedEvent.cs",
+   "startLine": 6,
+   "endLine": 19,
+   "purpose": "Evento de inicio de tag de streaming.",
+   "collaborators": [
+    "ProgressEventBase: hereda las propiedades comunes (StepName, Timestamp, CorrelationId, SuppressFromUser, SchemaVersion)"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.TagStarted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "TagName",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Nombre (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Attributes",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Atributos del tag",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AdditionalData",
+     "startLine": 18,
+     "endLine": 18,
+     "does": "Diccionario nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ToolCompletedEvent",
+   "kind": "record",
+   "path": "Observability/Events/ToolCompletedEvent.cs",
+   "startLine": 6,
+   "endLine": 25,
+   "purpose": "Evento de finalizacion de herramienta.",
+   "collaborators": [
+    "ProgressEventBase: base",
+    "LlmTool: lo crea/enriquece"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.ToolCompleted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ToolName",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Nombre (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Success",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Resultado",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Duration",
+     "startLine": 18,
+     "endLine": 18,
+     "does": "Duracion",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ErrorMessage",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "Error",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AdditionalData",
+     "startLine": 24,
+     "endLine": 24,
+     "does": "Diccionario nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ToolStartedEvent",
+   "kind": "record",
+   "path": "Observability/Events/ToolStartedEvent.cs",
+   "startLine": 6,
+   "endLine": 16,
+   "purpose": "Evento de inicio de herramienta.",
+   "collaborators": [
+    "ProgressEventBase: base",
+    "LlmTool: lo crea/enriquece"
+   ],
+   "members": [
+    {
+     "name": "EventType",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Devuelve EventTypes.ToolStarted",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ToolName",
+     "startLine": 12,
+     "endLine": 12,
+     "does": "Nombre (required)",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "AdditionalData",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Diccionario nullable",
+     "inputs": "valor asignado por el inicializador del emisor",
+     "outputs": "valor almacenado",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "localId": "F1",
+   "kind": "debt",
+   "category": "event-contract-inconsistency",
+   "title": "TagCompletedEvent.Success por defecto true, el resto de eventos Completed por defecto false",
+   "rationale": "StepCompletedEvent, ToolCompletedEvent, PipelineCompletedEvent y BranchCompletedEvent dejan Success a false por defecto; TagCompletedEvent lo inicializa a true. Un emisor que olvide asignar Success produce fallo en tools/steps pero exito falso en tags, y los consumidores no pueden asumir un valor por defecto uniforme.",
+   "anchor": {
+    "path": "Observability/Events/TagCompletedEvent.cs",
+    "startLine": 15,
+    "endLine": 15,
+    "quote": "public bool Success { get; init; } = true;"
+   },
+   "instances": [
+    {
+     "path": "Observability/Events/ToolCompletedEvent.cs",
+     "startLine": 15,
+     "endLine": 15,
+     "quote": "public bool Success { get; init; }"
+    },
+    {
+     "path": "Observability/Events/StepCompletedEvent.cs",
+     "startLine": 16,
+     "endLine": 16,
+     "quote": "public bool Success { get; init; }"
+    }
+   ],
+   "symbol": "TagCompletedEvent.Success",
+   "seedRef": null,
+   "activationPath": "Un handler de tag que construya el evento sin fijar Success en la rama de error (TagHandlerBase.OnCompleteTagAsync / EnrichCompletedEvent, fuera del lote).",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F2",
+   "kind": "debt",
+   "category": "event-type-source",
+   "title": "Cadenas de tipo de evento literales y constantes locales en lugar de AITaskAgentConstants.EventTypes",
+   "rationale": "La mayoria de eventos devuelven EventType desde AITaskAgentConstants.EventTypes, pero StepCachedHitEvent y StepTimeoutEvent usan literales y Branch*/PipelineResumed/PipelineResuming definen su propia constante EventTypeName. Los identificadores quedan repartidos en tres mecanismos; renombrar o buscar todos los tipos exige revisar cada fichero y puede divergir del catalogo central.",
+   "anchor": {
+    "path": "Observability/Events/StepCachedHitEvent.cs",
+    "startLine": 9,
+    "endLine": 9,
+    "quote": "public override string EventType => \"step.cached_hit\";"
+   },
+   "instances": [
+    {
+     "path": "Observability/Events/StepTimeoutEvent.cs",
+     "startLine": 9,
+     "endLine": 9,
+     "quote": "public override string EventType => \"step.timeout\";"
+    },
+    {
+     "path": "Observability/Events/BranchStartedEvent.cs",
+     "startLine": 5,
+     "endLine": 5,
+     "quote": "public const string EventTypeName = \"branch.started\";"
+    },
+    {
+     "path": "Observability/Events/PipelineResumedEvent.cs",
+     "startLine": 5,
+     "endLine": 5,
+     "quote": "public const string EventTypeName = \"pipeline.resumed\";"
+    }
+   ],
+   "symbol": "StepCachedHitEvent.EventType",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.8
+  },
+  {
+   "localId": "F3",
+   "kind": "debt",
+   "category": "duplication",
+   "title": "StepProgressEvent duplica las propiedades comunes en vez de heredar de ProgressEventBase",
+   "rationale": "StepProgressEvent redeclara StepName, EventType, Timestamp, CorrelationId, SchemaVersion y SuppressFromUser; la version de esquema '1.0' queda duplicada. Un cambio en la base no se propaga a este evento. La diferencia visible es que EventType y StepName son required y asignables.",
+   "anchor": {
+    "path": "Observability/Events/StepProgressEvent.cs",
+    "startLine": 21,
+    "endLine": 21,
+    "quote": "public string SchemaVersion { get; init; } = \"1.0\";"
+   },
+   "instances": [
+    {
+     "path": "Observability/Events/ProgressEventBase.cs",
+     "startLine": 26,
+     "endLine": 26,
+     "quote": "public string SchemaVersion { get; init; } = \"1.0\";"
+    }
+   ],
+   "symbol": "StepProgressEvent",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F4",
+   "kind": "debt",
+   "category": "type-inconsistency",
+   "title": "Tipo de AdditionalData inconsistente entre eventos",
+   "rationale": "StepCompletedEvent.AdditionalData es Dictionary<string, object?> no nulo inicializado vacio, mientras StepStartedEvent, Tag* y Tool* usan Dictionary<string, object>? (diccionario anulable, valores no nulos). Los consumidores deben tratar dos formas distintas; un enriquecedor generico que escriba un null por valor choca con el contrato de los eventos no 'object?'.",
+   "anchor": {
+    "path": "Observability/Events/StepCompletedEvent.cs",
+    "startLine": 28,
+    "endLine": 28,
+    "quote": "public Dictionary<string, object?> AdditionalData { get; init; } = [];"
+   },
+   "instances": [
+    {
+     "path": "Observability/Events/StepStartedEvent.cs",
+     "startLine": 17,
+     "endLine": 17,
+     "quote": "public Dictionary<string, object>? AdditionalData { get; init; }"
+    },
+    {
+     "path": "Observability/Events/ToolCompletedEvent.cs",
+     "startLine": 24,
+     "endLine": 24,
+     "quote": "public Dictionary<string, object>? AdditionalData { get; init; }"
+    }
+   ],
+   "symbol": "StepCompletedEvent.AdditionalData",
+   "seedRef": null,
+   "activationPath": "Enriquecimiento via StepBase.EnrichStartedEvent / LlmTool.EnrichCompletedEvent (fuera del lote).",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F5",
+   "kind": "debt",
+   "category": "mutable-state-in-event",
+   "title": "Records sellados exponen colecciones mutables que rompen la inmutabilidad y la igualdad por valor",
+   "rationale": "Los records usan init pero sus diccionarios y List<ToolCall> son mutables y se comparan por referencia en la igualdad sintetizada. Un evento publicado a varios suscriptores puede ser modificado por uno y observado por otros; dos eventos con el mismo contenido no son Equals.",
+   "anchor": {
+    "path": "Observability/Events/LlmResponseEvent.cs",
+    "startLine": 67,
+    "endLine": 67,
+    "quote": "public List<ToolCall>? ToolCalls { get; init; }"
+   },
+   "instances": [
+    {
+     "path": "Observability/Events/StepCompletedEvent.cs",
+     "startLine": 28,
+     "endLine": 28,
+     "quote": "public Dictionary<string, object?> AdditionalData { get; init; } = [];"
+    },
+    {
+     "path": "Observability/Events/StepProgressEvent.cs",
+     "startLine": 36,
+     "endLine": 36,
+     "quote": "public Dictionary<string, object?>? Metadata { get; init; }"
+    }
+   ],
+   "symbol": "LlmResponseEvent.ToolCalls",
+   "seedRef": null,
+   "activationPath": "Publicacion de eventos a varios observadores; el despachador no esta en el lote.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.5
+  },
+  {
+   "localId": "F6",
+   "kind": "debt",
+   "category": "leaky-abstraction",
+   "title": "StepCompletedEvent retiene IStepResult completo, acoplando observabilidad y resultado de ejecucion",
+   "rationale": "El evento guarda la referencia al IStepResult, que puede contener objetos grandes o no serializables. Un sink que serialice o persista eventos arrastra ese grafo; ademas el resultado se retiene en memoria mientras el evento viva. No hay en el lote filtro de serializacion.",
+   "anchor": {
+    "path": "Observability/Events/StepCompletedEvent.cs",
+    "startLine": 32,
+    "endLine": 32,
+    "quote": "public IStepResult? StepResult { get; init; }"
+   },
+   "instances": [],
+   "symbol": "StepCompletedEvent.StepResult",
+   "seedRef": null,
+   "activationPath": "ObservabilityMiddleware.InvokeAsync crea el evento (fuera del lote).",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.4
+  },
+  {
+   "localId": "F7",
+   "kind": "debt",
+   "category": "stringly-typed",
+   "title": "ValidationType es string con valores libres en lugar de enum",
+   "rationale": "El comentario limita los valores a 'structural' y 'semantic', pero el tipo admite cualquier cadena; un emisor puede enviar un valor no contemplado sin error de compilacion y los consumidores deben comparar cadenas.",
+   "anchor": {
+    "path": "Observability/Events/StepValidationEvent.cs",
+    "startLine": 20,
+    "endLine": 20,
+    "quote": "public string ValidationType { get; init; } = AITaskAgent.Core.AITaskAgentConstants.ValidationTypes.Structural;"
+   },
+   "instances": [],
+   "symbol": "StepValidationEvent.ValidationType",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 1,
+   "likelihood": 2,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F8",
+   "kind": "debt",
+   "category": "inconsistent-shape",
+   "title": "Correlacion por ruta de paso dispar entre eventos",
+   "rationale": "StepPath existe en Step*/Branch*/PipelineResum* pero no en StepRoutingEvent, Tool*, Tag* ni LlmResponseEvent; PipelineSuspendedEvent usa TargetStepPath required. Varias propiedades carecen de documentacion XML, y la correlacion paso-evento depende de StepName en unos eventos y de StepPath en otros.",
+   "anchor": {
+    "path": "Observability/Events/StepRoutingEvent.cs",
+    "startLine": 12,
+    "endLine": 12,
+    "quote": "public required string SelectedRoute { get; init; }"
+   },
+   "instances": [
+    {
+     "path": "Observability/Events/PipelineSuspendedEvent.cs",
+     "startLine": 14,
+     "endLine": 14,
+     "quote": "public bool IsBranchSuspension { get; init; }"
+    }
+   ],
+   "symbol": "StepRoutingEvent",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 1,
+   "likelihood": 2,
+   "confidence": 0.4
+  }
+ ],
+ "seedVerdicts": [],
+ "relations": [
+  {
+   "from": "StepCompletedEvent",
+   "to": "IStepCompletedEvent",
+   "type": "IMPLEMENTS",
+   "anchor": {
+    "path": "Observability/Events/StepCompletedEvent.cs",
+    "startLine": 8,
+    "endLine": 8,
+    "quote": "public sealed record StepCompletedEvent : ProgressEventBase, IStepCompletedEvent"
+   }
+  },
+  {
+   "from": "StepCompletedEvent",
+   "to": "IStepResult",
+   "type": "READS",
+   "anchor": {
+    "path": "Observability/Events/StepCompletedEvent.cs",
+    "startLine": 32,
+    "endLine": 32,
+    "quote": "public IStepResult? StepResult { get; init; }"
+   }
+  },
+  {
+   "from": "LlmResponseEvent",
+   "to": "ToolCall",
+   "type": "READS",
+   "anchor": {
+    "path": "Observability/Events/LlmResponseEvent.cs",
+    "startLine": 67,
+    "endLine": 67,
+    "quote": "public List<ToolCall>? ToolCalls { get; init; }"
+   }
+  },
+  {
+   "from": "ProgressEventBase",
+   "to": "IProgressEvent",
+   "type": "IMPLEMENTS",
+   "anchor": {
+    "path": "Observability/Events/ProgressEventBase.cs",
+    "startLine": 8,
+    "endLine": 8,
+    "quote": "public abstract record ProgressEventBase : IProgressEvent"
+   }
+  },
+  {
+   "from": "StepProgressEvent",
+   "to": "IProgressEvent",
+   "type": "IMPLEMENTS",
+   "anchor": {
+    "path": "Observability/Events/StepProgressEvent.cs",
+    "startLine": 6,
+    "endLine": 6,
+    "quote": "public sealed record StepProgressEvent : IProgressEvent"
+   }
+  }
+ ],
+ "openQuestions": [
+  {
+   "symbol": "BranchStartedEvent/BranchCompletedEvent/PipelineResum*Event/LoopExhaustedEvent/StepTimeoutEvent/StepCachedHitEvent",
+   "question": "El grafo muestra Ca=0; no se sabe si algun emisor los construye (posible codigo muerto) o si el indexador no lo capta.",
+   "needs": [
+    "emisores en Core.Execution / pipelines"
+   ]
+  },
+  {
+   "symbol": "AITaskAgentConstants.EventTypes",
+   "question": "Existen en el catalogo central constantes para step.cached_hit, step.timeout, branch.* y pipeline.resum*?",
+   "needs": [
+    "Core/AITaskAgentConstants.cs"
+   ]
+  },
+  {
+   "symbol": "StepCompletedEvent.StepResult",
+   "question": "Como se serializan los eventos hacia sinks externos y se excluye StepResult?",
+   "needs": [
+    "sinks/serializadores de IProgressEvent"
+   ]
+  }
+ ]
+}

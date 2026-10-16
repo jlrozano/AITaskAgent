@@ -10,13 +10,23 @@ namespace CodebaseAnalysisWeb.Analysis;
 /// <see cref="Append"/> y <see cref="Subscribe"/> comparten cerrojo: la copia del replay y el alta del lector
 /// en vivo son atómicas respecto a los añadidos, así que un cliente que conecta a mitad no ve ni huecos ni
 /// duplicados. Cada lector tiene un canal sin límite propio: un cliente lento no frena al pipeline.
+/// <para>Lo que se guarda para el replay está acotado además en tamaño, sin tocar el <c>seq</c> ni lo que reciben los lectores en vivo:
+/// las salidas de tool (<c>data.output</c> de <c>tool.completed</c>) suman como mucho <c>maxToolOutputBytes</c>, y al pasarse se quita
+/// la de los más antiguos (que quedan con <c>outputDropped: true</c>); y de los <c>sharedpass.progress</c>, que traen el estado entero,
+/// solo el último conserva la lista de lotes (los anteriores quedan con <c>superseded: true</c>).</para>
 /// </remarks>
-public sealed class AnalysisEventLog(string runId, int maxEvents = AnalysisEventLog.DefaultMaxEvents)
+public sealed class AnalysisEventLog(string runId, int maxEvents = AnalysisEventLog.DefaultMaxEvents, long maxToolOutputBytes = AnalysisEventLog.DefaultMaxToolOutputBytes)
 {
     public const int DefaultMaxEvents = 50_000;
 
+    /// <summary>Bytes UTF-8 de salidas de tool que se conservan para el replay (4 MiB: unas 250 salidas al tope de 16 KiB).</summary>
+    public const long DefaultMaxToolOutputBytes = 4L * 1024 * 1024;
+
     private readonly Lock _lock = new();
     private readonly LinkedList<AnalysisEventDto> _events = new();
+    private readonly Queue<(LinkedListNode<AnalysisEventDto> Node, long Bytes)> _outputs = new();
+    private long _outputBytes;
+    private LinkedListNode<AnalysisEventDto>? _lastSharedPass;
     private readonly List<Channel<AnalysisEventDto>> _readers = [];
     private long _lastSeq;
     private long _droppedUpToSeq;
@@ -53,7 +63,8 @@ public sealed class AnalysisEventLog(string runId, int maxEvents = AnalysisEvent
                 return null;
 
             var stored = evt with { Seq = ++_lastSeq, RunId = runId };
-            _events.AddLast(stored);
+            var node = _events.AddLast(stored);
+            Bound(node);
             while (_events.Count > maxEvents)
             {
                 _droppedUpToSeq = _events.First!.Value.Seq;
@@ -129,6 +140,37 @@ public sealed class AnalysisEventLog(string runId, int maxEvents = AnalysisEvent
         {
             _completed = false;
         }
+    }
+
+    /// <summary>Acota lo guardado (ver la clase): las salidas de tool más antiguas y los estados de la pasada ya superados.</summary>
+    private void Bound(LinkedListNode<AnalysisEventDto> node)
+    {
+        var evt = node.Value;
+        if (evt.Type == AnalysisEventDtoTypes.ToolCompleted && evt.Data?.GetValueOrDefault("output") is string output)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetByteCount(output);
+            _outputs.Enqueue((node, bytes));
+            _outputBytes += bytes;
+            while (_outputBytes > maxToolOutputBytes && _outputs.TryDequeue(out var oldest))
+            {
+                _outputBytes -= oldest.Bytes;
+                if (oldest.Node.List != null)
+                    oldest.Node.Value = Without(oldest.Node.Value, "output", "outputDropped");
+            }
+        }
+        else if (evt.Type == AnalysisEventDtoTypes.SharedPassProgress)
+        {
+            if (_lastSharedPass?.List != null)
+                _lastSharedPass.Value = Without(_lastSharedPass.Value, "batches", "superseded");
+            _lastSharedPass = node;
+        }
+    }
+
+    private static AnalysisEventDto Without(AnalysisEventDto evt, string key, string flag)
+    {
+        var data = evt.Data?.Where(kv => kv.Key != key).ToDictionary(kv => kv.Key, kv => kv.Value) ?? [];
+        data[flag] = true;
+        return evt with { Data = data };
     }
 
     private void Unsubscribe(Channel<AnalysisEventDto> channel)

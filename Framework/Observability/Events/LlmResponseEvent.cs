@@ -46,6 +46,12 @@ public sealed record LlmResponseEvent : ProgressEventBase
     public int? CompletionTokens { get; init; }
 
     /// <summary>
+    /// Prompt tokens of this call served from the provider's prompt cache, inside <see cref="PromptTokens"/>; set like
+    /// <see cref="PromptTokens"/>, and null when the service does not report them.
+    /// </summary>
+    public int? CachedPromptTokens { get; init; }
+
+    /// <summary>
     /// Cost in USD of this call, from the prices of <c>LlmProvider.Models</c>; set like <see cref="PromptTokens"/>, and
     /// null when the model has no price configured.
     /// </summary>

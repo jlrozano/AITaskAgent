@@ -1,229 +1,158 @@
-using AITaskAgent.LLM.Abstractions;
+using AITaskAgent.Configuration;
 using AITaskAgent.LLM.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace CodebaseAnalysis.Core.Hosting;
 
-/// <summary>Un proveedor ya construido y su modelo por defecto.</summary>
-public sealed record ConfiguredProvider(LlmProvider Provider, string? DefaultModel);
-
 /// <summary>
-/// Construye proveedores y roles LLM desde <c>LlmConfiguration</c>. Cada rol usa el proveedor que
-/// nombra en <c>Provider</c>.
+/// Roles LLM de la app a partir de los del framework: <c>AITaskAgent:LlmProviders</c>, que <c>AddAITaskAgent()</c> enlaza en
+/// <see cref="IOptions{LlmEnvironment}"/> (proveedores, roles, <c>Inference</c> con sus <c>Options</c>, fallbacks). Encima
+/// solo va lo propio del sample: en Azure, la prioridad de las claves <c>Asistente:*</c>; una <c>${VARIABLE}</c> sin
+/// expandir cuenta como clave ausente; el log de claves y precios, y los roles que el pipeline necesita.
 /// </summary>
 public static class LlmRoleFactory
 {
-    /// <summary>MaxOutputTokens de un rol que no lo declara. gpt-5.4 descuenta de aquí también el razonamiento.</summary>
-    public const int DefaultMaxOutputTokens = 65536;
+    /// <summary>Sección del framework con proveedores y roles.</summary>
+    public const string SectionName = AITaskAgentConfigurationKeys.LlmProviders;
 
-    /// <summary>Roles que el pipeline necesita; si faltan en la configuración se crean con el proveedor por defecto.</summary>
+    /// <summary>Roles que el pipeline necesita; si falta alguno en la configuración, <see cref="BuildRoles"/> falla con sus nombres.</summary>
     public static IReadOnlyList<string> RequiredRoles { get; } =
     [
         "Enricher", "FunctionalAuditor", "CodeSmellsAuditor", "DeadCodeAuditor",
         "FlowsAuditor", "SecurityBugAuditor", "ArchitectureAuditor", "ApiSecurityAuditor",
-        "TechnicalDebtAuditor", "DiAuditor", "ExecutiveSynthesizer"
+        "TechnicalDebtAuditor", "DiAuditor", "ExecutiveSynthesizer", "ReportVerifier"
     ];
 
     /// <summary>
-    /// Un <see cref="LlmProvider"/> por entrada de <c>LlmConfiguration:Providers</c>. El servicio se
-    /// resuelve como <see cref="ILlmService"/> con clave igual al <c>ServiceType</c> en minúsculas. Para
-    /// Azure siguen teniendo prioridad las claves <c>Asistente:*</c> (y la variable de entorno
-    /// <c>Asistente__ApiKey</c>), que es como se configuraba antes.
+    /// Los roles de <see cref="IOptions{LlmEnvironment}"/>, cada uno con su proveedor ajustado (<see cref="ResolveEndpoint"/>).
+    /// Falla si no hay proveedores o si falta alguno de <paramref name="requiredRoles"/>; sin él, los <see cref="RequiredRoles"/> más los
+    /// de la pasada compartida si está activada (<see cref="SharedPassRoles"/>). Una lista explícita se respeta tal cual: quien la pasa
+    /// añade los de la pasada si los necesita.
     /// </summary>
-    /// <remarks><c>log</c> recibe una línea por proveedor y otra con el estado de su clave.</remarks>
-    public static Dictionary<string, ConfiguredProvider> BuildProviders(
-        IConfiguration configuration,
+    /// <remarks>
+    /// <c>log</c> recibe, por proveedor, una línea con su URL, otra con el estado de su clave y las de sus precios. Los errores
+    /// de la configuración en sí (rol sin <c>Model</c>, proveedor desconocido, <c>DefaultRole</c> que no existe…) los lanza el
+    /// framework al enlazarla.
+    /// </remarks>
+    public static Dictionary<string, LlmRole> BuildRoles(
         IServiceProvider serviceProvider,
         Func<string, string?> getEnvVar,
-        Action<string> log)
+        Action<string> log,
+        IEnumerable<string>? requiredRoles = null)
     {
-        var llmConfig = configuration.GetSection("LlmConfiguration");
-        var providers = new Dictionary<string, ConfiguredProvider>(StringComparer.OrdinalIgnoreCase);
-        foreach (var section in llmConfig.GetSection("Providers").GetChildren())
+        var environment = serviceProvider.GetRequiredService<IOptions<LlmEnvironment>>().Value;
+        var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+        if (environment.Providers.Count == 0)
         {
-            var serviceType = section["ServiceType"] ?? LlmServiceTypes.AzureOpenAI;
-            var serviceKey = serviceType.ToLowerInvariant();
-            var service = serviceProvider.GetKeyedService<ILlmService>(serviceKey)
-                ?? throw new InvalidOperationException(
-                    $"El proveedor '{section.Key}' usa ServiceType '{serviceType}'; este sample admite azure-openai, openai y openrouter.");
-            var isAzure = serviceKey == LlmServiceTypes.AzureOpenAI;
+            throw new InvalidOperationException($"{SectionName}:Providers no define ningún proveedor.");
+        }
 
-            var endpoint = ResolveEndpoint(configuration, section, getEnvVar);
-            var apiKey = endpoint.ApiKey;
-            var baseUrl = endpoint.BaseUrl
-                ?? throw new InvalidOperationException($"El proveedor '{section.Key}' no tiene BaseUrl ni Endpoint.");
-            var apiVersion = endpoint.ApiVersion;
-            var model = (isAzure ? Value(configuration["Asistente:DespliegueChat"]) : null) ?? Value(section["Model"]);
+        // El rol del framework guarda el objeto proveedor, no su nombre: cada rol se rehace con el proveedor ajustado.
+        var providers = environment.Providers.ToDictionary(p => p.Value, p => WithEndpoint(p.Value, configuration, getEnvVar));
+        var roles = new Dictionary<string, LlmRole>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, role) in environment.Roles)
+        {
+            roles[name] = new LlmRole
+            {
+                Provider = providers[role.Provider],
+                Model = role.Model,
+                SystemPrompt = role.SystemPrompt,
+                Inference = role.Inference,
+                Fallbacks = role.Fallbacks?.Select(f => f with { Provider = providers[f.Provider] }).ToList(),
+                Tools = role.Tools
+            };
+        }
 
-            log($"🤖 Proveedor '{section.Key}' ({serviceType}): {baseUrl} | modelo por defecto: {model ?? "(ninguno)"}{(apiVersion != null ? $" | ApiVersion: {apiVersion}" : "")}");
-            log(string.IsNullOrEmpty(apiKey)
-                ? $"⚠️ ADVERTENCIA: el proveedor '{section.Key}' no tiene ApiKey."
+        foreach (var (name, original) in environment.Providers)
+        {
+            var provider = providers[original];
+            log($"🤖 Proveedor '{name}' ({provider.Service.Name}): {provider.BaseUrl}{(provider.ApiVersion != null ? $" | ApiVersion: {provider.ApiVersion}" : "")}");
+            log(string.IsNullOrEmpty(provider.ApiKey)
+                ? $"⚠️ ADVERTENCIA: el proveedor '{name}' no tiene ApiKey."
                 // Sin prefijo: ni cuatro caracteres de la clave llegan al log (auditoría, H-11).
-                : $"🔑 ApiKey de '{section.Key}' configurada (longitud: {apiKey.Length})");
-
-            providers[section.Key] = new ConfiguredProvider(
-                new LlmProvider
-                {
-                    ApiKey = apiKey,
-                    BaseUrl = baseUrl,
-                    ApiVersion = apiVersion,
-                    Service = service,
-                    Inference = new LlmInferenceSettings
-                    {
-                        UseMaxCompletionTokens = section.GetValue<bool?>("Inference:UseMaxCompletionTokens") ?? true,
-                        JsonSupport = section.GetValue<bool?>("Inference:JsonSupport") ?? true,
-                        // Plazo por intento y de inactividad del streaming; sin la clave, los del servicio (10 y 2 min).
-                        RequestTimeoutSeconds = section.GetValue<int?>("Inference:RequestTimeoutSeconds"),
-                        StreamingInactivityTimeoutSeconds = section.GetValue<int?>("Inference:StreamingInactivityTimeoutSeconds")
-                    },
-                    Models = ReadModelPrices(section, log)
-                },
-                model);
+                : $"🔑 ApiKey de '{name}' configurada (longitud: {provider.ApiKey.Length})");
+            LogModelPrices(name, provider, roles.Values, log);
         }
 
-        if (providers.Count == 0)
+        var missing = (requiredRoles ?? RequiredRoles.Concat(SharedPassRoles(configuration))).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(r => !roles.ContainsKey(r)).ToList();
+        if (missing.Count > 0)
         {
-            throw new InvalidOperationException("LlmConfiguration:Providers no define ningún proveedor.");
+            throw new InvalidOperationException(
+                $"Faltan roles en {SectionName}:Roles: {string.Join(", ", missing)}. Cada uno necesita Provider y Model.");
         }
 
-        return providers;
+        return roles;
     }
 
     /// <summary>
-    /// Precios por millón de tokens de <c>LlmConfiguration:Providers:&lt;p&gt;:Models</c>, con la forma de
-    /// <see cref="LlmModelSettings"/> del framework (<c>Name</c>, <c>InputPricePerMillion</c>, <c>OutputPricePerMillion</c>), que
-    /// es lo que lee <see cref="LlmProvider.CalculateCost"/>. Una entrada sin los dos precios no cuenta: el coste de ese modelo
-    /// queda en null y no en 0, que parecería gratis. <c>Name</c> es el nombre del modelo del rol (en Azure, el despliegue).
+    /// Los roles de la pasada compartida (lector y juez) si <c>CodebaseAnalysis:SharedPass:Enabled</c> es true; si no, ninguno:
+    /// apagada, la configuración no tiene por qué declararlos.
     /// </summary>
-    internal static List<LlmModelSettings> ReadModelPrices(IConfigurationSection provider, Action<string> log)
+    public static IReadOnlyList<string> SharedPassRoles(IConfiguration configuration) =>
+        SharedPass.SharedPassOptions.FromConfiguration(configuration) is { Enabled: true } options ? [options.ReaderRole, options.JudgeRole] : [];
+
+    /// <summary>
+    /// Precios por millón de tokens de <c>Providers:&lt;p&gt;:Models</c>, que es lo que lee <see cref="LlmProvider.CalculateCost"/>,
+    /// y los modelos de los roles de ese proveedor sin entrada o con algún precio a null: su coste queda en null y no en 0,
+    /// que parecería gratis.
+    /// </summary>
+    private static void LogModelPrices(string name, LlmProvider provider, IEnumerable<LlmRole> roles, Action<string> log)
     {
-        var models = new List<LlmModelSettings>();
-        var unpriced = new List<string>();
-        foreach (var entry in provider.GetSection("Models").GetChildren())
+        var priced = provider.Models.Where(m => m.InputPricePerMillion.HasValue && m.OutputPricePerMillion.HasValue).ToList();
+        if (priced.Count > 0)
         {
-            var name = Value(entry["Name"]);
-            if (name == null)
-                continue;
-
-            var input = entry.GetValue<decimal?>("InputPricePerMillion");
-            var output = entry.GetValue<decimal?>("OutputPricePerMillion");
-            if (input is decimal i && output is decimal o && i >= 0 && o >= 0)
-                models.Add(new LlmModelSettings(name, i, o, new LlmInferenceSettings()));
-            else
-                unpriced.Add(name);
+            log($"💲 Precios de '{name}' (USD por millón de tokens, entrada/salida): " +
+                string.Join(", ", priced.Select(m => FormattableString.Invariant($"{m.Name} {m.InputPricePerMillion}/{m.OutputPricePerMillion}"))));
         }
 
-        if (models.Count > 0)
-        {
-            log($"💲 Precios de '{provider.Key}' (USD por millón de tokens, entrada/salida): " +
-                string.Join(", ", models.Select(m => FormattableString.Invariant($"{m.Name} {m.InputPricePerMillion}/{m.OutputPricePerMillion}"))));
-        }
+        var unpriced = roles
+            .Where(r => ReferenceEquals(r.Provider, provider))
+            .Select(r => r.Model)
+            .Where(model => !priced.Any(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         if (unpriced.Count > 0)
         {
-            log($"💲 Sin precio en '{provider.Key}' para {string.Join(", ", unpriced)}: su coste no se calcula " +
-                "(rellena InputPricePerMillion y OutputPricePerMillion en LlmConfiguration:Providers:<proveedor>:Models).");
+            log($"💲 Sin precio en '{name}' para {string.Join(", ", unpriced)}: su coste no se calcula " +
+                $"(añade una entrada con Name, InputPricePerMillion y OutputPricePerMillion en {SectionName}:Providers:{name}:Models).");
         }
+    }
 
-        return models;
+    private static LlmProvider WithEndpoint(LlmProvider provider, IConfiguration configuration, Func<string, string?> getEnvVar)
+    {
+        var isAzure = string.Equals(provider.Service.Name, LlmServiceTypes.AzureOpenAI, StringComparison.OrdinalIgnoreCase);
+        var endpoint = ResolveEndpoint(configuration, isAzure, provider.BaseUrl, provider.ApiKey, provider.ApiVersion, getEnvVar);
+        return new LlmProvider
+        {
+            // El framework ya exige BaseUrl: sin Asistente:Endpoint queda la suya.
+            BaseUrl = endpoint.BaseUrl ?? provider.BaseUrl,
+            ApiKey = endpoint.ApiKey,
+            ApiVersion = endpoint.ApiVersion,
+            Inference = provider.Inference,
+            Models = provider.Models,
+            Service = provider.Service
+        };
     }
 
     // Una ${VARIABLE} que no existe queda literal tras la expansión: cuenta como ausente.
     private static string? Value(string? v) => string.IsNullOrWhiteSpace(v) || v.StartsWith("${", StringComparison.Ordinal) ? null : v;
 
     /// <summary>
-    /// Tipo de servicio (en minúsculas), URL, clave y versión de API de un proveedor, con la prioridad de las claves
-    /// <c>Asistente:*</c> en Azure. La usan <see cref="BuildProviders"/> y el cliente de embeddings (plan v2 §8.2.2).
+    /// URL, clave y versión de API de un proveedor, con la prioridad de las claves <c>Asistente:*</c> (y de la variable de
+    /// entorno <c>Asistente__ApiKey</c>) en Azure, que es como se configuraba antes. La usan <see cref="BuildRoles"/> y el
+    /// cliente de embeddings (plan v2 §8.2.2).
     /// </summary>
-    public static (string ServiceType, string? BaseUrl, string? ApiKey, string? ApiVersion) ResolveEndpoint(
-        IConfiguration configuration, IConfigurationSection section, Func<string, string?> getEnvVar)
+    public static (string? BaseUrl, string? ApiKey, string? ApiVersion) ResolveEndpoint(
+        IConfiguration configuration, bool isAzure, string? baseUrl, string? apiKey, string? apiVersion, Func<string, string?> getEnvVar)
     {
-        var serviceType = (section["ServiceType"] ?? LlmServiceTypes.AzureOpenAI).ToLowerInvariant();
-        var isAzure = serviceType == LlmServiceTypes.AzureOpenAI;
-        var apiKey = isAzure
-            ? Value(configuration["Asistente:ApiKey"]) ?? Value(getEnvVar("Asistente__ApiKey")) ?? Value(section["ApiKey"])
-            : Value(section["ApiKey"]);
-        var baseUrl = (isAzure ? Value(configuration["Asistente:Endpoint"]) : null) ?? Value(section["BaseUrl"]) ?? Value(section["Endpoint"]);
-        var apiVersion = (isAzure ? Value(configuration["Asistente:ApiVersion"]) : null) ?? Value(section["ApiVersion"]);
-        return (serviceType, baseUrl, apiKey, apiVersion);
-    }
-
-    /// <summary>
-    /// Proveedores (<see cref="BuildProviders"/>) y un rol por entrada de <c>LlmConfiguration:Roles</c>;
-    /// los de <paramref name="requiredRoles"/> que falten se crean con el proveedor por defecto.
-    /// </summary>
-    /// <remarks>Sin <c>requiredRoles</c> se usan los <see cref="RequiredRoles"/>.</remarks>
-    public static Dictionary<string, LlmRole> BuildRoles(
-        IConfiguration configuration,
-        IServiceProvider serviceProvider,
-        Func<string, string?> getEnvVar,
-        Action<string> log,
-        IEnumerable<string>? requiredRoles = null)
-    {
-        var llmConfig = configuration.GetSection("LlmConfiguration");
-        var providers = BuildProviders(configuration, serviceProvider, getEnvVar, log);
-        var defaultProviderName = llmConfig["DefaultProvider"] ?? providers.Keys.First();
-        if (!providers.TryGetValue(defaultProviderName, out var defaultProvider))
-        {
-            throw new InvalidOperationException($"DefaultProvider '{defaultProviderName}' no está definido en LlmConfiguration:Providers.");
-        }
-
-        var roles = new Dictionary<string, LlmRole>(StringComparer.OrdinalIgnoreCase);
-        foreach (var rSection in llmConfig.GetSection("Roles").GetChildren())
-        {
-            var providerName = rSection["Provider"] ?? defaultProviderName;
-            if (!providers.TryGetValue(providerName, out var provider))
-            {
-                throw new InvalidOperationException($"El rol '{rSection.Key}' usa el proveedor '{providerName}', que no está definido en LlmConfiguration:Providers.");
-            }
-
-            var inference = new LlmInferenceSettings
-            {
-                Temperature = rSection.GetValue<float?>("Temperature") ?? 0.1f,
-                MaxTokens = rSection.GetValue<int?>("MaxOutputTokens") ?? DefaultMaxOutputTokens,
-                TopP = rSection.GetValue<float?>("TopP"),
-                UseMaxCompletionTokens = rSection.GetValue<bool?>("UseMaxCompletionTokens") ?? true,
-                // Solo si el rol los declara: sin la clave manda la del proveedor (BaseLlmStep fusiona las Options de los dos).
-                RequestTimeoutSeconds = rSection.GetValue<int?>("RequestTimeoutSeconds"),
-                StreamingInactivityTimeoutSeconds = rSection.GetValue<int?>("StreamingInactivityTimeoutSeconds")
-            };
-
-            // Solo si el rol lo declara: sin la clave, la inferencia queda exactamente como antes
-            // (UseStreaming sin fijar, que el framework lee como false).
-            if (rSection.GetValue<bool?>("UseStreaming") is bool useStreaming)
-            {
-                inference = inference with { UseStreaming = useStreaming };
-            }
-
-            roles[rSection.Key] = new LlmRole
-            {
-                Provider = provider.Provider,
-                Model = rSection["Model"] ?? provider.DefaultModel
-                    ?? throw new InvalidOperationException($"El rol '{rSection.Key}' no tiene Model y su proveedor '{providerName}' tampoco."),
-                SystemPrompt = rSection["SystemPrompt"],
-                Inference = inference
-            };
-        }
-
-        foreach (var roleName in requiredRoles ?? RequiredRoles)
-        {
-            if (!roles.ContainsKey(roleName))
-            {
-                roles[roleName] = new LlmRole
-                {
-                    Provider = defaultProvider.Provider,
-                    Model = defaultProvider.DefaultModel
-                        ?? throw new InvalidOperationException($"El rol '{roleName}' no está configurado y el proveedor por defecto no tiene Model."),
-                    Inference = new LlmInferenceSettings
-                    {
-                        Temperature = 0.1f,
-                        MaxTokens = DefaultMaxOutputTokens,
-                        UseMaxCompletionTokens = true
-                    }
-                };
-            }
-        }
-
-        return roles;
+        var key = isAzure
+            ? Value(configuration["Asistente:ApiKey"]) ?? Value(getEnvVar("Asistente__ApiKey")) ?? Value(apiKey)
+            : Value(apiKey);
+        var url = (isAzure ? Value(configuration["Asistente:Endpoint"]) : null) ?? Value(baseUrl);
+        var version = (isAzure ? Value(configuration["Asistente:ApiVersion"]) : null) ?? Value(apiVersion);
+        return (url, key, version);
     }
 }

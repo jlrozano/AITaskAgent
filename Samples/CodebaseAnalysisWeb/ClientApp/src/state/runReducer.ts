@@ -16,19 +16,31 @@ export const PHASE_LABELS: Record<Phase, string> = {
 
 /**
  * Steps de primer nivel de cada fase (§4.3), en el orden en que se ejecutan. `enrich` tiene dos: el enriquecimiento
- * nativo por lenguaje y `BdpEnricherStep` (P16). `facets` también, pero `PrepareRegenerationStep` solo corre al
+ * nativo por lenguaje y `DotNetEnricherStep` (P16). `facets` también, pero `PrepareRegenerationStep` solo corre al
  * regenerar informes, en lugar de la detección. El `step.started` de cualquiera abre la fase; solo el `step.completed`
  * correcto del último la cierra, y el fallo de cualquiera la marca fallida.
  */
 export const PHASE_STEPS: Record<string, Phase> = {
   DetectAndIndexGraphStep: 'detect',
   LanguageEnricherStep: 'enrich',
-  BdpEnricherStep: 'enrich',
+  DotNetEnricherStep: 'enrich',
   PrepareRegenerationStep: 'facets',
   SqlFacetExtractorStep: 'facets',
   ParallelReportsExecution: 'reports',
   ExecutiveSynthesizerStep: 'synthesis',
 };
+
+/**
+ * Pasos de la preparación por subsistema (`CodebaseAnalysis:Preparation:Mode = Subsystems`), en el orden en que se ejecutan
+ * tras `SqlFacetExtractorStep`. El servidor los asigna a la fase `facets` (`AnalysisEventMapper`). No están en `PHASE_STEPS`
+ * porque con `Mode = Off` no existen y entonces `SqlFacetExtractorStep` sigue cerrando la fase: aquí solo la reabren (el
+ * `step.started` de cualquiera) y la cierra el último, `TimeBudgetStep`. Su sub-step LLM (`DomainNaming`) no abre ni cierra
+ * nada, igual que los sub-steps de los auditores.
+ */
+export const PREPARATION_STEPS: readonly string[] = ['RepositoryInventoryStep', 'DomainDiscoveryStep', 'CoveragePlanningStep', 'TimeBudgetStep'];
+
+/** Último paso de la preparación: con él termina la fase `facets` cuando la preparación está activa. */
+const LAST_PREPARATION_STEP = PREPARATION_STEPS[PREPARATION_STEPS.length - 1];
 
 /** Último step de primer nivel de cada fase: el que la da por terminada. */
 export const PHASE_LAST_STEP: Partial<Record<Phase, string>> = Object.entries(PHASE_STEPS).reduce<Partial<Record<Phase, string>>>(
@@ -80,6 +92,31 @@ const REGENERATED_PHASES: readonly Phase[] = ['facets', 'reports'];
 export type PhaseStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
 export type AuditorStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
 
+/** Prefijos de los steps de la verificación: el paso por informe (`Verify_<Tipo>`) y su sub-step LLM (`Verifier_<Tipo>`). */
+export const VERIFY_PREFIXES = ['Verify_', 'Verifier_'] as const;
+
+/**
+ * Estado de la verificación de un informe (`report.verified`): no es el del auditor, que sigue siendo `succeeded`.
+ * `verified`: sin correcciones. `corrected`: reescrito con correcciones. `warnings`: quedan avisos de validación.
+ * `failed`: no se pudo verificar y el informe sigue como estaba.
+ */
+export type VerificationStatus = 'idle' | 'running' | 'verified' | 'corrected' | 'warnings' | 'failed';
+
+export interface VerificationState {
+  status: VerificationStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+  toolCalls: number;
+  activeTool: string | null;
+  /** Correcciones que lista el apartado «Cambios de la verificación». */
+  changes: number;
+  /** Versión del historial que «Deshacer» restaura; null si el informe no se reescribió. */
+  previousVersionId: string | null;
+  versionId: string | null;
+  /** Resumen del servidor (`report.verified.message`) o motivo del fallo. */
+  message: string | null;
+}
+
 export interface PhaseState {
   status: PhaseStatus;
   startedAt: string | null;
@@ -87,6 +124,79 @@ export interface PhaseState {
   durationMs: number | null;
   /** `data.error` del `step.completed` fallido del step de primer nivel. */
   error: string | null;
+}
+
+/**
+ * Una llamada a herramienta de un carril, para su detalle: se abre con su `tool.started` y se cierra con el `tool.completed` del mismo
+ * step y la misma tool (las tools de un step van en secuencia). Los argumentos llegan en los dos eventos (o, de un servidor anterior, del
+ * `llm.response`, truncados a 500 caracteres); la salida, solo en el de fin y truncada en el servidor.
+ */
+export interface ToolCallRecord {
+  /** `seq` del `tool.started`: identifica la llamada en el carril. */
+  key: number;
+  tool: string;
+  source: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  success: boolean | null;
+  error: string | null;
+  arguments: string | null;
+  argumentsTruncated: boolean;
+  output: string | null;
+  outputTruncated: boolean;
+  /** Tamaño entero de la salida en bytes UTF-8 (`data.outputBytes`), aunque llegue truncada. */
+  outputBytes: number | null;
+  /** La salida se descartó para acotar la memoria (en el servidor al reenviar, o aquí: `MAX_TOOL_OUTPUTS`). */
+  outputDropped: boolean;
+}
+
+/** Salidas de tool que se conservan en el estado del cliente; las más antiguas se descartan (`outputDropped`). */
+export const MAX_TOOL_OUTPUTS = 300;
+
+/** Estado de un lote de la pasada compartida (`sharedpass.progress`). */
+export type SharedPassBatchStatus = 'pending' | 'reading' | 'retrying' | 'complete' | 'partial' | 'failed' | 'notRead';
+export type SharedPassPhase = 'reading' | 'consolidating' | 'judging' | 'saving' | 'done' | 'cut' | 'failed';
+
+export interface SharedPassBatch {
+  id: string;
+  files: number;
+  estimatedTokens: number;
+  status: SharedPassBatchStatus;
+  calls: number;
+  costUsd: number;
+  tokens: number;
+  findings: number | null;
+  gaps: number | null;
+}
+
+export interface SharedPassTotals {
+  costUsd: number;
+  maxCostUsd: number | null;
+  calls: number;
+  maxCalls: number | null;
+  tokens: number;
+  maxTokens: number | null;
+  unpricedCalls: number;
+  elapsedMs: number;
+  maxMinutes: number | null;
+  batchesDone: number;
+  batchesTotal: number;
+}
+
+/** El último `sharedpass.progress`: el servidor manda el estado entero en cada cambio. */
+export interface SharedPassState {
+  phase: SharedPassPhase;
+  startedAt: string | null;
+  batches: SharedPassBatch[];
+  totals: SharedPassTotals;
+  judge: { candidates: number; tandas: number; tandasDone: number } | null;
+  stopReason: string | null;
+  error: string | null;
+  /** Al terminar: registros confirmados por severidad (`P0`…`P3`), total de registros y rechazados por el juez. */
+  severities: Record<string, number> | null;
+  entries: number | null;
+  rejected: number | null;
 }
 
 export interface AuditorState {
@@ -101,6 +211,8 @@ export interface AuditorState {
   toolErrors: number;
   /** Instantes (ISO) de cada `tool.started`, para dibujar el carril. */
   toolTimes: string[];
+  /** Las mismas llamadas que `toolTimes`, en el mismo orden, con su detalle. */
+  calls: ToolCallRecord[];
   activeTool: string | null;
   tokens: number | null;
   costUsd: number | null;
@@ -110,6 +222,8 @@ export interface AuditorState {
   truncated: boolean;
   fileName: string | null;
   error: string | null;
+  /** Verificación a demanda del informe (`POST /verify`); no cambia `status`, que sigue siendo el del auditor. */
+  verification: VerificationState;
 }
 
 export interface LogEntry {
@@ -190,11 +304,26 @@ export interface RunState {
   usage: RunUsage | null;
   /** Totales de la validación de informes del último `run.completed` (`data.validation`); null si no se validó. */
   validation: RunValidation | null;
+  /** True desde `run.verification_started` hasta el siguiente `run.completed`: los steps de esa ejecución no mueven las fases. */
+  verifying: boolean;
+  /** Pasada compartida (`sharedpass.progress`); null si la ejecución no la tiene. */
+  sharedPass: SharedPassState | null;
+  /** Llamadas con salida guardada, de la más antigua a la más reciente, para descartar las que pasan de `MAX_TOOL_OUTPUTS`. */
+  toolOutputs: { report: string; key: number }[];
+  /** Si la verificación en curso o la última pidió regenerar también el resumen ejecutivo. */
+  verifySynthesis: boolean;
+  /**
+   * True si una verificación corrigió informes y el resumen ejecutivo no se ha regenerado después: puede contradecirlos.
+   * Se apaga al regenerar con resumen, al verificar con resumen y al lanzar otro análisis.
+   */
+  synthesisStale: boolean;
 }
 
 export type RunAction =
   | { type: 'reset'; status: RunStatusDto | null }
   | { type: 'status'; status: RunStatusDto }
+  /** El usuario deshizo la verificación de ese informe (restauró su versión anterior): vuelve a «sin verificar». */
+  | { type: 'verification_undone'; report: string }
   | { type: 'event'; event: AnalysisEventDto }
   | { type: 'events'; events: AnalysisEventDto[] };
 
@@ -215,6 +344,7 @@ function newAuditor(report: string): AuditorState {
     toolCalls: 0,
     toolErrors: 0,
     toolTimes: [],
+    calls: [],
     activeTool: null,
     tokens: null,
     costUsd: null,
@@ -224,6 +354,21 @@ function newAuditor(report: string): AuditorState {
     truncated: false,
     fileName: null,
     error: null,
+    verification: newVerification(),
+  };
+}
+
+function newVerification(): VerificationState {
+  return {
+    status: 'idle',
+    startedAt: null,
+    finishedAt: null,
+    toolCalls: 0,
+    activeTool: null,
+    changes: 0,
+    previousVersionId: null,
+    versionId: null,
+    message: null,
   };
 }
 
@@ -256,6 +401,11 @@ export function createRunState(status: RunStatusDto | null): RunState {
     pendingToolArgs: {},
     usage: null,
     validation: null,
+    verifying: false,
+    verifySynthesis: false,
+    synthesisStale: false,
+    sharedPass: null,
+    toolOutputs: [],
   };
   for (const report of state.requestedReports) addAuditor(state, report);
   return state;
@@ -290,6 +440,16 @@ export function auditorOf(event: AnalysisEventDto): string | null {
     }
   }
   return null;
+}
+
+/** True si el step (o la rama) es de la verificación: sus eventos actualizan `verification` y no el estado del auditor. */
+export function isVerificationSource(event: AnalysisEventDto): boolean {
+  const branch = typeof event.data?.branch === 'string' ? event.data.branch : null;
+  return [event.source, branch].some((name) => !!name && VERIFY_PREFIXES.some((prefix) => name.startsWith(prefix)));
+}
+
+function updateVerification(state: RunState, report: string, patch: (v: VerificationState) => Partial<VerificationState>): void {
+  updateAuditor(state, report, (a) => ({ verification: { ...a.verification, ...patch(a.verification) } }));
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -411,9 +571,145 @@ function phaseDuration(phase: PhaseState, name: Phase, finishedAt: string, stepD
   return Number.isFinite(elapsed) ? Math.max(0, elapsed) : stepDurationMs;
 }
 
-/** Aplica un evento sobre `state` (una copia propia de `applyEvents`) y devuelve su fila del registro. */
-function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
+const SHARED_PASS_PHASES: readonly SharedPassPhase[] = ['reading', 'consolidating', 'judging', 'saving', 'done', 'cut', 'failed'];
+const SHARED_PASS_BATCH_STATUSES: readonly SharedPassBatchStatus[] = ['pending', 'reading', 'retrying', 'complete', 'partial', 'failed', 'notRead'];
+const FINISHED_BATCH: readonly SharedPassBatchStatus[] = ['complete', 'partial', 'failed', 'notRead'];
+
+const record = (v: unknown): Record<string, unknown> | null =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+/**
+ * El estado de la pasada de un `sharedpass.progress`. Uno ya superado que el servidor guardó sin lotes (`superseded`, al reenviar
+ * el registro) conserva los lotes que ya se tenían.
+ */
+export function sharedPassOf(data: Record<string, unknown>, previous: SharedPassState | null): SharedPassState {
+  const phase = str(data.phase) as SharedPassPhase | null;
+  const t = record(data.totals) ?? {};
+  const judge = record(data.judge);
+  const result = record(data.result);
+  const severities = record(result?.severities);
+  const batches = Array.isArray(data.batches)
+    ? data.batches
+        .map(record)
+        .filter((b): b is Record<string, unknown> => !!b && typeof b.id === 'string')
+        .map<SharedPassBatch>((b) => {
+          const status = str(b.status) as SharedPassBatchStatus | null;
+          return {
+            id: b.id as string,
+            files: num(b.files) ?? 0,
+            estimatedTokens: num(b.estimatedTokens) ?? 0,
+            status: status && SHARED_PASS_BATCH_STATUSES.includes(status) ? status : 'pending',
+            calls: num(b.calls) ?? 0,
+            costUsd: num(b.costUsd) ?? 0,
+            tokens: num(b.tokens) ?? 0,
+            findings: num(b.findings),
+            gaps: num(b.gaps),
+          };
+        })
+    : (previous?.batches ?? []);
+  return {
+    phase: phase && SHARED_PASS_PHASES.includes(phase) ? phase : (previous?.phase ?? 'reading'),
+    startedAt: str(data.startedAt) ?? previous?.startedAt ?? null,
+    batches,
+    totals: {
+      costUsd: num(t.costUsd) ?? 0,
+      maxCostUsd: num(t.maxCostUsd),
+      calls: num(t.calls) ?? 0,
+      maxCalls: num(t.maxCalls),
+      tokens: num(t.tokens) ?? 0,
+      maxTokens: num(t.maxTokens),
+      unpricedCalls: num(t.unpricedCalls) ?? 0,
+      elapsedMs: num(t.elapsedMs) ?? 0,
+      maxMinutes: num(t.maxMinutes),
+      batchesDone: num(t.batchesDone) ?? batches.filter((b) => FINISHED_BATCH.includes(b.status)).length,
+      batchesTotal: num(t.batchesTotal) ?? batches.length,
+    },
+    judge: judge ? { candidates: num(judge.candidates) ?? 0, tandas: num(judge.tandas) ?? 0, tandasDone: num(judge.tandasDone) ?? 0 } : null,
+    stopReason: str(data.stopReason),
+    error: str(data.error),
+    severities: severities
+      ? (Object.fromEntries(Object.entries(severities).filter(([, v]) => typeof v === 'number')) as Record<string, number>)
+      : null,
+    entries: num(result?.entries),
+    rejected: num(result?.rejected),
+  };
+}
+
+/** Añade al carril `report` la llamada que abre un `tool.started`. */
+function openCall(state: RunState, report: string, event: AnalysisEventDto, queuedArguments: string | null): void {
   const data = event.data ?? {};
+  const own = str(data.arguments);
+  const call: ToolCallRecord = {
+    key: event.seq,
+    tool: str(data.tool) ?? '?',
+    source: event.source,
+    startedAt: event.ts,
+    finishedAt: null,
+    durationMs: null,
+    success: null,
+    error: null,
+    arguments: own ?? queuedArguments,
+    // Los del `llm.response` vienen cortados a 500 caracteres: si llegan a ese tope, pueden estar truncados.
+    argumentsTruncated: own !== null ? (bool(data.argumentsTruncated) ?? false) : (queuedArguments?.endsWith('…') ?? false),
+    output: null,
+    outputTruncated: false,
+    outputBytes: null,
+    outputDropped: false,
+  };
+  updateAuditor(state, report, (a) => ({ calls: [...a.calls, call] }));
+}
+
+/**
+ * Cierra con un `tool.completed` la última llamada abierta del mismo step y la misma tool (las de un step van en secuencia); si no la
+ * hay (un replay que empezó a mitad), no hace nada. Guarda la salida y descarta las más antiguas por encima de `MAX_TOOL_OUTPUTS`.
+ */
+function closeCall(state: RunState, report: string, event: AnalysisEventDto): void {
+  const data = event.data ?? {};
+  const tool = str(data.tool);
+  const calls = state.auditors[report]?.calls ?? [];
+  let index = -1;
+  for (let i = calls.length - 1; i >= 0; i--) {
+    if (calls[i].finishedAt === null && calls[i].tool === tool && calls[i].source === event.source) {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0) return;
+  const output = str(data.output);
+  const own = str(data.arguments);
+  const closed: ToolCallRecord = {
+    ...calls[index],
+    finishedAt: event.ts,
+    durationMs: num(data.durationMs),
+    success: bool(data.success) ?? event.level !== 'error',
+    error: str(data.error),
+    arguments: own ?? calls[index].arguments,
+    argumentsTruncated: own !== null ? (bool(data.argumentsTruncated) ?? false) : calls[index].argumentsTruncated,
+    output,
+    outputTruncated: bool(data.outputTruncated) ?? false,
+    outputBytes: num(data.outputBytes),
+    outputDropped: bool(data.outputDropped) ?? false,
+  };
+  updateAuditor(state, report, (a) => ({ calls: a.calls.map((c, i) => (i === index ? closed : c)) }));
+  if (output === null) return;
+  const outputs = [...state.toolOutputs, { report, key: closed.key }];
+  while (outputs.length > MAX_TOOL_OUTPUTS) {
+    const oldest = outputs.shift()!;
+    updateAuditor(state, oldest.report, (a) => ({
+      calls: a.calls.map((c) => (c.key === oldest.key ? { ...c, output: null, outputDropped: true } : c)),
+    }));
+  }
+  state.toolOutputs = outputs;
+}
+
+/** Aplica un evento sobre `state` (una copia propia de `applyEvents`) y devuelve su fila del registro, o null si no tiene. */
+function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry | null {
+  const data = event.data ?? {};
+  // El estado de la pasada no es una línea del registro (sus mensajes llegan aparte, como `log`) ni cuenta como aviso.
+  if (event.type === 'sharedpass.progress') {
+    state.sharedPass = sharedPassOf(data, state.sharedPass);
+    return null;
+  }
   const report = auditorOf(event);
   let detail: string | null = null;
 
@@ -423,8 +719,11 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
     if (isCancellationError(str(data.error) ?? event.message)) state.cancellationErrors++;
   }
 
-  const topPhase = event.source ? PHASE_STEPS[event.source] : undefined;
-  if (event.phase && event.type !== 'run.completed' && event.type !== 'run.started') {
+  // Verificar no vuelve a ejecutar fases: la preparación y la síntesis de esa ejecución no mueven el avance del análisis.
+  const verifying = state.verifying;
+  const verifier = report && isVerificationSource(event) ? report : null;
+  const topPhase = event.source && !verifying ? PHASE_STEPS[event.source] ?? (PREPARATION_STEPS.includes(event.source) ? 'facets' : undefined) : undefined;
+  if (event.phase && !verifying && event.type !== 'run.completed' && event.type !== 'run.started') {
     markPhaseRunning(state, event.phase, event.ts);
   }
 
@@ -452,10 +751,54 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
         state.auditors = { ...state.auditors, [r]: newAuditor(r) };
       }
       const phases: readonly Phase[] = bool(data.synthesis) === false ? REGENERATED_PHASES : [...REGENERATED_PHASES, 'synthesis'];
+      state.verifying = false;
+      if (bool(data.synthesis) !== false) state.synthesisStale = false;
       for (const phase of phases) {
         updatePhase(state, phase, { status: 'pending', startedAt: null, finishedAt: null, durationMs: null, error: null });
       }
       state.pendingToolArgs = {};
+      break;
+    }
+    case 'run.verification_started': {
+      // La misma ejecución vuelve a correr (como al regenerar), pero los carriles pedidos conservan su auditor: solo
+      // arranca su verificación, y las fases no se tocan.
+      const reports = Array.isArray(data.reports) ? (data.reports.filter((r) => typeof r === 'string') as string[]) : [];
+      state.status = 'running';
+      state.finishedAt = null;
+      state.error = null;
+      state.exitCode = null;
+      state.durationMs = null;
+      state.verifying = true;
+      state.verifySynthesis = bool(data.synthesis) ?? false;
+      if (state.verifySynthesis) state.synthesisStale = false;
+      for (const r of reports) {
+        addAuditor(state, r);
+        updateAuditor(state, r, () => ({ verification: { ...newVerification(), status: 'running', startedAt: event.ts } }));
+      }
+      state.pendingToolArgs = {};
+      break;
+    }
+    case 'report.verified': {
+      const reportType = str(data.reportType) ?? report;
+      if (reportType) {
+        const outcome = str(data.outcome);
+        const status: VerificationStatus =
+          outcome === 'verified' || outcome === 'corrected' || outcome === 'warnings' ? outcome : 'failed';
+        const changes = num(data.changes) ?? 0;
+        updateVerification(state, reportType, (v) => ({
+          status,
+          finishedAt: event.ts,
+          activeTool: null,
+          changes,
+          previousVersionId: str(data.previousVersionId),
+          versionId: str(data.versionId),
+          message: status === 'failed' ? (str(data.error) ?? event.message) : event.message,
+          startedAt: v.startedAt ?? event.ts,
+        }));
+        // Un informe corregido deja el resumen ejecutivo describiendo la versión anterior, salvo que se regenere después.
+        if (changes > 0 && !state.verifySynthesis) state.synthesisStale = true;
+      }
+      state.reportsVersion++;
       break;
     }
     case 'step.started': {
@@ -464,7 +807,9 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
       if (topPhase && (state.phases[topPhase].status !== 'failed' || attempt > 1)) {
         updatePhase(state, topPhase, { status: 'running', finishedAt: null });
       }
-      if (report) {
+      if (verifier) {
+        updateVerification(state, verifier, (v) => ({ status: 'running', startedAt: v.startedAt ?? event.ts }));
+      } else if (report) {
         updateAuditor(state, report, (a) => ({
           status: 'running',
           startedAt: a.startedAt ?? event.ts,
@@ -477,7 +822,8 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
     case 'step.completed': {
       const success = bool(data.success) ?? event.level !== 'error';
       // El éxito de un step que no es el último de su fase la deja en marcha: la fase no parpadea entre steps.
-      const closesPhase = topPhase && (!success || (PHASE_LAST_STEP[topPhase] === event.source && state.phases[topPhase].status !== 'failed'));
+      const isLast = !!topPhase && (PHASE_LAST_STEP[topPhase] === event.source || event.source === LAST_PREPARATION_STEP);
+      const closesPhase = topPhase && (!success || (isLast && state.phases[topPhase].status !== 'failed'));
       if (topPhase && closesPhase) {
         updatePhase(state, topPhase, {
           status: success ? 'succeeded' : 'failed',
@@ -486,7 +832,19 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
           error: success ? null : str(data.error) ?? event.message,
         });
       }
-      if (report) {
+      if (verifier) {
+        // El paso de verificación no falla aunque el verificador no responda (eso llega en `report.verified`): si falla, es
+        // un error del paso y el informe no se verificó.
+        if (!success) {
+          updateVerification(state, verifier, (v) => ({
+            status: 'failed',
+            finishedAt: event.ts,
+            activeTool: null,
+            message: str(data.error) ?? event.message,
+            startedAt: v.startedAt ?? event.ts,
+          }));
+        }
+      } else if (report) {
         updateAuditor(state, report, (a) => ({
           status: success ? 'succeeded' : 'failed',
           finishedAt: event.ts,
@@ -501,10 +859,12 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
       break;
     }
     case 'branch.started': {
-      if (report) updateAuditor(state, report, (a) => ({ status: 'running', startedAt: a.startedAt ?? event.ts }));
+      if (verifier) updateVerification(state, verifier, (v) => ({ status: 'running', startedAt: v.startedAt ?? event.ts }));
+      else if (report) updateAuditor(state, report, (a) => ({ status: 'running', startedAt: a.startedAt ?? event.ts }));
       break;
     }
     case 'branch.completed': {
+      if (verifier) break;
       if (report) {
         const success = bool(data.success) ?? event.level !== 'error';
         updateAuditor(state, report, (a) => ({
@@ -529,18 +889,20 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
         state.pendingToolArgs = { ...state.pendingToolArgs, [event.source]: queue };
       }
       state.usage = addCall(state.usage, data);
-      if (report) {
+      if (report && !verifier) {
         updateAuditor(state, report, (a) => ({ finishReason: str(data.finishReason) ?? a.finishReason }));
       }
       break;
     }
     case 'tool.started': {
       const tool = str(data.tool);
+      let queuedArguments: string | null = null;
       if (event.source && tool) {
         // Las tools de una iteración se ejecutan en secuencia: la primera pendiente con ese nombre es esta.
         const queue = state.pendingToolArgs[event.source] ?? [];
         const index = queue.findIndex((q) => q.name === tool);
         if (index >= 0) {
+          queuedArguments = queue[index].arguments;
           detail = mainArgument(queue[index].arguments);
           state.pendingToolArgs = {
             ...state.pendingToolArgs,
@@ -548,7 +910,9 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
           };
         }
       }
-      if (report) {
+      if (verifier) {
+        updateVerification(state, verifier, (v) => ({ toolCalls: v.toolCalls + 1, activeTool: tool }));
+      } else if (report) {
         updateAuditor(state, report, (a) => ({
           toolCalls: a.toolCalls + 1,
           toolTimes: [...a.toolTimes, event.ts],
@@ -556,16 +920,21 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
           status: a.status === 'pending' ? 'running' : a.status,
           startedAt: a.startedAt ?? event.ts,
         }));
+        openCall(state, report, event, queuedArguments);
       }
+      if (!detail) detail = mainArgument(str(data.arguments));
       break;
     }
     case 'tool.completed': {
-      if (report) {
+      if (verifier) {
+        updateVerification(state, verifier, () => ({ activeTool: null }));
+      } else if (report) {
         const success = bool(data.success) ?? true;
         updateAuditor(state, report, (a) => ({
           activeTool: null,
           toolErrors: a.toolErrors + (success ? 0 : 1),
         }));
+        closeCall(state, report, event);
       }
       break;
     }
@@ -639,6 +1008,17 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry {
         state.errors = Math.max(0, state.errors - state.cancellationErrors);
         state.cancellationErrors = 0;
       }
+      // Una verificación que no llegó a su `report.verified` (cancelada o fallida) no deja resultado: el informe sigue como estaba.
+      state.verifying = false;
+      for (const r of state.auditorOrder) {
+        if (state.auditors[r].verification.status !== 'running') continue;
+        updateVerification(state, r, (v) => ({
+          status: status === 'cancelled' ? 'idle' : 'failed',
+          finishedAt: event.ts,
+          activeTool: null,
+          message: status === 'cancelled' ? null : (state.error ?? v.message ?? 'La verificación no terminó.'),
+        }));
+      }
       state.pendingToolArgs = {};
       state.reportsVersion++;
       break;
@@ -663,7 +1043,8 @@ function applyEvents(state: RunState, events: AnalysisEventDto[]): RunState {
     if (base.runId && event.runId && event.runId !== base.runId) continue; // evento de otra ejecución
     if (event.seq <= base.lastSeq) continue; // ya aplicado (solape de replay)
     if (!next) next = { ...state };
-    added.push(applyEvent(next, event));
+    const entry = applyEvent(next, event);
+    if (entry) added.push(entry);
     next.lastSeq = event.seq;
     if (!next.runId) next.runId = event.runId;
   }
@@ -690,6 +1071,15 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         finishedAt: state.finishedAt ?? s.finishedAt,
         forceReindex: s.forceReindex,
         error: state.error ?? s.error,
+      };
+    }
+    case 'verification_undone': {
+      const current = state.auditors[action.report];
+      if (!current) return state;
+      return {
+        ...state,
+        auditors: { ...state.auditors, [action.report]: { ...current, verification: newVerification() } },
+        reportsVersion: state.reportsVersion + 1,
       };
     }
     case 'event':
@@ -720,11 +1110,30 @@ export function isRunActive(state: RunState): boolean {
 }
 
 /**
- * Si el carril admite «Regenerar»: ha fallado o se ha cancelado, y la ejecución ya ha terminado (R6). No depende de
- * `failedReports`, que llega vacío cuando falla el pipeline entero. Los cancelados entran para poder regenerar tras
- * cancelar a mitad de los informes (criterio 5): la cancelación los deja en `cancelled` y no en `failed`.
+ * Si el carril admite «Regenerar»: ha terminado el auditor (con éxito, con error o cancelado) y la ejecución ya ha
+ * terminado (R6, D1). No depende de `failedReports`, que llega vacío cuando falla el pipeline entero. Los cancelados
+ * entran para poder regenerar tras cancelar a mitad de los informes (criterio 5): la cancelación los deja en `cancelled` y
+ * no en `failed`. Los correctos también (D1 del plan del verificador): rehacer un informe sano es una decisión del usuario.
  */
 export function canRegenerate(state: RunState, report: string): boolean {
   const status = state.auditors[report]?.status;
-  return !!state.runId && state.status !== null && state.status !== 'running' && (status === 'failed' || status === 'cancelled');
+  return !!state.runId && state.status !== null && state.status !== 'running' && (status === 'failed' || status === 'cancelled' || status === 'succeeded');
+}
+
+/**
+ * Si el carril admite «Verificar»: el auditor terminó con éxito (hay un informe en disco que comprobar) y la ejecución ya
+ * ha terminado. Se puede volver a verificar un informe ya verificado, corregido o con avisos.
+ */
+export function canVerify(state: RunState, report: string): boolean {
+  const lane = state.auditors[report];
+  return !!state.runId && state.status !== null && state.status !== 'running' && lane?.status === 'succeeded' && lane.verification.status !== 'running';
+}
+
+/**
+ * Si el carril ofrece «Deshacer verificación»: la última verificación reescribió el informe (hay versión anterior que
+ * restaurar). Es la de `report.verified.previousVersionId`.
+ */
+export function canUndoVerification(state: RunState, report: string): boolean {
+  const v = state.auditors[report]?.verification;
+  return !!state.runId && state.status !== null && state.status !== 'running' && !!v?.previousVersionId && v.status !== 'running';
 }

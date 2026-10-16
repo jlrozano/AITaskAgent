@@ -26,6 +26,8 @@
   <!-- Las muestras de cada familia (plan v2 §11) se generan con el mismo código que los tests de Core. -->
   <ItemGroup>
     <Compile Include="..\CodebaseAnalysis.Core.Tests\SampleFiles.cs" Link="SampleFiles.cs" />
+    <!-- El grafo sintético de cbm con el esquema que deja el pipeline: lo usa PreparationWebTests para un análisis real con LLM falso. -->
+    <Compile Include="..\CodebaseAnalysis.Core.Tests\Enrichment\CbmTestGraph.cs" Link="CbmTestGraph.cs" />
   </ItemGroup>
 
 </Project>

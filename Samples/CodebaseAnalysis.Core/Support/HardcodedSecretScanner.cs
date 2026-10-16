@@ -27,18 +27,6 @@ public static class HardcodedSecretScanner
         @"(?<name>\b\w*(?:password|passwd|pwd|secret|api_?key|token|credential)\w*\b)[""']?\s*(?:As\s+String\s*)?(?:=|:=|:)\s*(?<q>[""'])(?<value>[^""'\r\n]{3,})\k<q>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    // Último segmento de un identificador que nombra una referencia a la credencial y no la credencial:
-    // UserSecretsId, PasswordFileName, token_url, SecretProvider, passwordLength... Su valor es un GUID, una
-    // ruta, un nombre o una cifra. Se compara el último segmento (PascalCase, camelCase o snake_case), así que
-    // ApiKey, ClientSecret, access_token o authTokenValue siguen contando.
-    private static readonly HashSet<string> ReferenceSuffixes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Id", "Ids", "Name", "Names", "Path", "Paths", "File", "Files", "Dir", "Directory", "Folder",
-        "Url", "Uri", "Endpoint", "Provider", "Type", "Kind", "Mode", "Format", "Length", "Count", "Size",
-        "Policy", "Label", "Field", "Column", "Header", "Param", "Parameter", "Variable", "Var", "Env",
-        "Prompt", "Hint", "Placeholder", "Pattern", "Regex", "Timeout", "Expiry", "Expiration", "Lifetime", "Version"
-    };
-
     // Clave de cadena de conexión con valor literal: "...;PWD=x;..." o "Password=x".
     private static readonly Regex ConnectionStringRegex = new(
         @"\b(?<name>pwd|password)\s*=\s*(?<value>[^;""'\s&+]{3,})",
@@ -116,42 +104,10 @@ public static class HardcodedSecretScanner
         }
     }
 
-    /// <summary>True si el identificador acaba en un segmento de <see cref="ReferenceSuffixes"/>.</summary>
-    public static bool NamesAReference(string identifier)
-    {
-        var trimmed = identifier.Trim('_');
-        var underscore = trimmed.LastIndexOf('_');
-        string last;
-        if (underscore >= 0)
-        {
-            last = trimmed[(underscore + 1)..];
-        }
-        else
-        {
-            // Último segmento en PascalCase o camelCase; un identificador todo en mayúsculas es un solo segmento.
-            var start = trimmed.Length - 1;
-            while (start > 0)
-            {
-                var c = trimmed[start];
-                var previous = trimmed[start - 1];
-                // "userSecretsId" -> "Id"; con siglas, "SecretURLPath" -> "Path".
-                if (char.IsUpper(c) && (char.IsLower(previous) || char.IsDigit(previous)))
-                    break;
-                if (char.IsUpper(c) && char.IsUpper(previous) && start + 1 < trimmed.Length && char.IsLower(trimmed[start + 1]))
-                    break;
-                start--;
-            }
-            last = trimmed[start..];
-        }
+    /// <summary>True si el identificador acaba en un segmento de referencia (<see cref="CredentialNames.NamesAReference"/>).</summary>
+    public static bool NamesAReference(string identifier) => CredentialNames.NamesAReference(identifier);
 
-        return last.Length < trimmed.Length && ReferenceSuffixes.Contains(last);
-    }
+    private static bool IsPlaceholder(string value) => CredentialNames.IsPlaceholder(value);
 
-    /// <summary>Referencias a variables, plantillas o valores ya ocultos: no son un secreto en claro.</summary>
-    private static bool IsPlaceholder(string value) =>
-        value.StartsWith("${", StringComparison.Ordinal)
-        || value.StartsWith('{') || value.StartsWith('<') || value.StartsWith('%')
-        || value.All(c => c == '*' || c == 'x' || c == 'X');
-
-    private static string Mask(string value) => $"{value[..Math.Min(2, value.Length)]}*** ({value.Length} caracteres)";
+    private static string Mask(string value) => CredentialNames.Mask(value);
 }

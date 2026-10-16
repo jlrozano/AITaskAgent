@@ -162,6 +162,19 @@ public static class EnrichmentMarks
     }
 
     /// <summary>
+    /// Sustituye en la BD las <c>properties</c> de nodo que no son JSON válido por <c>{"cbm_raw_properties": "&lt;texto
+    /// original&gt;"}</c> (como <see cref="ParseProperties"/>) y las vacías por <c>{}</c>. Lo hacen <c>GraphSchema.EnsureAsync</c>
+    /// y la pasada del enriquecedor C# (también con su CLI suelto), porque basta un nodo así para que un <c>json_extract</c> o
+    /// un <c>json_remove</c> sin proteger aborte la consulta. Devuelve cuántos nodos reparó.
+    /// </summary>
+    public static Task<int> RepairInvalidPropertiesAsync(SqliteConnection conn, SqliteTransaction? tx, CancellationToken ct) =>
+        ExecuteAsync(conn, tx, $"""
+            UPDATE nodes SET properties = '{"{}"}' WHERE properties IS NOT NULL AND trim(properties) = '';
+            UPDATE nodes SET properties = json_object('{RawPropertiesKey}', properties)
+                WHERE properties IS NOT NULL AND json_valid(properties) = 0;
+            """, ct);
+
+    /// <summary>
     /// Completa las propiedades con <paramref name="patch"/> y añade el enriquecedor a <c>enriched_by</c> sin quitar los
     /// de otros enriquecedores. Un valor null del parche no borra lo que hubiera: el enriquecedor no sabía más que cbm.
     /// </summary>
@@ -228,7 +241,7 @@ public static class EnrichmentMarks
         return result;
     }
 
-    private static async Task<int> ExecuteAsync(SqliteConnection conn, SqliteTransaction tx, string sql, CancellationToken ct)
+    private static async Task<int> ExecuteAsync(SqliteConnection conn, SqliteTransaction? tx, string sql, CancellationToken ct)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;

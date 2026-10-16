@@ -84,4 +84,39 @@ public static class AnalysisProgress
             }
         });
     }
+
+    /// <summary>
+    /// Notifica el resultado de verificar un informe. <c>outcome</c> es <c>verified</c>, <c>corrected</c>, <c>warnings</c> o
+    /// <c>failed</c>; las versiones solo vienen si el informe se reescribió.
+    /// </summary>
+    public static void ReportVerified(
+        this PipelineContext context,
+        string source,
+        ReportType reportType,
+        string fileName,
+        string outcome,
+        int changes,
+        string message,
+        string? previousVersionId = null,
+        string? versionId = null,
+        string? error = null)
+    {
+        _ = context.SendEventAsync(new StepProgressEvent
+        {
+            StepName = source,
+            EventType = AnalysisEventTypes.ReportVerified,
+            Message = message,
+            CorrelationId = context.CorrelationId,
+            Metadata = new Dictionary<string, object?>
+            {
+                [Key.FileName] = fileName,
+                [Key.ReportType] = reportType.ToString(),
+                [Key.Outcome] = outcome,
+                [Key.Changes] = changes,
+                [Key.PreviousVersionId] = previousVersionId,
+                [Key.VersionId] = versionId,
+                [Key.Error] = error
+            }
+        });
+    }
 }

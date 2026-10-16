@@ -54,6 +54,9 @@ public static class PromptTemplateResolver
 
         return templateProvider != null
             ? templateProvider.Render(rawPrompt, model) ?? rawPrompt
-            : TinyTemplateRendered.Render(rawPrompt, model, strictMode: false, baseDirectory: context.CurrentStepPath) ?? rawPrompt;
+            // baseDirectory null: un @[ruta] relativo se resuelve contra el directorio de trabajo.
+            // CurrentStepPath es la ruta del paso en el árbol del pipeline, no un directorio.
+            : TinyTemplateRendered.Render(rawPrompt, model, strictMode: false, baseDirectory: null,
+                logger: context.GetLogger(typeof(PromptTemplateResolver))) ?? rawPrompt;
     }
 }

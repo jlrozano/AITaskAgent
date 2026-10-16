@@ -20,6 +20,15 @@ public sealed class LlmResult
     /// <summary>Completion tokens generated.</summary>
     public int? CompletionTokens { get; init; }
 
+    /// <summary>Reasoning tokens inside <see cref="CompletionTokens"/>, when the provider reports them.</summary>
+    public int? ReasoningTokens { get; init; }
+
+    /// <summary>
+    /// Prompt tokens served from the provider's prompt cache, already included in <see cref="PromptTokens"/>.
+    /// Null when the provider does not report them.
+    /// </summary>
+    public int? CachedPromptTokens { get; init; }
+
     /// <summary>
     /// Estimated cost in USD. Settable within the assembly because services report tokens but
     /// cannot price them - they never see the provider's model catalogue - so BaseLlmStep fills
@@ -55,16 +64,18 @@ public sealed class LlmResult
     public List<ToolCall>? ToolCalls => Candidates.Count > 0 ? Candidates[0].ToolCalls : null;
 
     /// <summary>Factory for successful results.</summary>
-    public static LlmResult Success(IReadOnlyList<LlmResponse> candidates, int? tokensUsed = null, int? promptTokens = null, int? completionTokens = null, decimal? costUsd = null, string? model = null, object? nativeResponse = null) =>
+    public static LlmResult Success(IReadOnlyList<LlmResponse> candidates, int? tokensUsed = null, int? promptTokens = null, int? completionTokens = null, decimal? costUsd = null, string? model = null, object? nativeResponse = null, int? reasoningTokens = null, int? cachedPromptTokens = null) =>
         new()
         {
+            CachedPromptTokens = cachedPromptTokens,
             Candidates = candidates,
             TokensUsed = tokensUsed,
             PromptTokens = promptTokens,
             CompletionTokens = completionTokens,
             CostUsd = costUsd,
             Model = model,
-            NativeResponse = nativeResponse
+            NativeResponse = nativeResponse,
+            ReasoningTokens = reasoningTokens
         };
 
     /// <summary>Factory for failed results.</summary>

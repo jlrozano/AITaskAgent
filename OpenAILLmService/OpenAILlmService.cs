@@ -9,6 +9,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OpenAILLmService.Normalization;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -74,6 +75,35 @@ public class OpenAILlmService : ILlmService, IDisposable
 
         if (_logger.IsEnabled(LogLevel.Information))
             _logger.LogInformation("OpenAILlmService initialized.");
+    }
+
+    /// <summary>
+    /// Option (provider's or role's <c>Inference</c>) with the most calls in flight at once per endpoint+deployment;
+    /// 0 or less removes the limit. It has no facade in the framework: it travels in
+    /// <see cref="AITaskAgent.LLM.Configuration.LlmInferenceSettings.Options"/> and is excluded from the request body.
+    /// </summary>
+    public const string MaxConcurrentRequestsKey = "MaxConcurrentRequests";
+
+    /// <summary>Limit when the option is absent: the concurrency known to be safe against Azure's token quota.</summary>
+    public const int DefaultMaxConcurrentRequests = 9;
+
+    /// <summary>
+    /// Where the gates live. One service instance is created per role, and every instance pointing at the same
+    /// BaseUrl+deployment must share limit and pause, so it is the process-wide registry unless a test swaps it.
+    /// </summary>
+    internal LlmCallGateRegistry Gates { get; set; } = LlmCallGateRegistry.Shared;
+
+    private LlmCallGate GateOf(LlmRequest request)
+    {
+        var limit = request.GetOption<int?>(MaxConcurrentRequestsKey) ?? DefaultMaxConcurrentRequests;
+        return Gates.For(LlmCallGateRegistry.KeyOf(request.BaseUrl, request.Model), limit);
+    }
+
+    /// <summary>The pause the provider asked for with a 429 or 503, shared with every call of the same gate.</summary>
+    private static void ReportThrottle(LlmCallGate gate, int statusCode, TimeSpan? retryAfter)
+    {
+        if (statusCode is 429 or 503 && retryAfter is { } wait)
+            gate.ReportThrottle(wait);
     }
 
     public void Dispose()
@@ -202,7 +232,8 @@ public class OpenAILlmService : ILlmService, IDisposable
     private static readonly HashSet<string> FrameworkFacadeOptionKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "Temperature", "TopP", "MaxTokens", "UseStreaming", "JsonSupport", "ToolSupport", "Stop",
-        "UseMaxCompletionTokens", "RequestTimeoutSeconds", "StreamingInactivityTimeoutSeconds"
+        "UseMaxCompletionTokens", "RequestTimeoutSeconds", "StreamingInactivityTimeoutSeconds",
+        MaxConcurrentRequestsKey
     };
 
     /// <summary>
@@ -319,12 +350,17 @@ public class OpenAILlmService : ILlmService, IDisposable
     {
         var delay = _retryInitialDelay;
         var requestTimeout = RequestTimeoutOf(request);
+        var gate = GateOf(request);
         LlmResult result;
 
         for (var attempt = 1; ; attempt++)
         {
             var info = new AttemptInfo();
-            result = await InvokeAttemptAsync(request, info, requestTimeout, cancellationToken);
+            // The slot covers the attempt, not the retry wait: sleeping on a Retry-After must not hold a place that
+            // another call could use once the shared pause is over. Queueing is outside the attempt's own deadline.
+            using (await gate.EnterAsync(cancellationToken))
+                result = await InvokeAttemptAsync(request, info, requestTimeout, cancellationToken);
+            if (!result.IsSuccess) ReportThrottle(gate, info.StatusCode, info.RetryAfter);
 
             if (result.IsSuccess || !result.IsRetriable || attempt >= _retryMaxAttempts)
             {
@@ -390,6 +426,7 @@ public class OpenAILlmService : ILlmService, IDisposable
     private sealed class AttemptInfo
     {
         public TimeSpan? RetryAfter { get; set; }
+        public int StatusCode { get; set; }
     }
 
     /// <summary>
@@ -445,17 +482,21 @@ public class OpenAILlmService : ILlmService, IDisposable
         }
 
         string rawJson;
+        var elapsed = TimeSpan.Zero;
         try
         {
             var httpContent = new StringContent(
                 body.ToString(Formatting.None), Encoding.UTF8, "application/json");
 
+            var clock = Stopwatch.StartNew();
             var httpResponse = await client.PostAsync(endpoint, httpContent, cancellationToken);
             rawJson = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
+            elapsed = clock.Elapsed;
 
             if (!httpResponse.IsSuccessStatusCode)
             {
                 var statusCode = (int)httpResponse.StatusCode;
+                info.StatusCode = statusCode;
                 info.RetryAfter = RetryAfterOf(httpResponse, DateTimeOffset.UtcNow);
                 var ex = new HttpRequestException($"HTTP {statusCode}: {rawJson}");
                 _logger.LogError(ex, "API error. Retriable: {Retriable}", IsRetriable(statusCode));
@@ -515,13 +556,18 @@ public class OpenAILlmService : ILlmService, IDisposable
             .Select(choice => ProcessChoice(choice, normCtx))
             .ToList();
 
+        if (_logger.IsEnabled(LogLevel.Trace))
+            TraceResponse(model, elapsed, choicesRaw, candidates, usageRaw);
+
         return LlmResult.Success(
             candidates,
             tokensUsed:       usageRaw?["total_tokens"]?.Value<int?>(),
             promptTokens:     usageRaw?["prompt_tokens"]?.Value<int?>(),
             completionTokens: usageRaw?["completion_tokens"]?.Value<int?>(),
             model:            model,
-            nativeResponse:   root);
+            nativeResponse:   root,
+            reasoningTokens:  ReasoningTokensOf(usageRaw),
+            cachedPromptTokens: CachedTokensOf(usageRaw));
     }
 
     /// <summary>
@@ -580,13 +626,53 @@ public class OpenAILlmService : ILlmService, IDisposable
     /// </summary>
     public const string StreamClosedWithoutFinishReason = "stream_closed_without_finish_reason";
 
-   public async IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(
+    public async IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(
+        LlmRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        // Without Trace nothing is accumulated or formatted: the chunks pass straight through.
+        if (!_logger.IsEnabled(LogLevel.Trace))
+        {
+            await foreach (var passthrough in InvokeStreamingCoreAsync(request, null, cancellationToken))
+                yield return passthrough;
+            yield break;
+        }
+
+        var trace = new StreamTrace();
+        try
+        {
+            await foreach (var chunk in InvokeStreamingCoreAsync(request, trace, cancellationToken))
+            {
+                trace.Observe(chunk);
+                yield return chunk;
+            }
+        }
+        finally
+        {
+            // In a finally so a stream that fails or is abandoned halfway still leaves what it received.
+            LogStreamTrace(request.Model, trace);
+        }
+    }
+
+   private async IAsyncEnumerable<LlmStreamChunk> InvokeStreamingCoreAsync(
     LlmRequest request,
-    [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    StreamTrace? trace,
+    [EnumeratorCancellation] CancellationToken cancellationToken)
 {
+    // The slot is held for the whole stream (it is the call in flight until the last chunk) and released by the
+    // iterator's disposal, so a caller that abandons or fails halfway does not leak it.
+    var gate = GateOf(request);
+    using var slot = await gate.EnterAsync(cancellationToken);
+
     var client   = GetOrCreateClient(request);
     var endpoint = GetEndpoint(request);
     var body     = BuildRequestBody(request, stream: true);
+
+    if (trace != null)
+    {
+        _logger.LogTrace("Invoking {Model} ({Provider}) to {Endpoint} (streaming) with body: {Body}",
+            request.Model, Name, endpoint, body.ToString(Formatting.Indented));
+    }
 
     var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
     {
@@ -632,8 +718,11 @@ public class OpenAILlmService : ILlmService, IDisposable
         Disarm();
     }
 
+    trace?.MarkHeaders();
+
     if (!httpResponse.IsSuccessStatusCode)
     {
+        ReportThrottle(gate, (int)httpResponse.StatusCode, RetryAfterOf(httpResponse, DateTimeOffset.UtcNow));
         var errBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
         _logger.LogError("Streaming API error {Status}: {Body}",
             (int)httpResponse.StatusCode, errBody);
@@ -722,6 +811,10 @@ public class OpenAILlmService : ILlmService, IDisposable
     // prompt_tokens se clava en el cap y completion_tokens queda en ~0.
     int? promptTokens = null;
     int? completionTokens = null;
+    // reasoning_tokens of completion_tokens_details, when the provider reports it.
+    int? reasoningTokens = null;
+    // cached_tokens of prompt_tokens_details (prompt cache hits), when the provider reports it.
+    int? cachedPromptTokens = null;
     // True una vez que se emite un chunk con el contador de tokens, para no re-emitirlo
     // si el bloque `usage` llega en el mismo chunk que el finish_reason.
     bool tokensReported = false;
@@ -739,6 +832,7 @@ public class OpenAILlmService : ILlmService, IDisposable
 
         if (flushed.HasReasoning)
         {
+            trace?.ThinkReasoning.Append(flushed.Reasoning);
             yield return new LlmStreamChunk
             {
                 ChoiceIndex = idx,
@@ -832,7 +926,9 @@ public class OpenAILlmService : ILlmService, IDisposable
             // finish_reason (algunos proveedores) o haberse leído en un chunk previo.
             TokensUsed       = totalTokens,
             PromptTokens     = promptTokens,
-            CompletionTokens = completionTokens
+            CompletionTokens = completionTokens,
+            ReasoningTokens  = reasoningTokens,
+            CachedPromptTokens = cachedPromptTokens
         };
         if (totalTokens.HasValue) tokensReported = true;
     }
@@ -881,6 +977,15 @@ public class OpenAILlmService : ILlmService, IDisposable
         // sends an explicit `"usage": null` on every chunk except the last - indexing into that
         // JValue directly throws "Cannot access child value on Newtonsoft.Json.Linq.JValue".
         var usage = chunk["usage"] as JObject;
+        if (trace != null)
+        {
+            trace.SseChunks++;
+            if (usage != null) trace.Usage = usage;
+        }
+        var usageReasoning = ReasoningTokensOf(usage);
+        if (usageReasoning.HasValue) reasoningTokens = usageReasoning.Value;
+        var usageCached = CachedTokensOf(usage);
+        if (usageCached.HasValue) cachedPromptTokens = usageCached.Value;
         var usageTokens = usage?["total_tokens"]?.Value<int?>();
         if (usageTokens.HasValue) totalTokens = usageTokens.Value;
         var usagePrompt = usage?["prompt_tokens"]?.Value<int?>();
@@ -911,6 +1016,7 @@ public class OpenAILlmService : ILlmService, IDisposable
             if (hasNativeReasoning)
             {
                 GetNativeBuffer(choiceIndex).Append(reasoningDelta);
+                trace?.NativeReasoning.Append(reasoningDelta);
                 yield return new LlmStreamChunk
                 {
                     ChoiceIndex = choiceIndex,
@@ -945,6 +1051,7 @@ public class OpenAILlmService : ILlmService, IDisposable
 
                     if (result.HasReasoning)
                     {
+                        trace?.ThinkReasoning.Append(result.Reasoning);
                         yield return new LlmStreamChunk
                         {
                             ChoiceIndex = choiceIndex,
@@ -1039,7 +1146,9 @@ public class OpenAILlmService : ILlmService, IDisposable
             IsComplete       = true,
             TokensUsed       = totalTokens.Value,
             PromptTokens     = promptTokens,
-            CompletionTokens = completionTokens
+            CompletionTokens = completionTokens,
+            ReasoningTokens  = reasoningTokens,
+            CachedPromptTokens = cachedPromptTokens
         };
     }
 
@@ -1060,7 +1169,115 @@ public class OpenAILlmService : ILlmService, IDisposable
                 "Streaming completed without yielding any text content for model {Model} (prompt_tokens={Prompt}, completion_tokens={Completion})",
                 request.Model, promptTokens, completionTokens);
     }
-}    // -------------------------------------------------------------------------
+}
+
+    // -------------------------------------------------------------------------
+    // Trace
+    // -------------------------------------------------------------------------
+
+    /// <summary><c>usage.completion_tokens_details.reasoning_tokens</c>, or null when the provider does not send it.</summary>
+    internal static int? ReasoningTokensOf(JObject? usage) =>
+        (usage?["completion_tokens_details"] as JObject)?["reasoning_tokens"]?.Value<int?>();
+
+    /// <summary><c>usage.prompt_tokens_details.cached_tokens</c>, or null when the provider does not send it.</summary>
+    internal static int? CachedTokensOf(JObject? usage) =>
+        (usage?["prompt_tokens_details"] as JObject)?["cached_tokens"]?.Value<int?>();
+
+    /// <summary>
+    /// What a streamed call received, accumulated only while Trace is enabled. It never holds the request
+    /// headers or the API key: only the model's output and the timings of the stream.
+    /// </summary>
+    private sealed class StreamTrace
+    {
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private readonly SortedDictionary<string, (string? Name, StringBuilder Args)> _toolCalls = [];
+
+        public TimeSpan? HeadersAt { get; private set; }
+        public TimeSpan? FirstDeltaAt { get; private set; }
+        public TimeSpan? LastDeltaAt { get; private set; }
+        public int Deltas { get; private set; }
+        public int SseChunks { get; set; }
+        public JObject? Usage { get; set; }
+        public string? FinishReason { get; private set; }
+        public StringBuilder Content { get; } = new();
+        public StringBuilder NativeReasoning { get; } = new();
+        public StringBuilder ThinkReasoning { get; } = new();
+        public TimeSpan Elapsed => _clock.Elapsed;
+        public IEnumerable<string> ToolCalls =>
+            _toolCalls.Select(kv => $"{kv.Value.Name}({kv.Value.Args})");
+
+        public void MarkHeaders() => HeadersAt = _clock.Elapsed;
+
+        public void Observe(LlmStreamChunk chunk)
+        {
+            var hasDelta = chunk.Delta.Length > 0 || chunk.ToolCallUpdates is { Count: > 0 };
+            if (hasDelta)
+            {
+                var now = _clock.Elapsed;
+                FirstDeltaAt ??= now;
+                LastDeltaAt = now;
+                Deltas++;
+            }
+
+            if (!chunk.IsThinking) Content.Append(chunk.Delta);
+
+            if (chunk.ToolCallUpdates != null)
+            {
+                foreach (var update in chunk.ToolCallUpdates)
+                {
+                    var key = $"{chunk.ChoiceIndex}.{update.Index}";
+                    var call = _toolCalls.TryGetValue(key, out var known) ? known : (null, new StringBuilder());
+                    if (update.FunctionName != null) call.Name = update.FunctionName;
+                    call.Args.Append(update.FunctionArgumentsUpdate);
+                    _toolCalls[key] = call;
+                }
+            }
+
+            if (chunk.IsComplete && (chunk.RawFinishReason ?? chunk.FinishReason?.ToString()) is { } finish) FinishReason = finish;
+        }
+    }
+
+    private void LogStreamTrace(string model, StreamTrace trace)
+    {
+        // Timings are from the start of the call; first == last means the server sent everything at once.
+        _logger.LogTrace(
+            "Streamed response from {Model}: finish_reason={FinishReason}, deltas={Deltas}, sse_chunks={SseChunks}, " +
+            "headers_ms={HeadersMs}, first_delta_ms={FirstDeltaMs}, last_delta_ms={LastDeltaMs}, total_ms={TotalMs}\n" +
+            "[Content]: {Content}\n[Reasoning native]: {NativeReasoning}\n[Reasoning <think>]: {ThinkReasoning}\n" +
+            "[ToolCalls]: {ToolCalls}\n[Usage]: {Usage}\n" +
+            "reasoning_tokens={ReasoningTokens}, cached_tokens={CachedTokens}",
+            model, trace.FinishReason, trace.Deltas, trace.SseChunks,
+            Ms(trace.HeadersAt), Ms(trace.FirstDeltaAt), Ms(trace.LastDeltaAt), (long)trace.Elapsed.TotalMilliseconds,
+            trace.Content.ToString(), trace.NativeReasoning.ToString(), trace.ThinkReasoning.ToString(),
+            string.Join(", ", trace.ToolCalls), trace.Usage?.ToString(Formatting.None),
+            ReasoningTokensOf(trace.Usage), CachedTokensOf(trace.Usage));
+    }
+
+    private static long? Ms(TimeSpan? value) => value is { } v ? (long)v.TotalMilliseconds : null;
+
+    private void TraceResponse(
+        string model, TimeSpan elapsed, JArray choicesRaw, List<LlmResponse> candidates, JObject? usage)
+    {
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            var message   = choicesRaw[i]["message"] as JObject;
+            var native    = (message?["reasoning_content"] ?? message?["reasoning"])?.Value<string>();
+            _logger.LogTrace(
+                "Response from {Model} (choice {Choice}): finish_reason={FinishReason}, total_ms={TotalMs}\n" +
+                "[Content]: {Content}\n[Reasoning native]: {NativeReasoning}\n[Reasoning after <think> extraction]: {Reasoning}\n" +
+                "[ToolCalls]: {ToolCalls}",
+                model, candidate.Index, choicesRaw[i]["finish_reason"]?.Value<string>(), (long)elapsed.TotalMilliseconds,
+                candidate.Content, native, candidate.Reasoning,
+                string.Join(", ", (candidate.ToolCalls ?? []).Select(tc => $"{tc.Name}({tc.Arguments})")));
+        }
+
+        _logger.LogTrace(
+            "Usage from {Model}: {Usage}, reasoning_tokens={ReasoningTokens}, cached_tokens={CachedTokens}",
+            model, usage?.ToString(Formatting.None), ReasoningTokensOf(usage), CachedTokensOf(usage));
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 

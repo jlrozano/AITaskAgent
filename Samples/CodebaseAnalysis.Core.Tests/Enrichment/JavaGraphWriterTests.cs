@@ -1228,11 +1228,11 @@ public class JavaGraphWriterTests
         var db = Path.Combine(temp.Path, "codebase.db");
         using var graph = await JavaGraphFixture.CreateGraphAsync(db);
         var lines = JavaGraphFixture.ResultLines(withReferences: true);
-        lines[^1] = lines[^1].Replace("\"schema\":2", "\"schema\":3", StringComparison.Ordinal);
+        lines[^1] = lines[^1].Replace("\"schema\":2", "\"schema\":4", StringComparison.Ordinal);
 
         var ex = await Assert.ThrowsAsync<InvalidDataException>(() => JavaGraphWriter.ApplyAsync(JavaGraphFixture.Request(db),
             JavaAnalysisReader.Read(JavaGraphFixture.WriteResult(temp.Path, lines)), CancellationToken.None));
-        Assert.Contains("versión de contrato 3; se esperaba entre 1 y 2", ex.Message);
+        Assert.Contains("versión de contrato 4; se esperaba entre 1 y 3", ex.Message);
         Assert.Empty(await EnrichmentRuns.ListAsync(graph.Connection, CancellationToken.None));
     }
 }
@@ -1295,7 +1295,8 @@ public class JavaAnalysisReaderTests
         Assert.Equal(9, summary.Refs.Records);
         Assert.Equal(1, summary.Refs.UnresolvedByReason["error-type"]);
         Assert.True(JavaAnalysisReader.IsSupportedSchema(1));
-        Assert.False(JavaAnalysisReader.IsSupportedSchema(3));
+        Assert.True(JavaAnalysisReader.IsSupportedSchema(3));
+        Assert.False(JavaAnalysisReader.IsSupportedSchema(4));
     }
 
     [Fact]

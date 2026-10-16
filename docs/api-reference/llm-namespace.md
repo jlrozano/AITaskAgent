@@ -53,8 +53,8 @@ public class LlmProvider
 
 public record LlmModelSettings(
     string Name,
-    decimal InputPricePerMillion,
-    decimal OutputPricePerMillion,
+    decimal? InputPricePerMillion,   // null = unknown: CalculateCost returns null
+    decimal? OutputPricePerMillion,
     LlmInferenceSettings Inference);
 ```
 

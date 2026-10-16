@@ -1,5 +1,6 @@
 using CodebaseAnalysis.Core.Chat;
 using CodebaseAnalysis.Core.Progress;
+using CodebaseAnalysis.Core.Support;
 using CodebaseAnalysisWeb.Chat;
 using CodebaseAnalysisWeb.Sse;
 using CodebaseAnalysisWeb.Workspace;
@@ -9,9 +10,30 @@ using System.Threading.Channels;
 
 namespace CodebaseAnalysisWeb.Api;
 
-public sealed record CreateChatSessionRequest(string? Title = null);
+public sealed record CreateChatSessionRequest(string? Title = null, string? ModelId = null);
+
+public sealed record SetChatModelRequest(string? ModelId);
+
+/// <summary>Un modelo seleccionable del chat; los precios salen solo si el proveedor los declara.</summary>
+public sealed record ChatModelDto(
+    string Id,
+    string Label,
+    string Provider,
+    string Model,
+    bool Streaming,
+    decimal? InputPricePerMillion,
+    decimal? OutputPricePerMillion);
+
+public sealed record ChatModelsDto(string DefaultId, IReadOnlyList<ChatModelDto> Models);
 
 public sealed record ChatMessageRequest(string? Message);
+
+public sealed record AddChatReadRootRequest(string? Path);
+
+/// <summary>Ruta de solo lectura adicional del chat. <c>global</c>: viene de la configuración y no se quita aquí. <c>problem</c>: por qué ya no vale, o null.</summary>
+public sealed record ChatReadRootDto(string Path, bool Global, string? Problem);
+
+public sealed record ChatReadRootsDto(IReadOnlyList<ChatReadRootDto> Roots);
 
 public sealed record ChatSessionSummaryDto(string Id, string? Title, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, int TurnCount);
 
@@ -28,14 +50,63 @@ public static class ChatEndpoints
                 .Select(s => new ChatSessionSummaryDto(s.Id, s.Title, s.CreatedAt, s.UpdatedAt, s.TurnCount))
                 .ToList()));
 
-        app.MapPost("/api/chat/sessions", (CreateChatSessionRequest body, WorkspaceState workspace) =>
+        // Rutas de solo lectura, además del repositorio, que las tools de ficheros del chat pueden recorrer. Solo se guarda la
+        // ruta: no se indexa, se extrae ni se copia nada, y nunca se escribe en ella. Añadir y quitar es instantáneo.
+        app.MapGet("/api/chat/read-roots", (WorkspaceState workspace, ChatService chat) =>
+            workspace.Current is { } active
+                ? Results.Ok(chat.ReadRoots(active))
+                : ApiErrorsFactory.NoWorkspace().ToResult(StatusCodes.Status409Conflict));
+
+        app.MapPost("/api/chat/read-roots", (AddChatReadRootRequest body, WorkspaceState workspace, ChatService chat) =>
         {
+            if (workspace.Current is not { } active)
+                return ApiErrorsFactory.NoWorkspace().ToResult(StatusCodes.Status409Conflict);
+            try
+            {
+                chat.AddReadRoot(active, body.Path);
+            }
+            catch (ReadRootException ex)
+            {
+                return new ApiError(ApiErrorCodes.InvalidPath, ex.Message).ToResult(StatusCodes.Status400BadRequest);
+            }
+            return Results.Created("/api/chat/read-roots", chat.ReadRoots(active));
+        });
+
+        // La ruta va en la query (`?path=`): un DELETE no lleva cuerpo.
+        app.MapDelete("/api/chat/read-roots", (string? path, WorkspaceState workspace, ChatService chat) =>
+        {
+            if (workspace.Current is not { } active)
+                return ApiErrorsFactory.NoWorkspace().ToResult(StatusCodes.Status409Conflict);
+            return chat.RemoveReadRoot(active, path)
+                ? Results.NoContent()
+                : ApiErrorsFactory.NotFound($"'{path}' no está en las rutas de lectura adicionales.").ToResult(StatusCodes.Status404NotFound);
+        });
+
+        app.MapGet("/api/chat/models", (ChatService chat) =>
+            Results.Ok(new ChatModelsDto(
+                chat.Models.Default.Id,
+                chat.Models.Models
+                    .Select(m => new ChatModelDto(m.Id, m.Label, m.ProviderName, m.Model, m.Streaming, m.InputPricePerMillion, m.OutputPricePerMillion))
+                    .ToList())));
+
+        // El modelo cambia a mitad de conversación y vale para los turnos siguientes; la respuesta es la sesión.
+        app.MapPut("/api/chat/sessions/{id}/model", (string id, SetChatModelRequest body, ChatService chat) =>
+        {
+            var (session, error, status) = chat.SetModel(id, body.ModelId);
+            return session != null ? Results.Ok(session) : error!.ToResult(status);
+        });
+
+        app.MapPost("/api/chat/sessions", (CreateChatSessionRequest body, WorkspaceState workspace, ChatService chat) =>
+        {
+            if (!string.IsNullOrWhiteSpace(body.ModelId) && chat.Models.Find(body.ModelId) == null)
+                return new ApiError(ApiErrorCodes.InvalidRequest, $"Modelo de chat desconocido: '{body.ModelId}'.").ToResult(StatusCodes.Status400BadRequest);
+
             var active = workspace.Current;
             var store = workspace.ChatStore;
             if (active == null || store == null)
                 return ApiErrorsFactory.NoWorkspace().ToResult(StatusCodes.Status409Conflict);
 
-            var session = store.Create(active.RepositoryPath, body.Title);
+            var session = store.Create(active.RepositoryPath, body.Title, chat.Models.Find(body.ModelId)?.Id ?? chat.Models.Default.Id);
             return Results.Created($"/api/chat/sessions/{session.Id}", session);
         });
 

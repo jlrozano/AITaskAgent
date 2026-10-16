@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { ApiError, api, errorMessage } from '../api/client';
 import { isAbortError } from '../api/sse';
-import { chatReducer, initialChatState, type ChatState } from '../state/chatReducer';
+import { chatReducer, initialChatState, selectedModelId, type ChatState } from '../state/chatReducer';
 
 export interface ChatApi {
   state: ChatState;
@@ -10,6 +10,8 @@ export interface ChatApi {
   select: (id: string | null) => void;
   remove: (id: string) => Promise<void>;
   send: (question: string) => Promise<void>;
+  /** Elige el modelo que responde: el de la sesión abierta o, sin sesión, el de la conversación nueva. */
+  chooseModel: (modelId: string) => Promise<void>;
   stop: () => void;
   dismissError: () => void;
 }
@@ -47,6 +49,21 @@ export function useChatTurn(options: {
   useEffect(() => {
     if (enabled) void loadSessions();
   }, [enabled, loadSessions]);
+
+  // Un servidor sin selector (404) o un fallo aquí no es un error del chat: simplemente no hay selector.
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    api.listChatModels().then(
+      (r) => {
+        if (!cancelled) dispatch({ type: 'models/loaded', models: r.models, defaultId: r.defaultId });
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
 
   // La sesión abierta la manda el hash (`chat=<id>` en `#asistente`).
   useEffect(() => {
@@ -93,7 +110,7 @@ export function useChatTurn(options: {
     try {
       let sessionId = stateRef.current.activeId;
       if (!sessionId) {
-        const session = await api.createChatSession();
+        const session = await api.createChatSession(undefined, selectedModelId(stateRef.current));
         sessionId = session.id;
         dispatch({ type: 'session/select', id: session.id });
         dispatch({ type: 'session/loaded', session });
@@ -135,6 +152,22 @@ export function useChatTurn(options: {
     }
   }, []);
 
+  const chooseModel = useCallback(async (modelId: string) => {
+    const current = stateRef.current;
+    if (current.live) return;
+    const sessionId = current.session?.id ?? null;
+    if (!sessionId) {
+      dispatch({ type: 'model/pending', modelId });
+      return;
+    }
+    try {
+      const session = await api.setChatSessionModel(sessionId, modelId);
+      dispatch({ type: 'session/model', id: sessionId, modelId: session.modelId ?? modelId });
+    } catch (e) {
+      dispatch({ type: 'error', message: errorMessage(e) });
+    }
+  }, []);
+
   const stop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
@@ -143,5 +176,5 @@ export function useChatTurn(options: {
 
   const dismissError = useCallback(() => dispatch({ type: 'error', message: null }), []);
 
-  return { state, busy: state.live !== null, loadSessions, select, remove, send, stop, dismissError };
+  return { state, busy: state.live !== null, loadSessions, select, remove, send, chooseModel, stop, dismissError };
 }

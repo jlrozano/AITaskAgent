@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import type { ChatApi } from '../hooks/useChatTurn';
-import { sessionTitle } from '../state/chatReducer';
+import { selectedModelId, sessionTitle } from '../state/chatReducer';
 import { useWorkspace } from '../state/workspace';
 import { ChatComposer } from './ChatComposer';
+import { ChatModelSelect } from './ChatModelSelect';
+import { ChatReadRoots } from './ChatReadRoots';
 import { ChatSessionsDialog } from './ChatSessionsDialog';
 import { ChatThread } from './ChatThread';
 import { StatusBanner } from './StatusBanner';
@@ -53,6 +55,7 @@ export function ChatPane({ chat, analysisRunning, onOpenReport, onReportChanged 
           Nueva
         </button>
       </header>
+      <ChatReadRoots />
       <ChatSessionsDialog
         open={sessionsOpen}
         onClose={() => setSessionsOpen(false)}
@@ -93,12 +96,20 @@ export function ChatPane({ chat, analysisRunning, onOpenReport, onReportChanged 
           {state.error}
         </StatusBanner>
       )}
-      <ChatThread session={state.session} live={live} onOpenReport={onOpenReport} onReportChanged={onReportChanged} />
+      <ChatThread session={state.session} live={live} models={state.models} onOpenReport={onOpenReport} onReportChanged={onReportChanged} />
       <ChatComposer
         busy={live !== null}
         disabledReason={disabledReason}
         onSend={(text) => void chat.send(text)}
         onStop={chat.stop}
+        modelPicker={
+          <ChatModelSelect
+            models={state.models}
+            value={selectedModelId(state)}
+            disabled={state.live !== null}
+            onChange={(id) => void chat.chooseModel(id)}
+          />
+        }
       />
     </section>
   );

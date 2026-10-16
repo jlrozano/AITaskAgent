@@ -863,8 +863,8 @@ Pipeline.ExecuteAsync()
 | `StepCompletedEvent` | `StepBase.InvokeAsync()` | Fin de cada step | `Success`, `Duration`, `ErrorMessage`, `AdditionalData` |
 | `StepProgressEvent` | Manual (tu código) | Durante ejecución | `Message`, `CurrentProgress`, `TotalProgress` |
 | `LlmResponseEvent` | `BaseLlmStep` (streaming) | Cada chunk LLM | `Delta`, `IsComplete`, `FinishReason` |
-| `ToolStartedEvent` | `LlmTool.ExecuteAsync()` | Inicio de tool | `ToolName`, `StepName`, `AdditionalData` |
-| `ToolCompletedEvent` | `LlmTool.ExecuteAsync()` | Fin de tool | `Success`, `Duration`, `ErrorMessage`, `AdditionalData` |
+| `ToolStartedEvent` | `LlmTool.ExecuteAsync()` | Inicio de tool | `ToolName`, `StepName`, `AdditionalData` (`parameters`: los argumentos JSON de la llamada) |
+| `ToolCompletedEvent` | `LlmTool.ExecuteAsync()` | Fin de tool | `Success`, `Duration`, `ErrorMessage`, `AdditionalData` (`parameters` y, si va bien, `result`: el texto devuelto, sin truncar; las mismas claves que `McpToolWrapper`) |
 
 ### Suscribirse a Eventos (System.Threading.Channels)
 

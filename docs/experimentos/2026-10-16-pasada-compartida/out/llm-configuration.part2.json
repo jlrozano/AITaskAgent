@@ -1,0 +1,214 @@
+{
+  "batch": "llm-configuration",
+  "files": [],
+  "types": [
+    {"name": "LlmProvider", "kind": "class", "path": "LLM/Configuration/LlmProvider.cs", "startLine": 5, "endLine": 57,
+     "purpose": "Proveedor LLM configurado: conexión, inferencia por defecto, catálogo de modelos con precios y servicio. Calcula el coste en USD de una llamada.",
+     "collaborators": ["ILlmService: Service requerido", "LlmModelSettings: catálogo de precios", "BaseLlmStep.PriceOf: llama a CalculateCost"],
+     "members": [
+       {"name": "BaseUrl, ApiKey, ApiVersion (propiedades init)", "startLine": 7, "endLine": 11, "does": "Datos de conexión; ApiKey en texto plano.", "inputs": "binder/configurador", "outputs": "string?", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Inference, Models (propiedades init)", "startLine": 9, "endLine": 10, "does": "Inferencia por defecto y lista de modelos.", "inputs": "binder/configurador", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Service { get; init; } (required)", "startLine": 12, "endLine": 12, "does": "ILlmService asociado.", "inputs": "configurador", "outputs": "ILlmService", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "CalculateCost(string? model, int? promptTokens, int? completionTokens, int? cachedPromptTokens = null)", "startLine": 33, "endLine": 56, "does": "Busca el modelo sin distinguir mayúsculas y calcula coste con precio de entrada, de salida y de tokens cacheados (por defecto el de entrada); tokens cacheados acotados al total de prompt.", "inputs": "modelo y contadores de tokens", "outputs": "decimal? (null si no hay precios o modelo vacío)", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmModelSettings", "kind": "record", "path": "LLM/Configuration/LlmProvider.cs", "startLine": 65, "endLine": 71,
+     "purpose": "Modelo de un proveedor con precios en USD por millón de tokens (nulo = desconocido) e inferencia.",
+     "collaborators": ["LlmProvider.CalculateCost: lo consume"],
+     "members": [
+       {"name": "LlmModelSettings(string Name, decimal? InputPricePerMillion, decimal? OutputPricePerMillion, LlmInferenceSettings Inference, decimal? CachedInputPricePerMillion = null)", "startLine": 65, "endLine": 71, "does": "Constructor posicional del record.", "inputs": "nombre, precios, inferencia", "outputs": "record", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmRole", "kind": "class", "path": "LLM/Configuration/LlmRole.cs", "startLine": 5, "endLine": 13,
+     "purpose": "Configuración de rol: proveedor, modelo, system prompt, inferencia, fallbacks y herramientas.",
+     "collaborators": ["LlmProvider, LlmFallback, ITool, LlmInferenceSettings"],
+     "members": [
+       {"name": "Provider, Model, SystemPrompt, Inference, Fallbacks, Tools (propiedades init)", "startLine": 7, "endLine": 12, "does": "Propiedades de rol; Provider y Model son required.", "inputs": "configurador", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmProviderException", "kind": "class", "path": "LLM/Models/LlmProviderException.cs", "startLine": 8, "endLine": 18,
+     "purpose": "Tipa un fallo del proveedor; gatilla el cambio a fallback.",
+     "collaborators": ["BaseLlmStep.SwitchToNextFallback: lo comprueba", "BaseLlmStep.InvokeLlmWithToolsAsync: lo crea al capturar"],
+     "members": [
+       {"name": "IsRetriable { get; }", "startLine": 11, "endLine": 11, "does": "Indica fallo transitorio.", "inputs": "ctor", "outputs": "bool", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "LlmProviderException(string message, Exception? innerException, bool isRetriable)", "startLine": 13, "endLine": 17, "does": "Construye la excepción.", "inputs": "mensaje, interna, retriable", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmRequest", "kind": "record", "path": "LLM/Models/LlmRequest.cs", "startLine": 10, "endLine": 34,
+     "purpose": "Petición agnóstica de proveedor; extiende LlmInferenceSettings con conversación, ventana deslizante, system prompt, modelo, herramientas y credenciales de conexión.",
+     "collaborators": ["ConversationContext: historial", "ResponseFormatOptions: formato", "ToolDefinition: herramientas", "ILlmService: consumidor"],
+     "members": [
+       {"name": "Conversation { get; init; } (required)", "startLine": 13, "endLine": 13, "does": "Conversación enviada.", "inputs": "BuildLlmRequestAsync", "outputs": "ConversationContext", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "UseSlidingWindow, SlidingWindowMaxTokens, MessageMaxTokens", "startLine": 14, "endLine": 16, "does": "Configuración de ventana (por defecto true, 8192, 8192).", "inputs": "init", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "SystemPrompt, Model (required), ResponseFormat, User, Tools", "startLine": 18, "endLine": 25, "does": "Contenido de la petición.", "inputs": "init", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "BaseUrl, ApiKey, ApiVersion", "startLine": 26, "endLine": 28, "does": "Credenciales y destino copiados del proveedor.", "inputs": "init", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Copy()", "startLine": 33, "endLine": 33, "does": "Copia superficial mediante with.", "inputs": "n/a", "outputs": "LlmRequest", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmResponse", "kind": "record", "path": "LLM/Models/LlmResponse.cs", "startLine": 7, "endLine": 26,
+     "purpose": "Un candidato generado por el LLM.",
+     "collaborators": ["ToolCall, FinishReason"],
+     "members": [
+       {"name": "Index, Content (required), Reasoning, FinishReason, RawFinishReason, ToolCalls", "startLine": 10, "endLine": 25, "does": "Propiedades del candidato.", "inputs": "init", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmStreamChunk", "kind": "class", "path": "LLM/Models/LlmStreamChunk.cs", "startLine": 8, "endLine": 48,
+     "purpose": "Fragmento de una respuesta en streaming con contenido, finalización, uso de tokens y tool call deltas.",
+     "collaborators": ["BaseLlmStep.InvokeLlmAsync: lo ensambla", "ToolCallUpdate"],
+     "members": [
+       {"name": "Delta (required), IsThinking, IsComplete, FinishReason, RawFinishReason", "startLine": 11, "endLine": 23, "does": "Contenido y estado del fragmento.", "inputs": "init", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "TokensUsed, PromptTokens, CompletionTokens, ReasoningTokens, CachedPromptTokens", "startLine": 26, "endLine": 38, "does": "Uso de tokens.", "inputs": "init", "outputs": "int?", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "ToolCallUpdates, ChoiceIndex, NativeChunk", "startLine": 41, "endLine": 47, "does": "Deltas de tool calls, índice de choice y objeto nativo.", "inputs": "init", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "BaseLlmStep", "kind": "class", "path": "LLM/Steps/BaseLlmStep.cs", "startLine": 38, "endLine": 684,
+     "purpose": "Clase base abstracta no genérica de los pasos LLM: gestiona rol y fallbacks, estado por invocación en PipelineContext.StepState, ejecución con reintento y feedback, finalización con compactación de conversación, construcción de LlmRequest y parsing de respuesta.",
+     "collaborators": ["StepBase: hereda ExecuteAsync/FinalizeAsync/SwitchToNextFallback", "LlmRole/LlmProvider/LlmInferenceSettings: configuración", "ConversationContext: historial con bookmarks", "ITool/ITagHandler: herramientas y tags", "LlmHelpers: parsing y schema", "AITaskAgentOptions: ventana deslizante"],
+     "members": [
+       {"name": "BaseLlmStep(name, role, inputType, outputType, prompt, systemPrompt) [ctor primario]", "startLine": 38, "endLine": 45, "does": "Guarda el rol, toma Tools del rol y deriva SystemPrompt del argumento o del rol.", "inputs": "nombre, rol, tipos, prompt", "outputs": "instancia", "sideEffects": "ninguno", "throws": "NullReferenceException si role es null"},
+       {"name": "SetRole(LlmRole newRole)", "startLine": 61, "endLine": 74, "does": "Sustituye el rol; copia Tools y SystemPrompt del nuevo rol solo si estaban vacíos.", "inputs": "rol no nulo", "outputs": "void", "sideEffects": "muta _role, Tools, SystemPrompt", "throws": "ArgumentNullException si newRole es null"},
+       {"name": "GetLlmService(PipelineContext context)", "startLine": 76, "endLine": 81, "does": "Devuelve el servicio del proveedor activo según FallbackIndex o NullLlmService.", "inputs": "contexto", "outputs": "ILlmService", "sideEffects": "crea estado si no existe", "throws": "ArgumentOutOfRangeException si el índice excede fallbacks"},
+       {"name": "GetModel(PipelineContext context)", "startLine": 83, "endLine": 89, "does": "Modelo activo (rol o fallback).", "inputs": "contexto", "outputs": "string", "sideEffects": "crea estado", "throws": "InvalidOperationException si no hay modelo"},
+       {"name": "GetProvider(PipelineContext context)", "startLine": 91, "endLine": 97, "does": "Proveedor activo.", "inputs": "contexto", "outputs": "LlmProvider", "sideEffects": "crea estado", "throws": "InvalidOperationException si no hay proveedor"},
+       {"name": "GetInference(PipelineContext context)", "startLine": 99, "endLine": 104, "does": "Inferencia activa: la del rol o fallback, si no la del proveedor, si no una vacía.", "inputs": "contexto", "outputs": "LlmInferenceSettings", "sideEffects": "crea estado", "throws": "ninguno"},
+       {"name": "MaxToolIterations, Tools, TagHandlers, SystemPrompt, Prompt (propiedades)", "startLine": 106, "endLine": 158, "does": "Configuración pública del paso: iteraciones máximas (5), herramientas, handlers de tags, system prompt y prompt.", "inputs": "init/set", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "StateKey(PipelineContext context)", "startLine": 141, "endLine": 142, "does": "Clave de estado: CurrentStepPath o Name.", "inputs": "contexto", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "GetState(PipelineContext context)", "startLine": 144, "endLine": 154, "does": "Obtiene o crea el InvocationState en StepState.", "inputs": "contexto", "outputs": "InvocationState", "sideEffects": "escribe en context.StepState", "throws": "ninguno"},
+       {"name": "SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)", "startLine": 160, "endLine": 209, "does": "Si el error es LlmProviderException y hay otro fallback válido, avanza FallbackIndex y restaura el bookmark inicial.", "inputs": "error, contexto, intento", "outputs": "bool", "sideEffects": "muta FallbackIndex y la conversación (RestoreBookmark)", "throws": "ArgumentOutOfRangeException improbable"},
+       {"name": "BuildUserMessageAsync(IStepResult input, PipelineContext context)", "startLine": 212, "endLine": 212, "does": "Devuelve Prompt por defecto.", "inputs": "input, contexto", "outputs": "Task<string?>", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "BuildSystemMessageAsync(IStepResult input, PipelineContext context)", "startLine": 215, "endLine": 215, "does": "Devuelve SystemPrompt por defecto.", "inputs": "input, contexto", "outputs": "Task<string?>", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "FinalizeAsync(IStepResult result, PipelineContext context, CancellationToken ct)", "startLine": 217, "endLine": 265, "does": "Restaura el bookmark, escribe el par user/assistant canónico en éxito, llama AddConversationToContext y elimina el estado del paso.", "inputs": "resultado, contexto", "outputs": "Task completada", "sideEffects": "muta conversación y StepState", "throws": "ninguno"},
+       {"name": "ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken ct)", "startLine": 267, "endLine": 385, "does": "Intento 1: prepara conversación, bookmark, mensaje y request. Intentos posteriores: añade feedback de error. Invoca el bucle de herramientas, parsea y registra el mensaje del asistente.", "inputs": "input, intento, último resultado", "outputs": "IStepResult (resultado o error)", "sideEffects": "muta conversación y estado; logs", "throws": "NullReferenceException si attempt>1 sin estado previo"},
+       {"name": "GetConversationContext(PipelineContext context)", "startLine": 387, "endLine": 387, "does": "Devuelve context.Conversation.", "inputs": "contexto", "outputs": "ConversationContext", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "AddConversationToContext(PipelineContext, ConversationContext, ILlmStepResult)", "startLine": 389, "endLine": 391, "does": "Hook vacío.", "inputs": "contexto, conversación, resultado", "outputs": "void", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "BuildLlmRequestAsync(IStepResult input, PipelineContext context, ConversationContext conversation, CancellationToken ct)", "startLine": 396, "endLine": 455, "does": "Compone el system prompt (herramientas y tags), opciones de conversación, definiciones de herramientas y LlmRequest con inferencia fusionada rol/proveedor; aplica ConfigureLlmRequest y ConfigureJsonResponse.", "inputs": "input, contexto, conversación", "outputs": "LlmRequest", "sideEffects": "lee IOptions del ServiceProvider", "throws": "ninguno"},
+       {"name": "ConfigureLlmRequest(LlmRequest request, PipelineContext context)", "startLine": 461, "endLine": 461, "does": "Hook virtual que devuelve la request.", "inputs": "request", "outputs": "LlmRequest", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "MergeOptions(params JObject?[] optionsList)", "startLine": 463, "endLine": 474, "does": "Fusiona JObjects con MergeArrayHandling.Union.", "inputs": "lista de JObject", "outputs": "JObject", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "ParseLlmResponseAsync(LlmResult response, PipelineContext context)", "startLine": 478, "endLine": 536, "does": "Convierte el contenido a ValueType (string, primitivo o JSON), crea el resultado y devuelve un mensaje de error si falla el parseo.", "inputs": "respuesta", "outputs": "(IStepResult?, string?)", "sideEffects": "logs", "throws": "ninguno (captura JsonException y Exception)"},
+       {"name": "SetLlmMetrics(IStepResult? result, LlmResult response)", "startLine": 538, "endLine": 549, "does": "Copia contenido, razonamiento, modelo, tokens, coste y finish reason al LlmStepResult.", "inputs": "resultado, respuesta", "outputs": "void", "sideEffects": "muta el resultado", "throws": "ninguno"},
+       {"name": "UpdateContextMetrics(PipelineContext context, LlmResult response)", "startLine": 551, "endLine": 575, "does": "Incrementa métricas y sobrescribe Metadata TokensUsed y CostUsd con los valores de esa llamada.", "inputs": "contexto, respuesta", "outputs": "void", "sideEffects": "métricas y context.Metadata", "throws": "ninguno"},
+       {"name": "ConfigureJsonResponse(LlmRequest request, string userMessage, LlmProvider? provider)", "startLine": 579, "endLine": 621, "does": "Si hay Schema, fija formato JSON o inyecta el schema en el system prompt según JsonSupport del proveedor.", "inputs": "request, mensaje, proveedor", "outputs": "LlmRequest", "sideEffects": "la rama JsonObject añadiría un mensaje de usuario a la conversación", "throws": "NullReferenceException si Schema es no nulo y ValueType nulo (log)"},
+       {"name": "EnrichSystemPromptWithToolGuidelines(string? basePrompt, IList<ITool> tools)", "startLine": 623, "endLine": 653, "does": "Añade una sección de guías de uso de herramientas.", "inputs": "prompt, herramientas", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "EnrichSystemPromptWithTags(string? basePrompt, List<ITagHandler> handlers)", "startLine": 655, "endLine": 683, "does": "Añade la referencia de tags de acción con las instrucciones de cada handler.", "inputs": "prompt, handlers", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "BaseLlmStep (parcial LlmInvocation)", "kind": "class", "path": "LLM/Steps/BaseLlmStep.LlmInvocation.cs", "startLine": 16, "endLine": 922,
+     "purpose": "Mitad del motor: bucle recursivo de herramientas, detección de repeticiones, ejecución de tool calls, invocación batch/streaming con procesamiento de tags, coste y eventos.",
+     "collaborators": ["ILlmService: invocación", "StreamingTagParser/ITagHandler: tags", "ITool: ejecución", "LlmHelpers.NormalizeToolCallKey", "LlmProvider.CalculateCost", "PipelineContext.SendEventAsync, Telemetry, Metrics"],
+     "members": [
+       {"name": "InvokeLlmWithToolsAsync(LlmRequest request, PipelineContext context, int toolIteration, CancellationToken ct)", "startLine": 18, "endLine": 220, "does": "Recursión: llama a InvokeLlmAsync, ejecuta tool calls y vuelve a llamar hasta respuesta final o límite; agrega tokens y coste de las iteraciones.", "inputs": "request, contexto, iteración", "outputs": "LlmResult", "sideEffects": "telemetría, métricas, escribe en conversación, ejecuta herramientas", "throws": "ninguno (excepciones del proveedor se convierten en LlmResult.Failure; propaga cancelación)"},
+       {"name": "_tagsExecutedInLastResponse, _lastToolCallKeys, _consecutiveIdenticalToolCalls (campos)", "startLine": 227, "endLine": 233, "does": "Estado de repetición y de tags guardado en campos de instancia.", "inputs": "n/a", "outputs": "n/a", "sideEffects": "estado compartido por instancia", "throws": "ninguno"},
+       {"name": "ResetToolCallRepeatTracking()", "startLine": 236, "endLine": 240, "does": "Pone a cero el seguimiento de repeticiones.", "inputs": "n/a", "outputs": "void", "sideEffects": "muta campos de instancia", "throws": "ninguno"},
+       {"name": "IsStuckRepeatingToolCalls(List<ToolCall> toolCalls, out string message)", "startLine": 252, "endLine": 293, "does": "Compara las claves de tool calls con las de la iteración anterior; umbral 3 si todas son de solo lectura, si no 1.", "inputs": "tool calls", "outputs": "bool y mensaje", "sideEffects": "muta campos de instancia; logs", "throws": "ninguno"},
+       {"name": "StopWithMessage(LlmResult result, LlmResponse candidate, string message)", "startLine": 299, "endLine": 318, "does": "Convierte la respuesta en final sin tool calls con el mensaje de parada si el contenido está vacío.", "inputs": "resultado, candidato, mensaje", "outputs": "LlmResult", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "DeduplicateToolCalls(List<ToolCall> toolCalls)", "startLine": 320, "endLine": 343, "does": "Elimina tool calls con la misma clave normalizada.", "inputs": "lista", "outputs": "lista sin duplicados", "sideEffects": "log de aviso", "throws": "ninguno"},
+       {"name": "ExecuteToolCallsAsync(string stepName, List<ToolCall> toolCalls, IList<ITool>? availableTools, PipelineContext context, CancellationToken ct)", "startLine": 345, "endLine": 455, "does": "Ejecuta cada tool call y añade el resultado o un mensaje de error a la conversación; trata especialmente los tags invocados como herramientas.", "inputs": "tool calls, herramientas", "outputs": "Task", "sideEffects": "ejecuta herramientas, escribe en conversación, logs de argumentos", "throws": "ninguno (captura excepciones de herramienta)"},
+       {"name": "InvokeLlmAsync(LlmRequest request, PipelineContext context, string stepName, CancellationToken ct)", "startLine": 457, "endLine": 862, "does": "Invoca el servicio en modo batch o streaming, procesa tags en la respuesta, calcula coste, normaliza y emite LlmResponseEvent.", "inputs": "request, contexto", "outputs": "LlmResult", "sideEffects": "I/O de red, eventos, ejecución de handlers de tags, escribe campo _tagsExecutedInLastResponse", "throws": "excepciones del servicio o de handlers propagadas al llamador"},
+       {"name": "PriceOf(LlmProvider provider, string? responseModel, string requestedModel, int? prompt, int? completion, int? cached)", "startLine": 869, "endLine": 873, "does": "Coste buscando primero por el modelo de la respuesta y luego por el solicitado.", "inputs": "proveedor, modelos, tokens", "outputs": "decimal?", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "AppendReferences(string content, IReadOnlyList<string> references)", "startLine": 883, "endLine": 893, "does": "Añade referencias de tags de razonamiento al contenido.", "inputs": "contenido, referencias", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "CanonicalizeToolCallsResponse(LlmResponse response)", "startLine": 895, "endLine": 905, "does": "Deduplica tool calls y clona la respuesta si cambió.", "inputs": "respuesta", "outputs": "LlmResponse", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "CloneResponseWithToolCalls(LlmResponse response, List<ToolCall>? toolCalls)", "startLine": 907, "endLine": 920, "does": "Copia la respuesta con otra lista de tool calls.", "inputs": "respuesta, lista", "outputs": "LlmResponse", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "InvocationState", "kind": "class", "path": "LLM/Steps/BaseLlmStep.cs", "startLine": 125, "endLine": 132,
+     "purpose": "Estado privado por invocación (índice de fallback, conversación, bookmark, mensaje, request) guardado en PipelineContext.StepState.",
+     "collaborators": ["BaseLlmStep.GetState"],
+     "members": [
+       {"name": "FallbackIndex, Conversation, InitialBookmark, Message, Request (campos públicos)", "startLine": 127, "endLine": 131, "does": "Campos del estado.", "inputs": "BaseLlmStep", "outputs": "campos", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "BaseLlmStep<TIn, TOut>", "kind": "class", "path": "LLM/Steps/BaseLlmStep.cs", "startLine": 690, "endLine": 753,
+     "purpose": "Variante genérica tipada que adapta la entrada y expone IStep<TIn,TOut>.",
+     "collaborators": ["BaseLlmStep: base", "StepResultFactory: conversión de entrada"],
+     "members": [
+       {"name": "BaseLlmStep(name, role, prompt, systemPrompt) [ctor primario]", "startLine": 690, "endLine": 703, "does": "Delega al ctor base con typeof(TIn) y typeof(TOut).", "inputs": "nombre, rol, prompts", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "ExecuteAsync(IStepResult input, PipelineContext context, int attempt, IStepResult? lastStepResult, CancellationToken ct)", "startLine": 707, "endLine": 727, "does": "Convierte el input al tipo TIn si no es asignable y delega a la base.", "inputs": "input", "outputs": "Task<IStepResult>", "sideEffects": "ninguno", "throws": "InvalidOperationException si la conversión falla"},
+       {"name": "CreateResult(object? value, IStepError? error)", "startLine": 731, "endLine": 732, "does": "Versión tipada de CreateResult.", "inputs": "valor, error", "outputs": "TOut", "sideEffects": "ninguno", "throws": "InvalidCastException si el tipo no es TOut"},
+       {"name": "CreateErrorResult(string message, Exception? exception)", "startLine": 734, "endLine": 735, "does": "Versión tipada de CreateErrorResult.", "inputs": "mensaje, excepción", "outputs": "TOut", "sideEffects": "ninguno", "throws": "InvalidCastException"},
+       {"name": "IStep.InputType / IStep.OutputType", "startLine": 739, "endLine": 740, "does": "Implementación explícita de tipos.", "inputs": "n/a", "outputs": "Type", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "IStep<TIn,TOut>.ExecuteAsync(TIn input, PipelineContext context, int attempt, TOut? lastStepResult, CancellationToken ct)", "startLine": 742, "endLine": 751, "does": "Ejecuta la versión no genérica y castea a TOut.", "inputs": "input tipado", "outputs": "Task<TOut>", "sideEffects": "ninguno", "throws": "InvalidCastException"}
+     ]},
+    {"name": "StatelessTemplateLlmStep<TIn, TOut>", "kind": "class", "path": "LLM/Steps/StatelessTemplateLlmStep.cs", "startLine": 17, "endLine": 71,
+     "purpose": "Paso de plantilla que usa una conversación nueva por ejecución, salvo cuando restaura una guardada.",
+     "collaborators": ["TemplateLlmStep: base", "ConversationContext", "PipelineContext.Conversation: toma MaxTokens y TokenCounter"],
+     "members": [
+       {"name": "StatelessTemplateLlmStep(name, role, templateProvider, tools, promtTemplateString, systemTemplateString) [ctor primario]", "startLine": 17, "endLine": 24, "does": "Delega a TemplateLlmStep y captura MaxTokens del rol.", "inputs": "nombre, rol, plantillas", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "SaveStateAsync()", "startLine": 33, "endLine": 41, "does": "Devuelve el campo _currentConversation como estado.", "inputs": "n/a", "outputs": "Task<object?>", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "RestoreStateAsync(object? state, object? hitlResponse)", "startLine": 43, "endLine": 50, "does": "Guarda la conversación restaurada en _restoredConversation.", "inputs": "estado", "outputs": "Task", "sideEffects": "escribe campo de instancia", "throws": "ninguno"},
+       {"name": "GetConversationContext(PipelineContext context)", "startLine": 55, "endLine": 69, "does": "Usa la conversación restaurada o crea una nueva con los tokens máximos del rol o del contexto.", "inputs": "contexto", "outputs": "ConversationContext", "sideEffects": "escribe _currentConversation y _restoredConversation", "throws": "NullReferenceException si context.Conversation es null"}
+     ]},
+    {"name": "TemplateLlmStep<TIn, TOut>", "kind": "class", "path": "LLM/Steps/TemplateLlmStep.cs", "startLine": 18, "endLine": 87,
+     "purpose": "Paso LLM con prompts de plantilla y variables de paso, usando PromptTemplateResolver.",
+     "collaborators": ["BaseLlmStep<TIn,TOut>: base", "ITemplateProvider", "AvailableTools.Instance: resuelve herramientas por nombre", "PromptTemplateResolver"],
+     "members": [
+       {"name": "TemplateLlmStep(name, role, templateProvider, tools, promtTemplateString, systemTemplateString)", "startLine": 25, "endLine": 41, "does": "Fija prompt y system por defecto a nombres de fichero derivados del nombre del paso y resuelve herramientas desde el registro estático.", "inputs": "nombre, rol, plantillas, nombres de herramientas", "outputs": "instancia", "sideEffects": "lee AvailableTools.Instance", "throws": "depende de AvailableTools.GetTools"},
+       {"name": "GetVariable(string key)", "startLine": 43, "endLine": 46, "does": "Lee variable por clave en minúsculas.", "inputs": "clave", "outputs": "object?", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "SetVariable(string key, object? value)", "startLine": 48, "endLine": 51, "does": "Escribe variable.", "inputs": "clave, valor", "outputs": "void", "sideEffects": "muta _variables compartido por instancia", "throws": "ninguno"},
+       {"name": "RemoveVariable(string key)", "startLine": 53, "endLine": 56, "does": "Elimina variable.", "inputs": "clave", "outputs": "void", "sideEffects": "muta _variables", "throws": "ninguno"},
+       {"name": "ClearVariables()", "startLine": 58, "endLine": 61, "does": "Vacía variables.", "inputs": "n/a", "outputs": "void", "sideEffects": "muta _variables", "throws": "ninguno"},
+       {"name": "BuildUserMessageAsync(IStepResult input, PipelineContext context)", "startLine": 63, "endLine": 67, "does": "Resuelve el prompt mediante PromptTemplateResolver.", "inputs": "input, contexto", "outputs": "Task<string?>", "sideEffects": "ninguno", "throws": "excepciones del proveedor de plantillas"},
+       {"name": "BuildSystemMessageAsync(IStepResult input, PipelineContext context)", "startLine": 70, "endLine": 75, "does": "Resuelve el system prompt con SystemTemplateProvider.", "inputs": "input, contexto", "outputs": "Task<string?>", "sideEffects": "ninguno", "throws": "excepciones del proveedor de plantillas"},
+       {"name": "SystemTemplateProvider { get; }", "startLine": 85, "endLine": 85, "does": "Proveedor para el system prompt; por defecto el del constructor.", "inputs": "n/a", "outputs": "ITemplateProvider?", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmHelpers", "kind": "class", "path": "LLM/Support/LlmHelpers.cs", "startLine": 12, "endLine": 193,
+     "purpose": "Utilidades estáticas de LLM: limpieza JSON, claves de tool calls, inyección de schema y conversión de string.",
+     "collaborators": ["LlmPromptTemplates", "NJsonSchema.JsonSchema", "ToolCall", "FinishReasonExtensions (según el grafo, fuera del lote)"],
+     "members": [
+       {"name": "CleanJsonResponse(string content)", "startLine": 17, "endLine": 51, "does": "Extrae el texto entre el primer { o [ y el último } o ]; si no hay, quita cercas markdown.", "inputs": "texto", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "NormalizeToolCallKey(ToolCall toolCall)", "startLine": 57, "endLine": 82, "does": "Clave nombre:argumentos con propiedades de primer nivel ordenadas; si no es JSON usa el texto bruto.", "inputs": "tool call", "outputs": "string", "sideEffects": "ninguno", "throws": "ArgumentNullException si Arguments es null"},
+       {"name": "InjectSchemaInSystemPrompt(string? existingPrompt, JsonSchema schema)", "startLine": 88, "endLine": 96, "does": "Añade la instrucción de schema al system prompt.", "inputs": "prompt, schema", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "InjectSchemaInUserMessage(string message, JsonSchema schema)", "startLine": 102, "endLine": 106, "does": "Aplica la plantilla de mensaje con schema.", "inputs": "mensaje, schema", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "TruncateForError(string content, int maxLength = 500)", "startLine": 111, "endLine": 116, "does": "Trunca el texto con marcador.", "inputs": "texto, longitud", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "ConvertOrThrow(string value, Type targetType)", "startLine": 122, "endLine": 184, "does": "Convierte string a tipo destino con Parse sensible a cultura actual.", "inputs": "valor, tipo", "outputs": "object", "sideEffects": "ninguno", "throws": "FormatException, OverflowException, ArgumentException, InvalidOperationException"},
+       {"name": "ConvertOrThrow<T>(string value)", "startLine": 189, "endLine": 192, "does": "Versión genérica.", "inputs": "valor", "outputs": "T", "sideEffects": "ninguno", "throws": "como la no genérica"}
+     ]},
+    {"name": "PromptTemplateResolver", "kind": "class", "path": "LLM/Support/PromptTemplateResolver.cs", "startLine": 14, "endLine": 62,
+     "purpose": "Renderiza un prompt con modelo { Input, Context } con un proveedor de plantillas o directamente.",
+     "collaborators": ["ITemplateProvider", "TinyTemplateRendered", "PipelineContext.Metadata/GetLogger"],
+     "members": [
+       {"name": "Resolve(string? rawPrompt, IStepResult input, PipelineContext context, ITemplateProvider? templateProvider = null, IEnumerable<KeyValuePair<string, object?>>? variables = null)", "startLine": 30, "endLine": 61, "does": "Fusiona metadatos y variables (claves en minúsculas, ganan las variables), arma el modelo y delega al proveedor o a TinyTemplateRendered; si el proveedor devuelve null usa el texto bruto.", "inputs": "prompt o nombre, input, contexto", "outputs": "string", "sideEffects": "log de placeholders sin resolver", "throws": "ArgumentException (claves nulas) o excepciones del proveedor"}
+     ]},
+    {"name": "FileTemplateProvider", "kind": "class", "path": "Support/Template/FileTemplateProvider.cs", "startLine": 15, "endLine": 167,
+     "purpose": "Proveedor de plantillas .md con caché LRU, TTL y tope de tamaño, con protección contra path traversal.",
+     "collaborators": ["ITemplateProvider: implementa", "ITemplateRendered/TinyTemplateRendered: render", "CachedTemplate"],
+     "members": [
+       {"name": "FileTemplateProvider(folderPath, templateEngine, enableCache, ttl, maxCacheSizeBytes, validateTemplates) [ctor primario]", "startLine": 15, "endLine": 34, "does": "Fija carpeta, motor, caché, TTL y tamaño máximo.", "inputs": "parámetros", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "GetTemplate(string name)", "startLine": 40, "endLine": 77, "does": "Devuelve el contenido desde caché (si no expiró) o desde disco bajo un lock.", "inputs": "nombre sin extensión", "outputs": "string? (null si no existe)", "sideEffects": "lee fichero, modifica caché", "throws": "ArgumentException si el nombre es nulo o vacío; IOException"},
+       {"name": "LoadTemplateFromFile(string name)", "startLine": 79, "endLine": 90, "does": "Lee carpeta/name.md si queda dentro de la carpeta base y existe.", "inputs": "nombre", "outputs": "string?", "sideEffects": "lee fichero", "throws": "IOException, ArgumentException por caracteres no válidos"},
+       {"name": "AddToCache(string name, string content)", "startLine": 92, "endLine": 107, "does": "Inserta en caché y evicta LRU si supera el límite con margen.", "inputs": "nombre, contenido", "outputs": "void", "sideEffects": "muta caché", "throws": "ninguno"},
+       {"name": "RemoveFromCache(string name)", "startLine": 109, "endLine": 115, "does": "Elimina y descuenta el tamaño.", "inputs": "nombre", "outputs": "void", "sideEffects": "muta caché", "throws": "ninguno"},
+       {"name": "EvictLruItems()", "startLine": 117, "endLine": 134, "does": "Expulsa por acceso más antiguo hasta bajar del límite.", "inputs": "n/a", "outputs": "void", "sideEffects": "muta caché", "throws": "ninguno"},
+       {"name": "Render(string name, object model)", "startLine": 144, "endLine": 157, "does": "Obtiene la plantilla y la renderiza; si falta devuelve null o lanza según validateTemplates.", "inputs": "nombre, modelo", "outputs": "string?", "sideEffects": "lee fichero; el motor puede leer includes", "throws": "FileNotFoundException si validateTemplates"}
+     ]},
+    {"name": "CachedTemplate", "kind": "record", "path": "Support/Template/FileTemplateProvider.cs", "startLine": 159, "endLine": 166,
+     "purpose": "Entrada de caché con contenido, instantes de carga y acceso y tamaño.",
+     "collaborators": ["FileTemplateProvider"],
+     "members": [
+       {"name": "CachedTemplate(Content, LoadedAt, LastAccessedAt, SizeBytes) / LastAccessedAt { get; set; }", "startLine": 159, "endLine": 165, "does": "Record con LastAccessedAt mutable.", "inputs": "valores", "outputs": "record", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "ITemplateRendered", "kind": "interface", "path": "Support/Template/ITemplateRendered.cs", "startLine": 6, "endLine": 12,
+     "purpose": "Contrato del motor de plantillas.",
+     "collaborators": ["TinyTemplateRendered: implementación"],
+     "members": [
+       {"name": "Render(string template, object obj)", "startLine": 11, "endLine": 11, "does": "Renderiza plantilla con el objeto.", "inputs": "plantilla, objeto", "outputs": "string", "sideEffects": "depende", "throws": "depende"}
+     ]},
+    {"name": "TinyTemplateRendered", "kind": "class", "path": "Support/Template/TinyTemplateRendered.cs", "startLine": 11, "endLine": 334,
+     "purpose": "Motor de plantillas con regex sobre un JToken del modelo, con pases de comentarios, includes, interpolación con filtros y includes legacy.",
+     "collaborators": ["ITemplateRendered: implementa", "FileTemplateProvider y PromptTemplateResolver: lo invocan", "YamlDotNet: filtro yaml", "File/Directory: includes"],
+     "members": [
+       {"name": "Render(string template, object obj, bool strictMode = false, string? baseDirectory = null, ILogger? logger = null) [static]", "startLine": 43, "endLine": 55, "does": "Serializa el modelo con propiedades en minúsculas y llama a RenderInternal.", "inputs": "plantilla, modelo, opciones", "outputs": "string", "sideEffects": "lectura de ficheros por includes", "throws": "ArgumentNullException si obj es null"},
+       {"name": "ITemplateRendered.Render(string template, object obj)", "startLine": 57, "endLine": 57, "does": "Delega con strictMode false y sin baseDirectory.", "inputs": "plantilla, objeto", "outputs": "string", "sideEffects": "como Render", "throws": "como Render"},
+       {"name": "RenderInternal(string template, JToken rootToken, bool strictMode, string? baseDirectory, ILogger? logger)", "startLine": 59, "endLine": 118, "does": "Pase 0 quita comentarios, pase 1 includes con comillas, pase 2 interpolación, pase 3 includes @[ruta] sobre el texto ya interpolado.", "inputs": "plantilla, token", "outputs": "string", "sideEffects": "lee ficheros; logs", "throws": "excepciones de include en strictMode"},
+       {"name": "SelectTokenIgnoreCase(JToken root, string jpath)", "startLine": 132, "endLine": 170, "does": "Resuelve el path por segmentos sin distinguir mayúsculas.", "inputs": "raíz, path", "outputs": "JToken?", "sideEffects": "ninguno", "throws": "JsonException con índices inválidos"},
+       {"name": "ToJPath(string expr)", "startLine": 179, "endLine": 184, "does": "Convierte dict['Key'] a dict.Key.", "inputs": "expresión", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "IsScribanDirective(string expr)", "startLine": 186, "endLine": 192, "does": "Detecta palabras clave Scriban para dejarlas intactas.", "inputs": "expresión", "outputs": "bool", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "ApplyPipeFilter(JToken token, string pipeExpr)", "startLine": 194, "endLine": 229, "does": "Aplica filtros json, yaml, upcase, downcase, capitalize, strip, date, default, csv y size.", "inputs": "token, filtro", "outputs": "string? (null si filtro desconocido)", "sideEffects": "ninguno", "throws": "FormatException con formato de fecha inválido"},
+       {"name": "Capitalize(string s)", "startLine": 231, "endLine": 232, "does": "Primera letra en mayúscula.", "inputs": "texto", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "ResolveFileInclude(string rawPath, string originalMatch, JToken rootToken, bool strictMode, string? baseDirectory, ILogger? logger)", "startLine": 234, "endLine": 282, "does": "Resuelve y lee un fichero incluido (con comprobación de base solo si baseDirectory no es null) y lo renderiza recursivamente.", "inputs": "ruta, modelo", "outputs": "string", "sideEffects": "lee ficheros, Console.WriteLine ante error", "throws": "en strictMode relanza; si no devuelve marcador de error"},
+       {"name": "FormatAsCsv(JToken token)", "startLine": 284, "endLine": 309, "does": "Formatea un array como CSV.", "inputs": "token", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "EscapeCsvValue(string v)", "startLine": 311, "endLine": 314, "does": "Escapa valores CSV.", "inputs": "texto", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "SerializeToYaml(JToken token)", "startLine": 316, "endLine": 322, "does": "Serializa el token con YamlDotNet sin alias.", "inputs": "token", "outputs": "string", "sideEffects": "ninguno", "throws": "excepciones de YamlDotNet"},
+       {"name": "PipeFilterRegex/TemplateRegex/FileIncludeRegex/ScribanIncludeRegex/ScribanCommentRegex", "startLine": 324, "endLine": 333, "does": "Regex generadas en compilación.", "inputs": "n/a", "outputs": "Regex", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LowercaseNamingStrategy", "kind": "class", "path": "Support/Template/TinyTemplateRendered.cs", "startLine": 341, "endLine": 344,
+     "purpose": "Estrategia de nombres Newtonsoft que pone en minúsculas los nombres de propiedad.",
+     "collaborators": ["TinyTemplateRendered.LowercaseSerializer"],
+     "members": [
+       {"name": "ResolvePropertyName(string name)", "startLine": 343, "endLine": 343, "does": "Devuelve name en minúsculas.", "inputs": "nombre", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]}
+  ],
+  "findings": [],
+  "seedVerdicts": [],
+  "relations": [],
+  "openQuestions": []
+}

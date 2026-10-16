@@ -175,7 +175,7 @@ Everything lives under the single `AITaskAgent` root section. `LlmProviders` is 
 | `ApiVersion` | `string?` | Passed through to the service (e.g. Gemini's `v1beta`). |
 | `ServiceType` | `string?` | Which registered `ILlmService` to bind. Defaults to the provider key itself. |
 | `Inference` | `LlmInferenceSettings?` | Provider-wide inference defaults. |
-| `Models` | `LlmModelSettings[]` | `Name`, `InputPricePerMillion`, `OutputPricePerMillion`, `Inference`. Drives `CalculateCost` **only** — the per-model `Inference` is not read by anything. |
+| `Models` | `LlmModelSettings[]` | `Name`, `InputPricePerMillion`, `OutputPricePerMillion`, `Inference`. Drives `CalculateCost` **only** — the per-model `Inference` is not read by anything. A `null` price means unknown: the cost comes out `null`, not 0. |
 
 `ServiceType` is matched against `ILlmService.Name`, first by exact case-insensitive equality and
 then by `Contains`. Several providers may share the same service (all four OpenAI-compatible
@@ -251,7 +251,9 @@ var topK = request.GetOption<int?>("TopK");
 ```
 
 `GetOption<T>(key)` resolves keys case-insensitively. Setting a typed property writes into the same
-`Options` object, so `Temperature` and `Options["temperature"]` are the same entry.
+`Options` object, so `Temperature` and `Options["temperature"]` are the same entry. Assigning
+`Options` merges its keys into the ones already there instead of replacing them, so facade keys
+next to `Options` survive whatever order the binder reads them in.
 
 `LlmRequest` derives from `LlmInferenceSettings`, so the same accessors are available inside a
 service implementation.
@@ -332,7 +334,9 @@ The framework binds configuration through `BindEx` / `GetEx`, which rebuild the 
 `JToken` before deserializing with Newtonsoft.Json. Consequences worth knowing:
 
 - Numeric-only child keys are reconstructed as a **JSON array**, so array syntax works as expected.
-- Scalars are parsed to their natural type: `bool`, `int`/`long`, `decimal`, `double`, `TimeSpan`
-  (`"03:00:00"`), `DateTimeOffset`/`DateTime` (ISO 8601), and finally `string`.
+- Scalars are parsed to their natural type: `bool`, `int`/`long`, `decimal`, `double`, and finally
+  `string`. Dates and time spans stay strings, which Newtonsoft converts when the target property is
+  a `TimeSpan` (`"03:00:00"`) or `DateTimeOffset`/`DateTime` (ISO 8601); a `string` property such as
+  `ApiVersion: "2024-10-21"` gets the value untouched.
 - Only values that end up as strings get `${VAR}` expansion.
 - `JObject`-typed members such as `LlmInferenceSettings.Options` accept arbitrary nested JSON.

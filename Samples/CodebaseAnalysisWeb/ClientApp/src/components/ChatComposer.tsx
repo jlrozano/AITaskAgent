@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useId, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 
 export const MAX_MESSAGE_LENGTH = 8000;
 
@@ -8,10 +8,12 @@ interface Props {
   disabledReason: string | null;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** Selector de modelo, a la izquierda de la barra. */
+  modelPicker?: ReactNode;
 }
 
 /** Enter envía, Shift+Enter hace salto de línea; «Parar» aborta la respuesta en curso (§7). */
-export function ChatComposer({ busy, disabledReason, onSend, onStop }: Props) {
+export function ChatComposer({ busy, disabledReason, onSend, onStop, modelPicker }: Props) {
   const [text, setText] = useState('');
   const hintId = useId();
   const disabled = disabledReason !== null;
@@ -49,6 +51,7 @@ export function ChatComposer({ busy, disabledReason, onSend, onStop }: Props) {
         aria-invalid={tooLong || undefined}
       />
       <div className="composer__bar">
+        {modelPicker}
         <span id={hintId} className={`composer__hint${tooLong ? ' text-error' : ''}`}>
           {tooLong
             ? `La pregunta supera los ${MAX_MESSAGE_LENGTH} caracteres (${text.length}).`

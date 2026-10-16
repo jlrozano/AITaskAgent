@@ -133,12 +133,6 @@ public static class GraphSchema
         // json_extract aborte la consulta entera, y la mayoría de lecturas del grafo no pasan por json_valid: la
         // extracción de facetas fallaba y las consultas protegidas por QueryToJsonAsync llegaban como «Faceta no
         // disponible». Se conserva el texto original bajo cbm_raw_properties, igual que EnrichmentMarks.ParseProperties.
-        using var repairCmd = conn.CreateCommand();
-        repairCmd.CommandText = $@"
-            UPDATE nodes SET properties = '{{}}' WHERE properties IS NOT NULL AND trim(properties) = '';
-            UPDATE nodes SET properties = json_object('{Enrichment.EnrichmentMarks.RawPropertiesKey}', properties)
-                WHERE properties IS NOT NULL AND json_valid(properties) = 0;
-        ";
-        await repairCmd.ExecuteNonQueryAsync(ct);
+        await Enrichment.EnrichmentMarks.RepairInvalidPropertiesAsync(conn, null, ct);
     }
 }

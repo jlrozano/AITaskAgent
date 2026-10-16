@@ -347,7 +347,8 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
         Assert.Contains("| **Alta** | `http` | 3 | 1 |", await RunAsync(new GraphFlowsTool(), "{}", g.DatabasePath));
         var di = await RunAsync(new GraphDomainTool(), """{"view":"di"}""", g.DatabasePath);
         Assert.Contains("| `IRepo` | **Scoped** |", di);
-        Assert.Contains("| `RotoDiRegistration` | **Transient** |", di);
+        // Sin lifetime legible no se inventa «Transient»: se dice que se desconoce.
+        Assert.Contains("| `RotoDiRegistration` | **desconocido** |", di);
     }
 
     /// <summary>

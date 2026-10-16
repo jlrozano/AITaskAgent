@@ -5,7 +5,8 @@ using System.Text.Json;
 namespace CodebaseAnalysis.Core.Reports;
 
 /// <summary>
-/// <c>reports/_run_meta.json</c>: el consumo LLM (tokens de entrada y salida, llamadas y coste, en total y por paso) y el
+/// <c>reports/_run_meta.json</c>: el consumo LLM (tokens de entrada, de ellos los de caché, y de salida, llamadas y coste, en
+/// total y por paso) y el
 /// estado de la última ejecución que escribió en la carpeta, sea un análisis o una regeneración. Va en un fichero y no en
 /// el <c>analysis-meta</c> del resumen ejecutivo porque es de la ejecución y no de un informe: una regeneración sin síntesis
 /// no reescribe el <c>00</c>, y la síntesis no puede contar su propia llamada antes de escribirlo. No es un informe del
@@ -18,6 +19,7 @@ public static class RunMetaFile
 
     public const string KindAnalysis = "analysis";
     public const string KindRegeneration = "regeneration";
+    public const string KindVerification = "verification";
 
     private static readonly JsonSerializerOptions Json = new()
     {

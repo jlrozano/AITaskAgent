@@ -129,6 +129,18 @@ public abstract partial class BaseLlmStep(
         public string? InitialBookmark;
         public string Message = "";
         public LlmRequest? Request;
+
+        /// <summary>Keys of the tool calls of the last iterations of this turn, oldest first (repeat detector).</summary>
+        public readonly Queue<HashSet<string>> ToolCallWindow = new();
+
+        /// <summary>Parallel to <see cref="ToolCallWindow"/>: whether that iteration's response executed a tag (progress).</summary>
+        public readonly Queue<bool> ToolCallProgressWindow = new();
+
+        /// <summary>How many consecutive iterations of this turn have asked for exactly the same calls.</summary>
+        public int ConsecutiveIdenticalToolCalls;
+
+        /// <summary>Tag names executed while processing the most recent LLM response of this invocation.</summary>
+        public readonly HashSet<string> TagsExecutedInLastResponse = new(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -284,7 +296,7 @@ public abstract partial class BaseLlmStep(
 
             // The repeat detector compares tool calls within one turn only: a turn that legitimately
             // starts with the same call the previous one ended with must not inherit its count.
-            ResetToolCallRepeatTracking();
+            ResetToolCallRepeatTracking(state);
 
             // Add the user message explicitly here — NOT inside BuildLlmRequestAsync.
             // This keeps BuildLlmRequestAsync free of conversation side-effects and makes
@@ -545,6 +557,7 @@ public abstract partial class BaseLlmStep(
             llmResult.TokensUsed = response.TokensUsed;
             llmResult.CostUsd = response.CostUsd;
             llmResult.FinishReason = response.FinishReason;
+            llmResult.ToolLoopStopMessage = response.Candidates.Count > 0 ? response.Candidates[0].ToolLoopStopMessage : null;
         }
     }
 

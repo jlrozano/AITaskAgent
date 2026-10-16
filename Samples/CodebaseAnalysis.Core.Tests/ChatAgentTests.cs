@@ -76,6 +76,35 @@ public sealed class ChatAgentTests
     }
 
     [Fact]
+    public async Task The_turn_records_the_catalog_model_that_answered_and_a_session_keeps_its_model_id()
+    {
+        using var dir = new TempDirectory();
+        var (ws, store) = Setup(dir);
+        await using var services = ChatTestHost.BuildServices();
+        var agent = new ChatAgent(services, ChatTestHost.StreamingRole(new ScriptedStreamingLlmService()), AnalysisPipelineFactory.CreateDefaultTemplateProvider(),
+            new ChatOptions(), modelId: "luna");
+        var session = store.Create(ws.RepositoryPath, modelId: "sol");
+
+        var turn = await agent.RunTurnAsync(store, session, "hola", ws, _ => { }, CancellationToken.None);
+
+        Assert.Equal("luna", turn.ModelId);
+        var persisted = store.TryGet(session.Id)!;
+        Assert.Equal("sol", persisted.ModelId);
+        Assert.Equal("luna", persisted.Turns.Single().ModelId);
+    }
+
+    [Fact]
+    public async Task A_session_without_model_id_in_its_json_loads_with_null()
+    {
+        using var dir = new TempDirectory();
+        var store = new ChatSessionStore(Path.Combine(dir.Path, "chat"));
+        var created = store.Create(dir.Path);
+        Assert.Null(created.ModelId);
+        Assert.DoesNotContain("modelId", File.ReadAllText(store.GetFilePath(created.Id)!));
+        await Task.CompletedTask;
+    }
+
+    [Fact]
     public async Task The_turn_is_audited_against_what_its_tools_read_before_the_conversation_is_compacted()
     {
         using var dir = new TempDirectory();
@@ -196,23 +225,17 @@ public sealed class ChatAgentTests
     }
 
     [Fact]
-    public void EnsureRole_turns_on_streaming_only_for_a_role_created_by_default()
+    public void EnsureRole_returns_the_configured_role_as_is_and_fails_without_it()
     {
-        var llm = new ScriptedStreamingLlmService();
         var baseRole = new AITaskAgent.LLM.Configuration.LlmRole
         {
-            Provider = new AITaskAgent.LLM.Configuration.LlmProvider { Service = llm },
+            Provider = new AITaskAgent.LLM.Configuration.LlmProvider { Service = new ScriptedStreamingLlmService() },
             Model = "m",
             Inference = new AITaskAgent.LLM.Configuration.LlmInferenceSettings { MaxTokens = 10 }
         };
 
-        var roles = new Dictionary<string, AITaskAgent.LLM.Configuration.LlmRole> { [ChatAgent.RoleName] = baseRole };
-        var created = ChatAgent.EnsureRole(roles, TestConfig.FromPairs());
-        Assert.True(created.Inference!.UseStreaming);
-        Assert.Equal(10, created.Inference.MaxTokens);
-
-        var configured = new Dictionary<string, AITaskAgent.LLM.Configuration.LlmRole> { [ChatAgent.RoleName] = baseRole };
-        var kept = ChatAgent.EnsureRole(configured, TestConfig.FromPairs(($"LlmConfiguration:Roles:{ChatAgent.RoleName}:Model", "m")));
-        Assert.Same(baseRole, kept);
+        Assert.Same(baseRole, ChatAgent.EnsureRole(new() { [ChatAgent.RoleName] = baseRole }));
+        var ex = Assert.Throws<InvalidOperationException>(() => ChatAgent.EnsureRole([]));
+        Assert.Contains($"No hay rol '{ChatAgent.RoleName}'", ex.Message);
     }
 }

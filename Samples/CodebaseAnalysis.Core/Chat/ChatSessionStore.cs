@@ -74,7 +74,7 @@ public sealed partial class ChatSessionStore
         }
     }
 
-    public ChatSession Create(string repositoryPath, string? title = null)
+    public ChatSession Create(string repositoryPath, string? title = null, string? modelId = null)
     {
         var now = _clock.GetUtcNow();
         var session = new ChatSession
@@ -82,6 +82,7 @@ public sealed partial class ChatSessionStore
             Id = NewId(),
             Title = string.IsNullOrWhiteSpace(title) ? null : title.Trim(),
             RepositoryPath = repositoryPath,
+            ModelId = string.IsNullOrWhiteSpace(modelId) ? null : modelId,
             CreatedAt = now,
             UpdatedAt = now
         };

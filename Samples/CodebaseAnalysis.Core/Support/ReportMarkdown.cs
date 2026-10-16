@@ -24,7 +24,7 @@ public static partial class ReportMarkdown
     [GeneratedRegex(@"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$")]
     private static partial Regex SeparatorRowRegex();
 
-    [GeneratedRegex(@"^([A-Z]+)[-_ ]?0*(\d+)$")]
+    [GeneratedRegex(@"^((?:\d{2}[-_ ])?[A-Z]+)[-_ ]?0*(\d+)$")]
     private static partial Regex FindingIdRegex();
 
     // H1 que solo es un nombre de fichero: "# 00_resumen_ejecutivo.md" o "# `00_resumen_ejecutivo.md`".
@@ -63,6 +63,35 @@ public static partial class ReportMarkdown
 
         // Sin identificadores no se puede deduplicar entre tablas: vale la tabla con más filas críticas.
         return tables.Max(t => t.Table.Rows.Count(r => IsCritical(Cell(r, t.Severity))));
+    }
+
+    /// <summary>
+    /// Los hallazgos de las tablas con columna de identificador y de severidad, una línea por identificador distinto
+    /// (<c>05-SEC-001 · P1 · Tipo</c>), en orden de aparición. Es lo que lee la síntesis para citar identificadores sin
+    /// recordarlos de memoria. Vacío si el informe no tiene tabla de severidad con identificadores.
+    /// </summary>
+    public static IReadOnlyList<string> FindingIndex(string markdown)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var lines = new List<string>();
+        foreach (var table in ParseTables(markdown))
+        {
+            var severity = table.SeverityColumn;
+            var id = table.IdColumn;
+            if (severity < 0 || id < 0)
+                continue;
+
+            var other = Enumerable.Range(0, table.Header.Count).FirstOrDefault(c => c != severity && c != id, -1);
+            foreach (var row in table.Rows)
+            {
+                var key = CleanCell(Cell(row, id));
+                if (key.Length == 0 || !seen.Add(key))
+                    continue;
+                var text = other >= 0 ? CleanCell(Cell(row, other)) : "";
+                lines.Add($"{key} · {CleanCell(Cell(row, severity))}{(text.Length > 0 ? " · " + (text.Length > 120 ? text[..117] + "..." : text) : "")}");
+            }
+        }
+        return lines;
     }
 
     /// <summary>La última línea <c>analysis-meta</c> (la que vale), entera; null si no hay.</summary>
@@ -138,6 +167,43 @@ public static partial class ReportMarkdown
 
     private static string SanitizeMetaValue(string value) =>
         value.Replace("-->", "->", StringComparison.Ordinal).Replace(';', ',').ReplaceLineEndings(" ").Trim();
+
+    /// <summary>
+    /// Quita el texto que el modelo deja antes del título: frases de las iteraciones con herramientas («La evidencia confirma
+    /// que...») que se concatenan al principio del documento. Solo actúa si lo anterior al primer H1 (fuera de bloques de código)
+    /// no contiene ningún encabezado, tabla ni bloque de código ni línea <c>analysis-meta</c>: un documento que abre con
+    /// secciones y sin título no se toca.
+    /// </summary>
+    public static string RemoveTextBeforeTitle(string markdown)
+    {
+        if (string.IsNullOrEmpty(markdown))
+            return markdown;
+
+        var lines = markdown.Split('\n');
+        var inFence = false;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].TrimEnd('\r');
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal) || line.TrimStart().StartsWith("~~~", StringComparison.Ordinal))
+            {
+                inFence = !inFence;
+                continue;
+            }
+            if (inFence)
+                continue;
+            if (line.StartsWith("# ", StringComparison.Ordinal))
+            {
+                if (i == 0)
+                    return markdown;
+                var preface = lines.Take(i).ToList();
+                var isProse = preface.All(l =>
+                    !l.TrimStart().StartsWith('#') && !l.TrimStart().StartsWith('|') && !l.TrimStart().StartsWith("```", StringComparison.Ordinal)
+                    && !l.TrimStart().StartsWith("~~~", StringComparison.Ordinal) && !l.Contains("analysis-meta", StringComparison.OrdinalIgnoreCase));
+                return isProse ? string.Join('\n', lines.Skip(i)) : markdown;
+            }
+        }
+        return markdown;
+    }
 
     /// <summary>
     /// Quita un H1 inicial que solo repite el nombre del fichero cuando detrás hay otro H1: el modelo a veces

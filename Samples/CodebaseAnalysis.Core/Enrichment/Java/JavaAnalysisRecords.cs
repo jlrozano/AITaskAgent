@@ -66,6 +66,14 @@ public sealed record JavaTypeRecord : JavaAnalysisRecord
     [JsonPropertyName("doc")]
     public string? Doc { get; init; }
 
+    /// <summary><c>javadoc</c> o <c>comment</c> (el comentario pegado a la declaración); null sin <see cref="Doc"/> (schema 3).</summary>
+    [JsonPropertyName("docSource")]
+    public string? DocSource { get; init; }
+
+    /// <summary>FQN del tipo con nombre que lo contiene; null en los de primer nivel (schema 3).</summary>
+    [JsonPropertyName("outer")]
+    public string? Outer { get; init; }
+
     [JsonPropertyName("super")]
     public JavaTypeReference? Super { get; init; }
 
@@ -134,8 +142,23 @@ public sealed record JavaMethodRecord : JavaAnalysisRecord
     [JsonPropertyName("doc")]
     public string? Doc { get; init; }
 
+    /// <summary><c>javadoc</c> o <c>comment</c>; null sin <see cref="Doc"/> (schema 3).</summary>
+    [JsonPropertyName("docSource")]
+    public string? DocSource { get; init; }
+
     [JsonPropertyName("cyclomatic")]
     public int? Cyclomatic { get; init; }
+
+    /// <summary>Sobrescribe o implementa algún método, también del JDK o de un jar (schema 3).</summary>
+    [JsonPropertyName("isOverride")]
+    public bool IsOverride { get; init; }
+
+    /// <summary>
+    /// <c>key</c> de los métodos del proyecto que sobrescribe o implementa (<c>Elements.overrides</c>), el más cercano por cada
+    /// camino de supertipos (schema 3).
+    /// </summary>
+    [JsonPropertyName("overrides")]
+    public IReadOnlyList<string> Overrides { get; init; } = [];
 }
 
 /// <summary><c>"k":"call"</c>: una invocación o creación (<c>new</c>) con su destino resuelto por <c>javac</c>.</summary>
@@ -211,6 +234,10 @@ public sealed record JavaFieldRecord : JavaAnalysisRecord
     [JsonPropertyName("doc")]
     public string? Doc { get; init; }
 
+    /// <summary><c>javadoc</c> o <c>comment</c>; null sin <see cref="Doc"/> (schema 3).</summary>
+    [JsonPropertyName("docSource")]
+    public string? DocSource { get; init; }
+
     /// <summary><c>ownerFqn#nombre</c>: casa por igualdad con el <c>to</c> y el <c>fromField</c> de los <c>ref</c>.</summary>
     [JsonIgnore]
     public string Key => $"{OwnerFqn}#{Name}";
@@ -274,6 +301,134 @@ public static class JavaRefKinds
     public const string Read = "read";
     public const string Write = "write";
     public const string ReadWrite = "readwrite";
+}
+
+/// <summary>
+/// <c>"k":"issue"</c> (schema 3): un patrón de error que el compilador o el AST atribuido permiten decidir. El origen es el método
+/// (<c>from</c>), el campo (<c>fromField</c>) o el tipo (<c>fromType</c>), el primero que no sea null.
+/// </summary>
+public sealed record JavaIssueRecord : JavaAnalysisRecord
+{
+    [JsonPropertyName("from")]
+    public string? From { get; init; }
+
+    [JsonPropertyName("fromField")]
+    public string? FromField { get; init; }
+
+    [JsonPropertyName("fromType")]
+    public string FromType { get; init; } = "";
+
+    /// <summary><c>empty-catch</c>, <c>string-identity</c>, <c>undisposed-resource</c>, <c>null-return-deref</c> u <c>obsolete-api</c>.</summary>
+    [JsonPropertyName("rule")]
+    public string Rule { get; init; } = "";
+
+    [JsonPropertyName("text")]
+    public string Text { get; init; } = "";
+
+    [JsonPropertyName("line")]
+    public int Line { get; init; }
+}
+
+/// <summary>Una marca TODO/FIXME/HACK de un comentario.</summary>
+public sealed record JavaTodoMarker
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = "";
+
+    [JsonPropertyName("line")]
+    public int Line { get; init; }
+
+    [JsonPropertyName("text")]
+    public string Text { get; init; } = "";
+}
+
+/// <summary>Una racha de código comentado: líneas de <c>start_line</c> a <c>end_line</c> y la primera línea de texto.</summary>
+public sealed record JavaCommentedCode
+{
+    [JsonPropertyName("start_line")]
+    public int StartLine { get; init; }
+
+    [JsonPropertyName("end_line")]
+    public int EndLine { get; init; }
+
+    [JsonPropertyName("lines")]
+    public int Lines { get; init; }
+
+    [JsonPropertyName("preview")]
+    public string Preview { get; init; } = "";
+}
+
+/// <summary>
+/// <c>"k":"comment"</c> (schema 3): marcas y código comentado de un propietario en un fichero. Un comentario va al método que lo
+/// contiene (o al que sigue si está justo encima), si no al tipo y, si no, al fichero.
+/// </summary>
+public sealed record JavaCommentRecord : JavaAnalysisRecord
+{
+    /// <summary><c>method</c>, <c>type</c> o <c>file</c>.</summary>
+    [JsonPropertyName("owner")]
+    public string Owner { get; init; } = "";
+
+    /// <summary><c>key</c> del método o FQN del tipo; null con <c>file</c>.</summary>
+    [JsonPropertyName("key")]
+    public string? Key { get; init; }
+
+    [JsonPropertyName("todos")]
+    public IReadOnlyList<JavaTodoMarker> Todos { get; init; } = [];
+
+    [JsonPropertyName("code")]
+    public IReadOnlyList<JavaCommentedCode> Code { get; init; } = [];
+}
+
+/// <summary>
+/// <c>"k":"const"</c> (analizador 4, mismo schema 3): un valor que el compilador resuelve como constante. <c>secret</c> es una
+/// credencial escrita en claro (el valor llega ya ENMASCARADO: el secreto no sale nunca del analizador) y <c>reflection</c> es el
+/// nombre de clase que se pasa a <c>Class.forName</c> o <c>loadClass</c>, con <c>*</c> por cada tramo no constante. El origen es el
+/// método (<c>from</c>), el campo (<c>fromField</c>) o el tipo (<c>fromType</c>), el primero que no sea null.
+/// </summary>
+public sealed record JavaConstantRecord : JavaAnalysisRecord
+{
+    [JsonPropertyName("from")]
+    public string? From { get; init; }
+
+    [JsonPropertyName("fromField")]
+    public string? FromField { get; init; }
+
+    [JsonPropertyName("fromType")]
+    public string FromType { get; init; } = "";
+
+    /// <summary><see cref="JavaConstantKinds.Secret"/> o <see cref="JavaConstantKinds.Reflection"/>.</summary>
+    [JsonPropertyName("what")]
+    public string What { get; init; } = "";
+
+    /// <summary>En un secreto, <c>identifier</c>, <c>call-argument</c> o <c>connection-string</c>; en la reflexión, <c>Class.forName</c> o <c>loadClass</c>.</summary>
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = "";
+
+    /// <summary>El identificador (o el método o la clave) con nombre de credencial; null en la reflexión.</summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("line")]
+    public int Line { get; init; }
+
+    /// <summary>El valor enmascarado (<c>Or*** (11 caracteres)</c>) o el patrón de nombre de clase (<c>com.acme.export.*Impl</c>).</summary>
+    [JsonPropertyName("value")]
+    public string Value { get; init; } = "";
+}
+
+/// <summary>Valores de <c>what</c> en los registros <c>const</c>.</summary>
+public static class JavaConstantKinds
+{
+    public const string Secret = "secret";
+    public const string Reflection = "reflection";
+}
+
+/// <summary>Valores de <c>owner</c> en los registros <c>comment</c>.</summary>
+public static class JavaCommentOwners
+{
+    public const string Method = "method";
+    public const string Type = "type";
+    public const string File = "file";
 }
 
 /// <summary>
@@ -345,6 +500,26 @@ public sealed record JavaSummaryRecord : JavaAnalysisRecord
     /// <summary>Registros <c>field</c> emitidos (schema 2).</summary>
     [JsonPropertyName("fields")]
     public long Fields { get; init; }
+
+    /// <summary>Registros <c>issue</c> emitidos (schema 3).</summary>
+    [JsonPropertyName("issues")]
+    public long Issues { get; init; }
+
+    /// <summary>Marcas TODO/FIXME/HACK encontradas (schema 3).</summary>
+    [JsonPropertyName("todoMarkers")]
+    public long TodoMarkers { get; init; }
+
+    /// <summary>Rachas de código comentado encontradas (schema 3).</summary>
+    [JsonPropertyName("commentedCodeBlocks")]
+    public long CommentedCodeBlocks { get; init; }
+
+    /// <summary>Credenciales en claro resueltas como constantes (analizador 4).</summary>
+    [JsonPropertyName("secrets")]
+    public long Secrets { get; init; }
+
+    /// <summary>Nombres de clase resueltos en <c>Class.forName</c> y <c>loadClass</c> (analizador 4).</summary>
+    [JsonPropertyName("reflectionTargets")]
+    public long ReflectionTargets { get; init; }
 }
 
 /// <summary><c>summary.refs</c>: las referencias por origen, también las que no llegan a registro <c>ref</c>.</summary>
@@ -391,9 +566,10 @@ public static class JavaAnalysisReader
 {
     /// <summary>
     /// Última versión del contrato que entiende este lector (<c>"schema"</c> del registro <c>summary</c>). También lee las
-    /// anteriores desde <see cref="MinSupportedSchema"/>: el schema 1 no trae registros <c>field</c> ni <c>ref</c>.
+    /// anteriores desde <see cref="MinSupportedSchema"/>: el schema 1 no trae registros <c>field</c> ni <c>ref</c> y el 2 no trae
+    /// <c>issue</c> ni <c>comment</c>, <c>overrides</c> ni <c>docSource</c>.
     /// </summary>
-    public const int SupportedSchema = 2;
+    public const int SupportedSchema = 3;
 
     /// <inheritdoc cref="SupportedSchema"/>
     public const int MinSupportedSchema = 1;
@@ -447,6 +623,9 @@ public static class JavaAnalysisReader
             "call" => root.Deserialize<JavaCallRecord>(Options),
             "field" => root.Deserialize<JavaFieldRecord>(Options),
             "ref" => root.Deserialize<JavaRefRecord>(Options),
+            "issue" => root.Deserialize<JavaIssueRecord>(Options),
+            "comment" => root.Deserialize<JavaCommentRecord>(Options),
+            "const" => root.Deserialize<JavaConstantRecord>(Options),
             "diag" => root.Deserialize<JavaDiagnosticRecord>(Options),
             "summary" => root.Deserialize<JavaSummaryRecord>(Options),
             _ => null

@@ -31,6 +31,12 @@ public sealed class LlmStreamChunk
     /// <summary>Completion (output) tokens — only available in the final/usage chunk.</summary>
     public int? CompletionTokens { get; init; }
 
+    /// <summary>Reasoning tokens inside <see cref="CompletionTokens"/>, when the provider reports them.</summary>
+    public int? ReasoningTokens { get; init; }
+
+    /// <summary>Prompt tokens served from the provider's prompt cache, inside <see cref="PromptTokens"/>, when reported.</summary>
+    public int? CachedPromptTokens { get; init; }
+
     /// <summary>Tool call deltas if applicable.</summary>
     public IReadOnlyList<ToolCallUpdate>? ToolCallUpdates { get; init; }
 

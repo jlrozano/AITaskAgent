@@ -39,4 +39,23 @@ public interface IAnalysisWorkflow
         IEventChannel eventChannel,
         IAnalysisReporter reporter,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Verifica <paramref name="reports"/>, ya escritos en disco, contra el código y reescribe los que corrige (el original
+    /// queda en el historial); con <paramref name="synthesis"/>, regenera después el resumen ejecutivo. Mismos canal,
+    /// reporter y token que <see cref="RunAsync"/>.
+    /// </summary>
+    /// <param name="input">Entrada de la ejecución que se verifica; no se modifica.</param>
+    /// <param name="reports">Informes que se verifican; al menos uno.</param>
+    /// <param name="synthesis">Si se regenera también el resumen ejecutivo.</param>
+    /// <param name="eventChannel">Canal propio de la verificación; el llamante lo cierra al terminar.</param>
+    /// <param name="reporter">Destino de los mensajes de progreso.</param>
+    /// <param name="cancellationToken">Se cancela con <c>POST /cancel</c> o al parar el servidor.</param>
+    Task<IStepResult> VerifyAsync(
+        AnalysisPipelineInput input,
+        IReadOnlyList<ReportType> reports,
+        bool synthesis,
+        IEventChannel eventChannel,
+        IAnalysisReporter reporter,
+        CancellationToken cancellationToken);
 }

@@ -102,6 +102,19 @@ public sealed class ConversationContext(
     }
 
     /// <summary>
+    /// Replaces the message at <paramref name="index"/> in the history (see
+    /// <see cref="MessageHistory.ReplaceMessage"/>) and updates <see cref="LastActivityAt"/>.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The index is outside the history.</exception>
+    public ConversationContext ReplaceMessage(int index, Message message)
+    {
+        History.ReplaceMessage(index, message);
+        LastActivityAt = DateTime.UtcNow;
+        _logger.LogTrace("Replaced message {Index} in conversation {ConversationId}", index, ConversationId);
+        return this;
+    }
+
+    /// <summary>
     /// Adds a tool response message to the conversation.
     /// </summary>
     public ConversationContext AddToolMessage(string toolCallId, string content)

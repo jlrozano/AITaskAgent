@@ -117,6 +117,48 @@ public sealed record JavaGraphStats
     public int ReadsEdges { get; init; }
     public int WritesEdges { get; init; }
 
+    /// <summary><c>OVERRIDES</c> de un método al que sobrescribe o implementa (schema 3).</summary>
+    public int OverridesEdges { get; init; }
+
+    /// <summary><c>IMPLEMENTS</c> con <c>is_inherited</c> a las interfaces que una clase recibe de su superclase o de otra interfaz.</summary>
+    public int InheritedImplementsEdges { get; init; }
+
+    /// <summary>Métodos con <c>fan_in</c>, <c>fan_out</c> y <c>hotspot</c> (schema 3).</summary>
+    public int MethodsWithMetrics { get; init; }
+
+    /// <summary>Hallazgos de <c>detected_issues</c> escritos, por regla (schema 3).</summary>
+    public IReadOnlyDictionary<string, long> IssuesByRule { get; init; } = new Dictionary<string, long>();
+
+    /// <summary>Nodos con <c>detected_issues</c>.</summary>
+    public int NodesWithIssues { get; init; }
+
+    /// <summary>Hallazgos cuyo método, campo o tipo no tiene nodo.</summary>
+    public int IssuesUnmatched { get; init; }
+
+    /// <summary>Marcas TODO/FIXME/HACK escritas (schema 3).</summary>
+    public int TodoMarkers { get; init; }
+
+    /// <summary>Rachas de código comentado escritas (schema 3).</summary>
+    public int CommentedCodeBlocks { get; init; }
+
+    /// <summary>Credenciales en claro escritas en <c>hardcoded_secrets</c> (con el valor enmascarado).</summary>
+    public int HardcodedSecrets { get; init; }
+
+    /// <summary>Nodos con <c>hardcoded_secrets</c>.</summary>
+    public int NodesWithSecrets { get; init; }
+
+    /// <summary>Nombres de clase escritos en <c>reflection_targets</c>.</summary>
+    public int ReflectionTargets { get; init; }
+
+    /// <summary>Nodos <c>File</c> con la codificación con la que se leyó el fichero (schema 3).</summary>
+    public int FilesWithEncoding { get; init; }
+
+    /// <summary>
+    /// <c>Function</c> gemelos de métodos de interfaz a los que se sustituyó el <c>docstring</c> de cbm; no cuentan como nodos
+    /// actualizados.
+    /// </summary>
+    public int TwinDocstrings { get; init; }
+
     /// <summary>Aristas de cbm sustituidas por tipo (<c>CALLS</c>, <c>USAGE</c>…), las que salen de los ficheros analizados.</summary>
     public IReadOnlyDictionary<string, long> CbmEdgesReplacedByType { get; init; } = new Dictionary<string, long>();
 
@@ -152,7 +194,7 @@ public sealed record JavaGraphStats
     /// <summary>
     /// Milisegundos por fase de la escritura, en orden de ejecución (<c>read</c>, <c>schema</c>, <c>remove_previous</c>,
     /// <c>remove_tests</c>, <c>load_nodes</c>, <c>replace_cbm_edges</c>, <c>types</c>, <c>methods</c>, <c>fields</c>,
-    /// <c>patches</c>, <c>hierarchy</c>, <c>calls</c>, <c>refs</c>, <c>run_row</c> y <c>commit</c>). Las de <c>details.write_timings_ms</c> son las mismas
+    /// <c>patches</c>, <c>hierarchy</c>, <c>calls</c>, <c>refs</c>, <c>overrides</c>, <c>findings</c>, <c>run_row</c> y <c>commit</c>). Las de <c>details.write_timings_ms</c> son las mismas
     /// salvo las dos últimas, que ocurren después de escribir la fila.
     /// </summary>
     public IReadOnlyList<KeyValuePair<string, long>> WriteTimingsMs { get; init; } = [];
@@ -235,9 +277,28 @@ public static class JavaGraphWriter
 
     /// <summary>
     /// Versión de las reglas de escritura; cambiarla invalida las pasadas <c>ok</c> anteriores (P3). La 2 añade campos y
-    /// referencias (Q8).
+    /// referencias (Q8); la 3, <c>OVERRIDES</c>, <c>fan_in</c>/<c>fan_out</c>/<c>hotspot</c>, <c>detected_issues</c>, comentarios
+    /// (<c>todo_markers</c>, <c>commented_code</c>, <c>docstring</c> decodificado con la codificación del fichero) y <c>encoding</c>; la 4,
+    /// las constantes resueltas (<c>hardcoded_secrets</c> con el valor enmascarado y <c>reflection_targets</c>); la 5, el papel de cada tipo
+    /// (<c>type_role</c>) y su visibilidad (<c>is_public</c>).
     /// </summary>
-    public const string EnricherVersion = "2";
+    public const string EnricherVersion = "5";
+
+    /// <summary>
+    /// Papel del tipo, con las mismas categorías que el enriquecedor C# (<c>TypeRoleEnricher</c>) y solo con lo que da el analizador:
+    /// enum y anotación son <c>model</c>; interfaz o clase abstracta, <c>contract</c> si es pública y <c>infrastructure</c> si no;
+    /// una clase que extiende directamente una excepción de <c>java.lang</c>, <c>model</c>; el resto, <c>implementation</c>.
+    /// </summary>
+    internal static string TypeRole(JavaTypeRecord type)
+    {
+        if (type.Kind is "enum" or "annotation")
+            return "model";
+        if (type.Kind == "interface" || type.Abstract)
+            return type.Access == "public" ? "contract" : "infrastructure";
+        if (type.Super?.Fqn is "java.lang.Exception" or "java.lang.RuntimeException" or "java.lang.Error" or "java.lang.Throwable")
+            return "model";
+        return "implementation";
+    }
 
     /// <summary>Uso de un tipo del proyecto desde un método, un campo o un tipo (Q6).</summary>
     public const string UsesTypeEdge = "USES_TYPE";
@@ -247,6 +308,24 @@ public static class JavaGraphWriter
 
     /// <summary>Escritura de un campo del proyecto.</summary>
     public const string WritesEdge = "WRITES";
+
+    /// <summary>Método que sobrescribe o implementa a otro del proyecto (mismo nombre que la arista de C#).</summary>
+    public const string OverridesEdge = "OVERRIDES";
+
+    /// <summary>
+    /// Propiedades que un valor null del parche borra (el resto las conserva, ver <see cref="EnrichmentMarks.Merge"/>): el
+    /// <c>docstring</c> de cbm sale de los comentarios <c>//</c> leídos con la codificación equivocada (U+FFFD), y el del
+    /// analizador, que ya conoce la del fichero, lo sustituye aunque sea para dejarlo vacío.
+    /// </summary>
+    private static readonly string[] NullReplacesKeys = ["docstring", "docstring_source"];
+
+    /// <summary>Propiedades que escribe esta pasada y que, si quedaron de otra anterior sobre los mismos nodos, se retiran antes.</summary>
+    private static readonly string[] OwnedKeys =
+    [
+        "detected_issues", "issue_rules", "todo_markers", "todo_count", "commented_code", "commented_code_lines",
+        "hardcoded_secrets", "reflection_targets",
+        "fan_in", "fan_out", "hotspot", "is_override", "encoding", "outer_fqn", "owner_fqn"
+    ];
 
     /// <summary>
     /// Proporción de tipos o de métodos sin casar con cbm (creados por P9) por encima de la cual la pasada avisa de una
@@ -404,6 +483,9 @@ public static class JavaGraphWriter
         Dictionary<string, long> UnresolvedByReason,
         int DiagnosticCount,
         HashSet<string> DiagnosticPaths,
+        List<JavaIssueRecord> Issues,
+        List<JavaCommentRecord> Comments,
+        List<JavaConstantRecord> Constants,
         JavaSummaryRecord Summary);
 
     private static CollectedInput Collect(IEnumerable<JavaAnalysisRecord> records, CancellationToken ct)
@@ -418,6 +500,9 @@ public static class JavaGraphWriter
         var byReason = new Dictionary<string, long>(StringComparer.Ordinal);
         var diagnostics = 0;
         var diagnosticPaths = new HashSet<string>(StringComparer.Ordinal);
+        var issues = new List<JavaIssueRecord>();
+        var comments = new List<JavaCommentRecord>();
+        var constants = new List<JavaConstantRecord>();
         JavaSummaryRecord? summary = null;
         var seen = 0;
 
@@ -470,6 +555,15 @@ public static class JavaGraphWriter
                         refs[key] = references = new RefAggregate();
                     references.Add(reference.Lines ?? [], reference.Contexts ?? [], reference.Count);
                     break;
+                case JavaIssueRecord issue:
+                    issues.Add(issue);
+                    break;
+                case JavaCommentRecord comment:
+                    comments.Add(comment);
+                    break;
+                case JavaConstantRecord constant:
+                    constants.Add(constant);
+                    break;
                 case JavaDiagnosticRecord diagnostic:
                     diagnostics++;
                     // path y line pueden venir a null (diagnóstico sin fuente); un fichero ilegible da diag sin file.
@@ -489,7 +583,7 @@ public static class JavaGraphWriter
                 $"El resultado del analizador Java es de la versión de contrato {summary.Schema}; se esperaba entre "
                 + $"{JavaAnalysisReader.MinSupportedSchema} y {JavaAnalysisReader.SupportedSchema}.");
 
-        return new CollectedInput(files, types, methods, fields, calls, refs, byOrigin, byReason, diagnostics, diagnosticPaths, summary);
+        return new CollectedInput(files, types, methods, fields, calls, refs, byOrigin, byReason, diagnostics, diagnosticPaths, issues, comments, constants, summary);
     }
 
     private static void Increment(Dictionary<string, long> counts, string key, long by = 1) =>
@@ -499,6 +593,9 @@ public static class JavaGraphWriter
 
     private sealed record GraphNode(long Id, string Label, string Name, string QualifiedName, string FilePath, int StartLine, int EndLine,
         string? Properties);
+
+    /// <summary>Arista entre nodos ya escrita, guardada para calcular <c>fan_in</c>/<c>fan_out</c> sin volver a leer la BD.</summary>
+    private readonly record struct WrittenEdge(long Source, long Target);
 
     private sealed record MappedType(long Id, string QualifiedName, string Kind, string PathPrefix);
 
@@ -515,6 +612,21 @@ public static class JavaGraphWriter
         private readonly Dictionary<string, long> _fieldsByKey = new(StringComparer.Ordinal);
         private readonly Dictionary<string, long> _unmatchedFields = new(StringComparer.Ordinal);
         private readonly Dictionary<string, long> _unmatchedRefs = new(StringComparer.Ordinal);
+
+        // Aristas escritas que cuentan para el fan: llamadas, usos de tipo y accesos a campos, y las de OVERRIDES.
+        private readonly HashSet<WrittenEdge> _callPairs = [];
+        private readonly HashSet<WrittenEdge> _referencePairs = [];
+        private readonly Dictionary<long, List<long>> _overriddenBy = [];
+
+        // Propiedades ya escritas de un nodo por un FlushPatches anterior: el siguiente parche se suma a ellas, no a las de cbm.
+        private readonly Dictionary<long, string> _written = [];
+        private readonly HashSet<long> _updatedNodes = [], _createdNodes = [], _twinNodes = [];
+        private int _twinDocstrings;
+        private int _schema = 2;
+        private int _overridesEdges, _inheritedImplementsEdges, _methodsWithMetrics, _nodesWithIssues, _issuesUnmatched, _todoMarkers, _commentedCode;
+        private int _hardcodedSecrets, _nodesWithSecrets, _reflectionTargets;
+        private int _filesWithEncoding;
+        private readonly SortedDictionary<string, long> _issuesByRule = new(StringComparer.Ordinal);
         private SqliteCommand? _insertEdge;
         private SqliteParameter? _edgeSource, _edgeTarget, _edgeType, _edgeProperties;
         private string? _plainEdgeProperties;
@@ -536,6 +648,8 @@ public static class JavaGraphWriter
 
         public async Task<JavaGraphWriteResult> RunAsync(JavaGraphWriteRequest request, CollectedInput input, CancellationToken ct)
         {
+            _schema = input.Summary.Schema;
+
             // P12: la salida de la pasada anterior de este enriquecedor.
             var (previousNodes, previousEdges) = await EnrichmentMarks.RemovePreviousOutputAsync(conn, tx, EnricherName, ct);
             timings.Lap("remove_previous");
@@ -574,6 +688,10 @@ public static class JavaGraphWriter
             timings.Lap("calls");
             await WriteRefsAsync(input.ProjectRefs, ct);
             timings.Lap("refs");
+            await WriteOverridesAsync(input.Methods, ct);
+            timings.Lap("overrides");
+            await ApplyFindingsAsync(input, ct);
+            timings.Lap("findings");
 
             var analyzed = input.Files.Select(f => f.Path).Distinct(StringComparer.Ordinal).ToList();
             var filesWithErrors = input.Files.Count(f => f.Errors > 0);
@@ -617,6 +735,19 @@ public static class JavaGraphWriter
                 UsesTypeEdges = _usesTypeEdges,
                 ReadsEdges = _readsEdges,
                 WritesEdges = _writesEdges,
+                OverridesEdges = _overridesEdges,
+                InheritedImplementsEdges = _inheritedImplementsEdges,
+                MethodsWithMetrics = _methodsWithMetrics,
+                IssuesByRule = new SortedDictionary<string, long>(_issuesByRule, StringComparer.Ordinal),
+                NodesWithIssues = _nodesWithIssues,
+                IssuesUnmatched = _issuesUnmatched,
+                TodoMarkers = _todoMarkers,
+                CommentedCodeBlocks = _commentedCode,
+                HardcodedSecrets = _hardcodedSecrets,
+                NodesWithSecrets = _nodesWithSecrets,
+                ReflectionTargets = _reflectionTargets,
+                FilesWithEncoding = _filesWithEncoding,
+                TwinDocstrings = _twinDocstrings,
                 CbmEdgesReplacedByType = cbmEdgesReplacedByType,
                 ProjectRefsUnmatched = _projectRefsUnmatched,
                 ProjectRefsUnmatchedByReason = new SortedDictionary<string, long>(_unmatchedRefs, StringComparer.Ordinal),
@@ -659,7 +790,21 @@ public static class JavaGraphWriter
                 ["edges"] = new JsonObject
                 {
                     ["CALLS"] = _callEdges, ["INHERITS"] = _inheritsEdges, ["IMPLEMENTS"] = _implementsEdges, ["DEFINES_METHOD"] = _definesEdges,
-                    ["DEFINES"] = _definesFieldEdges, [UsesTypeEdge] = _usesTypeEdges, [ReadsEdge] = _readsEdges, [WritesEdge] = _writesEdges
+                    ["DEFINES"] = _definesFieldEdges, [UsesTypeEdge] = _usesTypeEdges, [ReadsEdge] = _readsEdges, [WritesEdge] = _writesEdges,
+                    [OverridesEdge] = _overridesEdges, ["IMPLEMENTS_INHERITED"] = _inheritedImplementsEdges
+                },
+                ["findings"] = new JsonObject
+                {
+                    ["methods_with_metrics"] = _methodsWithMetrics,
+                    ["nodes_with_issues"] = _nodesWithIssues,
+                    ["issues_by_rule"] = ToObject(_issuesByRule),
+                    ["issues_unmatched"] = _issuesUnmatched,
+                    ["todo_markers"] = _todoMarkers,
+                    ["commented_code_blocks"] = _commentedCode,
+                    ["hardcoded_secrets"] = _hardcodedSecrets,
+                    ["reflection_targets"] = _reflectionTargets,
+                    ["files_with_encoding"] = _filesWithEncoding,
+                    ["twin_docstrings"] = _twinDocstrings
                 },
                 ["cbm_edges_replaced"] = ToObject(cbmEdgesReplacedByType),
                 // H-9: la deriva de los QN de cbm se ve aquí y en el aviso del paso, no solo en los recuentos. Lo que no casa
@@ -721,6 +866,18 @@ public static class JavaGraphWriter
                     path.Value = file;
                     await insert.ExecuteNonQueryAsync(ct);
                 }
+            }
+
+            // Lo que esta pasada escribe y quedó de otra anterior sobre los mismos nodos se retira antes de leerlos: el parche solo suma.
+            using (var reset = Command($"""
+                UPDATE nodes SET properties = json_remove(properties, {string.Join(", ", OwnedKeys.Select(k => $"'$.{k}'"))})
+                WHERE project = @project AND json_valid(properties)
+                  AND file_path IN (SELECT path FROM temp.enrichment_files)
+                  AND ({string.Join(" OR ", OwnedKeys.Select(k => $"json_type(properties, '$.{k}') IS NOT NULL"))})
+                """))
+            {
+                reset.Parameters.AddWithValue("@project", project);
+                await reset.ExecuteNonQueryAsync(ct);
             }
 
             using var select = Command("""
@@ -807,17 +964,28 @@ public static class JavaGraphWriter
             _ => "Class"
         };
 
-        private static JsonObject TypeProperties(JavaTypeRecord type) => new()
+        private JsonObject TypeProperties(JavaTypeRecord type)
         {
-            ["fqn"] = type.Fqn,
-            ["kind"] = type.Kind,
-            ["accessibility"] = type.Access,
-            ["is_abstract"] = type.Abstract,
-            ["annotations"] = ToArray(type.Annotations ?? []),
-            ["docstring"] = type.Doc,
-            ["super_fqn"] = type.Super?.Fqn,
-            ["interfaces_fqn"] = ToArray((type.Interfaces ?? []).Select(i => i.Fqn))
-        };
+            var properties = new JsonObject
+            {
+                ["fqn"] = type.Fqn,
+                ["kind"] = type.Kind,
+                ["accessibility"] = type.Access,
+                ["is_abstract"] = type.Abstract,
+                ["type_role"] = TypeRole(type),
+                ["is_public"] = type.Access == "public",
+                ["annotations"] = ToArray(type.Annotations ?? []),
+                ["docstring"] = type.Doc,
+                ["super_fqn"] = type.Super?.Fqn,
+                ["interfaces_fqn"] = ToArray((type.Interfaces ?? []).Select(i => i.Fqn))
+            };
+            if (_schema >= 3)
+            {
+                properties["docstring_source"] = type.DocSource;
+                properties["outer_fqn"] = type.Outer;
+            }
+            return properties;
+        }
 
         // ------------------------------------------------------------ métodos (P7, P8, P9, P11)
 
@@ -860,6 +1028,8 @@ public static class JavaGraphWriter
                     Patch(anchor, MethodProperties(kept, owner, overloadOf: null, created: false), kept.Line, kept.End);
                     _methodsMatched++;
                     _methodsByKey[kept.Key] = anchor.Id;
+                    if (anchor.Label == "Method")
+                        PatchTwinDocstring(owner, group.Key.Name, declarations);
                 }
                 else
                 {
@@ -902,6 +1072,28 @@ public static class JavaGraphWriter
         }
 
         /// <summary>
+        /// cbm guarda cada método de interfaz dos veces: un <c>Method</c> en <c>&lt;QN del tipo&gt;.&lt;nombre&gt;</c> y un <c>Function</c>
+        /// gemelo en <c>&lt;prefijo&gt;.&lt;nombre&gt;</c>, los dos con el mismo <c>docstring</c> (con U+FFFD si el comentario no era
+        /// UTF-8). El gemelo no es el ancla del grupo, pero lleva el mismo texto mal leído: recibe el <c>docstring</c> del analizador
+        /// (el de la declaración que cae en su línea) y nada más, y no cuenta como nodo actualizado.
+        /// </summary>
+        private void PatchTwinDocstring(MappedType owner, string name, List<JavaMethodRecord> declarations)
+        {
+            if (!_byQn.TryGetValue($"{owner.PathPrefix}.{name}", out var twin) || twin.Label != "Function" || _typeNodeIds.Contains(twin.Id))
+                return;
+            var declaration = declarations.FirstOrDefault(d => d.Line <= twin.StartLine && twin.StartLine <= Math.Max(d.End, d.Line))
+                ?? declarations.MinBy(d => Math.Abs(d.Line - twin.StartLine));
+            if (declaration == null)
+                return;
+            var patch = new JsonObject { ["docstring"] = declaration.Doc };
+            if (_schema >= 3)
+                patch["docstring_source"] = declaration.DocSource;
+            Patch(twin, patch);
+            _twinNodes.Add(twin.Id);
+            _twinDocstrings++;
+        }
+
+        /// <summary>
         /// Nodo de cbm de un grupo de declaraciones: el <c>Method</c> por QN y, si no lo hay, el <c>Function</c> que cbm crea
         /// en <c>&lt;prefijo&gt;.&lt;nombre&gt;</c> para los métodos de interfaces y enums (P7), que hace de Method del grupo.
         /// Un Function que ya es el nodo de un tipo (el enum cuyo constructor pisó su QN) no sirve de ancla.
@@ -935,7 +1127,7 @@ public static class JavaGraphWriter
         private static string CbmName(JavaMethodRecord method) =>
             method.Ctor && method.Chain is { Count: > 0 } chain ? chain[^1] : method.Name;
 
-        private static JsonObject MethodProperties(JavaMethodRecord method, MappedType owner, string? overloadOf, bool created)
+        private JsonObject MethodProperties(JavaMethodRecord method, MappedType owner, string? overloadOf, bool created)
         {
             var parameters = method.ParamSimple ?? [];
             var names = method.ParamNames ?? [];
@@ -958,6 +1150,12 @@ public static class JavaGraphWriter
                 ["docstring"] = method.Doc,
                 ["cyclomatic"] = method.Cyclomatic
             };
+            if (_schema >= 3)
+            {
+                properties["docstring_source"] = method.DocSource;
+                properties["is_override"] = method.IsOverride;
+                properties["owner_fqn"] = method.OwnerFqn;
+            }
             if (created)
             {
                 properties["parent_class"] = owner.QualifiedName;
@@ -1055,7 +1253,7 @@ public static class JavaGraphWriter
             _unmatchedFields[reason] = _unmatchedFields.GetValueOrDefault(reason) + 1;
         }
 
-        private static JsonObject FieldProperties(JavaFieldRecord field, MappedType owner, bool created)
+        private JsonObject FieldProperties(JavaFieldRecord field, MappedType owner, bool created)
         {
             var properties = new JsonObject
             {
@@ -1066,6 +1264,11 @@ public static class JavaGraphWriter
                 ["is_final"] = field.Final,
                 ["docstring"] = field.Doc
             };
+            if (_schema >= 3)
+            {
+                properties["docstring_source"] = field.DocSource;
+                properties["owner_fqn"] = field.OwnerFqn;
+            }
             if (created)
                 properties["parent_class"] = owner.QualifiedName;
             return properties;
@@ -1075,6 +1278,10 @@ public static class JavaGraphWriter
 
         private async Task WriteHierarchyAsync(List<JavaTypeRecord> types, CancellationToken ct)
         {
+            var byFqn = new Dictionary<string, JavaTypeRecord>(StringComparer.Ordinal);
+            foreach (var record in types.Where(t => !string.IsNullOrEmpty(t.Fqn)))
+                byFqn.TryAdd(record.Fqn, record);
+
             foreach (var type in types)
             {
                 if (string.IsNullOrEmpty(type.Fqn) || !_typesByFqn.TryGetValue(type.Fqn, out var source))
@@ -1097,6 +1304,47 @@ public static class JavaGraphWriter
                     else
                         _implementsEdges++;
                 }
+
+                if (!isInterface)
+                    await WriteInheritedImplementsAsync(type, source.Id, byFqn, ct);
+            }
+        }
+
+        /// <summary>
+        /// <c>IMPLEMENTS</c> con <c>is_inherited</c> a las interfaces del proyecto que una clase recibe de su superclase o de las
+        /// que extiende una interfaz (las directas ya tienen su arista), como hace <c>SemanticMethodEnricher</c> en C#.
+        /// </summary>
+        private async Task WriteInheritedImplementsAsync(JavaTypeRecord type, long sourceId, Dictionary<string, JavaTypeRecord> byFqn, CancellationToken ct)
+        {
+            var direct = (type.Interfaces ?? []).Where(i => i.Origin == JavaOrigins.Project).Select(i => i.Fqn).ToHashSet(StringComparer.Ordinal);
+            var inherited = new HashSet<string>(StringComparer.Ordinal);
+            var visited = new HashSet<string>(StringComparer.Ordinal) { type.Fqn };
+            var pending = new Stack<JavaTypeRecord>();
+            pending.Push(type);
+            while (pending.Count > 0)
+            {
+                var current = pending.Pop();
+                var parents = new List<JavaTypeReference>(current.Interfaces ?? []);
+                if (current.Super != null)
+                    parents.Add(current.Super);
+                foreach (var parent in parents)
+                {
+                    if (parent.Origin != JavaOrigins.Project || !byFqn.TryGetValue(parent.Fqn, out var parentType))
+                        continue;
+                    if (parentType.Kind is "interface" or "annotation" && !direct.Contains(parent.Fqn))
+                        inherited.Add(parent.Fqn);
+                    if (visited.Add(parent.Fqn))
+                        pending.Push(parentType);
+                }
+            }
+
+            foreach (var fqn in inherited.Order(StringComparer.Ordinal))
+            {
+                if (!_typesByFqn.TryGetValue(fqn, out var target))
+                    continue;
+                var properties = new JsonObject { ["is_inherited"] = true };
+                if (await InsertEdgeAsync(sourceId, target.Id, "IMPLEMENTS", properties, ct))
+                    _inheritedImplementsEdges++;
             }
         }
 
@@ -1146,6 +1394,7 @@ public static class JavaGraphWriter
                     properties["context"] = "initializer";
                 if (await InsertEdgeAsync(source, target, "CALLS", properties, ct))
                     _callEdges++;
+                _callPairs.Add(new WrittenEdge(source, target));
             }
         }
 
@@ -1223,6 +1472,7 @@ public static class JavaGraphWriter
 
                 if (!await InsertEdgeJsonAsync(source, target, type, json.ToString(), ct))
                     continue;
+                _referencePairs.Add(new WrittenEdge(source, target));
                 switch (type)
                 {
                     case UsesTypeEdge:
@@ -1278,6 +1528,262 @@ public static class JavaGraphWriter
                 _definesEdges++;
         }
 
+        // ------------------------------------------------------------ OVERRIDES, métricas, hallazgos y comentarios (schema 3)
+
+        /// <summary><c>OVERRIDES</c> del método al que sobrescribe o implementa, cuando los dos tienen nodo.</summary>
+        private async Task WriteOverridesAsync(List<JavaMethodRecord> methods, CancellationToken ct)
+        {
+            foreach (var method in methods.OrderBy(m => m.Path, StringComparer.Ordinal).ThenBy(m => m.Line).ThenBy(m => m.Key, StringComparer.Ordinal))
+            {
+                if (method.Overrides is not { Count: > 0 } overridden || !_methodsByKey.TryGetValue(method.Key, out var source))
+                    continue;
+                foreach (var key in overridden)
+                {
+                    if (!_methodsByKey.TryGetValue(key, out var target) || target == source)
+                        continue;
+                    if (!_overriddenBy.TryGetValue(source, out var list))
+                        _overriddenBy[source] = list = [];
+                    if (!list.Contains(target))
+                        list.Add(target);
+                    if (await InsertEdgeAsync(source, target, OverridesEdge, new JsonObject { ["presentational"] = true }, ct))
+                        _overridesEdges++;
+                }
+            }
+        }
+
+        private async Task ApplyFindingsAsync(CollectedInput input, CancellationToken ct)
+        {
+            var nodesById = _byQn.Values.GroupBy(n => n.Id).ToDictionary(g => g.Key, g => g.First());
+            GraphNode? NodeOf(long id) => nodesById.GetValueOrDefault(id);
+
+            ApplyMetrics(input.Methods, NodeOf);
+
+            if (input.Summary.Schema >= 3)
+            {
+                ApplyIssues(input.Issues, NodeOf);
+                ApplyComments(input, NodeOf);
+                ApplyConstants(input.Constants, NodeOf);
+            }
+
+            await FlushPatchesAsync(ct);
+        }
+
+        /// <summary>
+        /// <c>fan_in</c>, <c>fan_out</c> y <c>hotspot</c> con la misma semántica que <c>MetricsEnricher</c> en C#: <c>fan_in</c> son los
+        /// orígenes distintos que llaman al método o a lo que sobrescribe o implementa (una llamada por la interfaz cuenta para la
+        /// implementación), sin contarse a sí mismo; <c>fan_out</c>, los símbolos del proyecto distintos que nombra (métodos llamados,
+        /// tipos usados y campos leídos o escritos); <c>hotspot</c> = round(ciclomática · ln(1 + fan_in), 2).
+        /// </summary>
+        private void ApplyMetrics(List<JavaMethodRecord> methods, Func<long, GraphNode?> nodeOf)
+        {
+            var callers = new Dictionary<long, HashSet<long>>();
+            var targets = new Dictionary<long, HashSet<long>>();
+            foreach (var edge in _callPairs)
+            {
+                if (!callers.TryGetValue(edge.Target, out var into))
+                    callers[edge.Target] = into = [];
+                into.Add(edge.Source);
+                if (!targets.TryGetValue(edge.Source, out var from))
+                    targets[edge.Source] = from = [];
+                from.Add(edge.Target);
+            }
+            foreach (var edge in _referencePairs)
+            {
+                if (!targets.TryGetValue(edge.Source, out var from))
+                    targets[edge.Source] = from = [];
+                from.Add(edge.Target);
+            }
+
+            foreach (var method in methods.OrderBy(m => m.Path, StringComparer.Ordinal).ThenBy(m => m.Line).ThenBy(m => m.Key, StringComparer.Ordinal))
+            {
+                if (!_methodsByKey.TryGetValue(method.Key, out var id) || nodeOf(id) is not { } node)
+                    continue;
+
+                var incoming = new HashSet<long>();
+                var seen = new HashSet<long>();
+                var pending = new Stack<long>();
+                pending.Push(id);
+                while (pending.Count > 0)
+                {
+                    var current = pending.Pop();
+                    if (!seen.Add(current))
+                        continue;
+                    if (callers.TryGetValue(current, out var direct))
+                        incoming.UnionWith(direct);
+                    if (_overriddenBy.TryGetValue(current, out var bases))
+                    {
+                        foreach (var b in bases)
+                            pending.Push(b);
+                    }
+                }
+                incoming.Remove(id);
+
+                var outgoing = targets.TryGetValue(id, out var named) ? named.Count(t => t != id) : 0;
+                var cyclomatic = method.Cyclomatic ?? 0;
+                Patch(node, new JsonObject
+                {
+                    ["fan_in"] = incoming.Count,
+                    ["fan_out"] = outgoing,
+                    ["hotspot"] = Math.Round(cyclomatic * Math.Log(1 + incoming.Count), 2)
+                });
+                _methodsWithMetrics++;
+            }
+        }
+
+        private void ApplyIssues(List<JavaIssueRecord> issues, Func<long, GraphNode?> nodeOf)
+        {
+            var byNode = new Dictionary<long, List<JavaIssueRecord>>();
+            foreach (var issue in issues)
+            {
+                long? id = issue.From != null
+                    ? (_methodsByKey.TryGetValue(issue.From, out var method) ? method : null)
+                    : issue.FromField != null
+                        ? (_fieldsByKey.TryGetValue(issue.FromField, out var field) ? field : null)
+                        : (_typesByFqn.TryGetValue(issue.FromType, out var type) ? type.Id : null);
+                if (id is not { } nodeId || nodeOf(nodeId) == null)
+                {
+                    _issuesUnmatched++;
+                    continue;
+                }
+                if (!byNode.TryGetValue(nodeId, out var list))
+                    byNode[nodeId] = list = [];
+                list.Add(issue);
+            }
+
+            foreach (var (id, list) in byNode.OrderBy(e => e.Key))
+            {
+                var ordered = list.OrderBy(i => i.Line).ThenBy(i => i.Rule, StringComparer.Ordinal).ThenBy(i => i.Text, StringComparer.Ordinal)
+                    .DistinctBy(i => (i.Line, i.Rule, i.Text)).ToList();
+                foreach (var issue in ordered)
+                    _issuesByRule[issue.Rule] = _issuesByRule.GetValueOrDefault(issue.Rule) + 1;
+                Patch(nodeOf(id)!, new JsonObject
+                {
+                    ["detected_issues"] = ToArray(ordered.Select(i => $"{i.Rule}: {i.Text} (línea {i.Line})")),
+                    ["issue_rules"] = ToArray(ordered.Select(i => i.Rule).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+                });
+                _nodesWithIssues++;
+            }
+        }
+
+        /// <summary>
+        /// Constantes que resolvió el compilador, en el nodo del método, el campo o el tipo que las contiene:
+        /// <c>hardcoded_secrets</c> (<c>[{kind, name, line, preview_masked}]</c>, con el valor ya enmascarado por el analizador; se
+        /// descartan los identificadores que nombran una referencia a la credencial, como <c>UserSecretsId</c>) y
+        /// <c>reflection_targets</c> (<c>string[]</c> con los nombres de clase, con <c>*</c> por cada tramo no constante).
+        /// </summary>
+        private void ApplyConstants(List<JavaConstantRecord> constants, Func<long, GraphNode?> nodeOf)
+        {
+            var secrets = new Dictionary<long, List<JavaConstantRecord>>();
+            var targets = new Dictionary<long, SortedSet<string>>();
+            foreach (var constant in constants)
+            {
+                var isSecret = constant.What == JavaConstantKinds.Secret;
+                if (!isSecret && constant.What != JavaConstantKinds.Reflection)
+                    continue;
+                // Un identificador que nombra una referencia a la credencial (UserSecretsId, token_url) no guarda el secreto.
+                if (isSecret && constant.Kind == "identifier" && constant.Name != null && HardcodedSecretScanner.NamesAReference(constant.Name))
+                    continue;
+                long? id = constant.From != null
+                    ? (_methodsByKey.TryGetValue(constant.From, out var method) ? method : null)
+                    : constant.FromField != null
+                        ? (_fieldsByKey.TryGetValue(constant.FromField, out var field) ? field : null)
+                        : (_typesByFqn.TryGetValue(constant.FromType, out var type) ? type.Id : null);
+                if (id is not { } nodeId || nodeOf(nodeId) == null)
+                    continue;
+                if (isSecret)
+                    (secrets.TryGetValue(nodeId, out var list) ? list : secrets[nodeId] = []).Add(constant);
+                else
+                    (targets.TryGetValue(nodeId, out var set) ? set : targets[nodeId] = new SortedSet<string>(StringComparer.Ordinal)).Add(constant.Value);
+            }
+
+            foreach (var id in secrets.Keys.Concat(targets.Keys).Distinct().Order())
+            {
+                var patch = new JsonObject();
+                if (secrets.TryGetValue(id, out var found))
+                {
+                    var ordered = found.OrderBy(c => c.Line).ThenBy(c => c.Kind, StringComparer.Ordinal).ThenBy(c => c.Name, StringComparer.Ordinal)
+                        .DistinctBy(c => (c.Line, c.Kind, c.Name, c.Value)).ToList();
+                    patch["hardcoded_secrets"] = new JsonArray(ordered.Select(c => (JsonNode?)new JsonObject
+                    {
+                        ["kind"] = c.Kind, ["name"] = c.Name, ["line"] = c.Line, ["preview_masked"] = c.Value
+                    }).ToArray());
+                    _hardcodedSecrets += ordered.Count;
+                    _nodesWithSecrets++;
+                }
+                if (targets.TryGetValue(id, out var names))
+                {
+                    patch["reflection_targets"] = ToArray(names);
+                    _reflectionTargets += names.Count;
+                }
+                Patch(nodeOf(id)!, patch);
+            }
+        }
+
+        /// <summary>
+        /// <c>todo_markers</c> y <c>commented_code</c> en el método, el tipo o el nodo <c>File</c> que dice el analizador, y la
+        /// codificación con la que se leyó cada fichero en su nodo <c>File</c>.
+        /// </summary>
+        private void ApplyComments(CollectedInput input, Func<long, GraphNode?> nodeOf)
+        {
+            var fileNodes = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
+            foreach (var node in _byQn.Values.Where(n => n.Label == "File"))
+                fileNodes.TryAdd(node.FilePath.Replace('\\', '/'), node);
+
+            foreach (var file in input.Files)
+            {
+                if (string.IsNullOrEmpty(file.Encoding) || !fileNodes.TryGetValue(file.Path.Replace('\\', '/'), out var node))
+                    continue;
+                // El mismo formato que escribe C# (Encoding.WebName): utf-8, iso-8859-1, windows-1252…
+                Patch(node, new JsonObject { ["encoding"] = file.Encoding.ToLowerInvariant() });
+                _filesWithEncoding++;
+            }
+
+            var todos = new Dictionary<long, List<JavaTodoMarker>>();
+            var code = new Dictionary<long, List<JavaCommentedCode>>();
+            foreach (var comment in input.Comments)
+            {
+                long? id = comment.Owner switch
+                {
+                    JavaCommentOwners.Method => comment.Key != null && _methodsByKey.TryGetValue(comment.Key, out var method) ? method : null,
+                    JavaCommentOwners.Type => comment.Key != null && _typesByFqn.TryGetValue(comment.Key, out var type) ? type.Id : null,
+                    _ => fileNodes.TryGetValue(comment.Path.Replace('\\', '/'), out var node) ? node.Id : null
+                };
+                // Un método o tipo sin nodo (p. ej. una sobrecarga sin casar): el hallazgo pasa al nodo del fichero.
+                if (id is null && fileNodes.TryGetValue(comment.Path.Replace('\\', '/'), out var fallback))
+                    id = fallback.Id;
+                if (id is not { } nodeId)
+                    continue;
+                if (comment.Todos is { Count: > 0 })
+                    (todos.TryGetValue(nodeId, out var t) ? t : todos[nodeId] = []).AddRange(comment.Todos);
+                if (comment.Code is { Count: > 0 })
+                    (code.TryGetValue(nodeId, out var c) ? c : code[nodeId] = []).AddRange(comment.Code);
+            }
+
+            foreach (var id in todos.Keys.Concat(code.Keys).Distinct().Order())
+            {
+                if (nodeOf(id) is not { } node)
+                    continue;
+                var patch = new JsonObject();
+                if (todos.TryGetValue(id, out var markers))
+                {
+                    markers = [.. markers.OrderBy(m => m.Line).ThenBy(m => m.Kind, StringComparer.Ordinal)];
+                    patch["todo_markers"] = new JsonArray(markers.Select(m => (JsonNode?)new JsonObject
+                        { ["kind"] = m.Kind, ["line"] = m.Line, ["text"] = m.Text }).ToArray());
+                    patch["todo_count"] = markers.Count;
+                    _todoMarkers += markers.Count;
+                }
+                if (code.TryGetValue(id, out var runs))
+                {
+                    runs = [.. runs.OrderBy(r => r.StartLine)];
+                    patch["commented_code"] = new JsonArray(runs.Select(r => (JsonNode?)new JsonObject
+                        { ["start_line"] = r.StartLine, ["end_line"] = r.EndLine, ["lines"] = r.Lines, ["preview"] = r.Preview }).ToArray());
+                    patch["commented_code_lines"] = runs.Sum(r => r.Lines);
+                    _commentedCode += runs.Count;
+                }
+                Patch(node, patch);
+            }
+        }
+
         // ------------------------------------------------------------ SQL
 
         private void Patch(GraphNode node, JsonObject properties, int? start = null, int? end = null)
@@ -1293,7 +1799,7 @@ public static class JavaGraphWriter
         /// <summary>Escribe las propiedades completadas (y las líneas de las sobrecargas conservadas) de los nodos de cbm.</summary>
         private async Task FlushPatchesAsync(CancellationToken ct)
         {
-            var nodesById = _byQn.Values.ToDictionary(n => n.Id);
+            var nodesById = _byQn.Values.GroupBy(n => n.Id).ToDictionary(g => g.Key, g => g.First());
             _updateNode ??= Command("""
                 UPDATE nodes SET properties = @props,
                     start_line = @start, line_start = @start, end_line = @end, line_end = @end
@@ -1310,12 +1816,22 @@ public static class JavaGraphWriter
                 var node = nodesById[id];
                 var (start, end) = _pendingLines.TryGetValue(id, out var lines) ? lines : (node.StartLine, node.EndLine);
 
-                props.Value = EnrichmentMarks.Merge(node.Properties, patch, EnricherName).ToJsonString();
+                var merged = EnrichmentMarks.Merge(_written.TryGetValue(id, out var already) ? already : node.Properties, patch, EnricherName);
+                foreach (var key in NullReplacesKeys)
+                {
+                    if (patch.TryGetPropertyValue(key, out var value) && value is null)
+                        merged.Remove(key);
+                }
+                var json = merged.ToJsonString();
+                props.Value = json;
                 startParameter.Value = start;
                 endParameter.Value = end;
                 idParameter.Value = id;
                 await _updateNode.ExecuteNonQueryAsync(ct);
-                _nodesUpdated++;
+                _written[id] = json;
+                // Un nodo creado por esta pasada que recibe un segundo parche no es un nodo de cbm completado.
+                if (!_createdNodes.Contains(id) && !_twinNodes.Contains(id) && _updatedNodes.Add(id))
+                    _nodesUpdated++;
             }
             _pendingPatches.Clear();
             _pendingLines.Clear();
@@ -1338,11 +1854,12 @@ public static class JavaGraphWriter
             _insertNode.Parameters.AddWithValue("@file", filePath);
             _insertNode.Parameters.AddWithValue("@start", start);
             _insertNode.Parameters.AddWithValue("@end", Math.Max(end, start));
-            _insertNode.Parameters.AddWithValue("@props",
-                EnrichmentMarks.CreatedNodeProperties(EnricherName, enrichedAt, properties).ToJsonString());
+            var createdProperties = EnrichmentMarks.CreatedNodeProperties(EnricherName, enrichedAt, properties).ToJsonString();
+            _insertNode.Parameters.AddWithValue("@props", createdProperties);
             var id = Convert.ToInt64(await _insertNode.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
 
-            _byQn[qualifiedName] = new GraphNode(id, label, name, qualifiedName, filePath, start, end, null);
+            _byQn[qualifiedName] = new GraphNode(id, label, name, qualifiedName, filePath, start, end, createdProperties);
+            _createdNodes.Add(id);
             _nodesCreated++;
             return id;
         }

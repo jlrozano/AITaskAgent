@@ -1,0 +1,15 @@
+- ¿Qué capas distingue el código dentro del subsistema (entrada o presentación, servicios, dominio, acceso a datos, integración) y con qué evidencia se reconoce cada una?
+- ¿De qué otros subsistemas, proyectos o recursos externos depende, y con qué llamadas o usos concretos?
+- ¿Qué otros subsistemas dependen de él, a través de qué tipos o puntos de entrada y con cuántas llamadas?
+- ¿Hay saltos de capa: presentación que accede a datos o contiene lógica de negocio, lógica que construye conexiones o consultas, recursos externos usados fuera de su capa?
+- ¿Qué miembros concentran más dependencias entrantes o salientes, y qué responsabilidades mezclan?
+- ¿Hay dependencias circulares dentro del subsistema o con otros, y son incidentales o estructurales?
+- ¿Qué datos (tablas, ficheros, estado global) comparte con otros subsistemas, y quién los escribe?
+- ¿Las dependencias van hacia contratos o hacia implementaciones concretas, y qué contratos tienen una sola implementación o ninguna?
+- ¿Qué jerarquías de herencia existen, qué profundidad tienen y qué comportamiento se hereda?
+- ¿Dónde se crean y se conectan los colaboradores (constructores, contenedor de dependencias, factorías, instanciación directa)?
+- ¿Qué fronteras se respetan y qué dependencias parecen violaciones y no lo son?
+- ¿Qué afirmaciones sobre capas, dependencias o ausencia de violaciones hace el código o su documentación, y se cumplen? Contrástalas con las importaciones reales (`using`, `import`) de las carpetas implicadas, no con los nombres.
+- ¿Qué estado estático o global mutable existe (registros, cachés, instancias únicas), quién lo escribe y desde qué hilos?
+- ¿Qué precondiciones exige la composición (qué debe estar registrado, configurado o inicializado antes de usar el subsistema) y qué ocurre si falta?
+- ¿Qué tipos públicos tienen implementación o registro pero ningún consumidor dentro del subsistema, y cuáles solo se referencian entre sí?

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatSession, ChatStreamEvent } from '../api/types';
-import { chatStream, completedTurn } from '../test/fixtures';
-import { chatReducer, initialChatState, openSegmentText, USER_STOPPED_MESSAGE, type ChatState } from './chatReducer';
+import { chatModels, chatStream, completedTurn } from '../test/fixtures';
+import { chatReducer, initialChatState, openSegmentText, selectedModelId, USER_STOPPED_MESSAGE, type ChatState } from './chatReducer';
 
 const session: ChatSession = {
   schemaVersion: 1,
@@ -188,5 +188,41 @@ describe('chatReducer: el turno va ligado a su sesión (P2-3)', () => {
   it('ignora eventos de un turno de otra sesión', () => {
     const s = turnInA();
     expect(chatReducer(s, { type: 'turn/event', sessionId: B.id, event: { type: 'delta', text: 'ajeno' } })).toBe(s);
+  });
+});
+
+describe('chatReducer: modelo del asistente', () => {
+  const withModels = () =>
+    chatReducer(initialChatState, { type: 'models/loaded', models: chatModels.models, defaultId: chatModels.defaultId });
+
+  it('sin catálogo no hay modelo elegido', () => {
+    expect(selectedModelId(initialChatState)).toBeNull();
+  });
+
+  it('sin sesión se elige el de por defecto, o el pendiente que haya marcado el usuario', () => {
+    let s = withModels();
+    expect(selectedModelId(s)).toBe('gpt-6-sol');
+    s = chatReducer(s, { type: 'model/pending', modelId: 'gpt-5.4' });
+    expect(selectedModelId(s)).toBe('gpt-5.4');
+  });
+
+  it('una sesión abierta manda sobre el pendiente; sin campo, o con un modelo retirado, cae al de por defecto', () => {
+    let s = chatReducer(withModels(), { type: 'model/pending', modelId: 'gpt-5.4' });
+    s = chatReducer(s, { type: 'session/select', id: session.id });
+    s = chatReducer(s, { type: 'session/loaded', session: { ...session, modelId: 'gpt-6-sol' } });
+    expect(selectedModelId(s)).toBe('gpt-6-sol');
+
+    expect(selectedModelId({ ...s, session: { ...session } })).toBe('gpt-6-sol');
+    expect(selectedModelId({ ...s, session: { ...session, modelId: 'retirado' } })).toBe('gpt-6-sol');
+  });
+
+  it('session/model cambia el modelo de la sesión abierta sin tocar sus turnos, y se ignora para otra sesión', () => {
+    let s = chatReducer(withModels(), { type: 'session/select', id: session.id });
+    s = chatReducer(s, { type: 'session/loaded', session: { ...session, turns: [completedTurn] } });
+
+    const changed = chatReducer(s, { type: 'session/model', id: session.id, modelId: 'gpt-5.4' });
+    expect(selectedModelId(changed)).toBe('gpt-5.4');
+    expect(changed.session?.turns).toEqual([completedTurn]);
+    expect(chatReducer(s, { type: 'session/model', id: 'otra', modelId: 'gpt-5.4' })).toBe(s);
   });
 });

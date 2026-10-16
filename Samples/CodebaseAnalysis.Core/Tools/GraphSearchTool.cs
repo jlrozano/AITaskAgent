@@ -113,6 +113,10 @@ public sealed class GraphSearchTool : LlmTool
             p.AddWithValue("@lim", limit);
         }
 
+        // Los nodos que escribió el LLM (hallazgos, resúmenes…) solo se buscan pidiendo su etiqueta; las vistas findings y llm_contracts de graph_domain los leen.
+        if (label == null || !Enrichment.AnalysisGraph.AnalysisGraphLabels.RegistryLabels.Contains(label, StringComparer.Ordinal))
+            conditions.Add("NOT " + Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmNodePredicate("nodes"));
+
         var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
         var sql = $"SELECT label, name, qualified_name AS qn, coalesce(nullif(file_path, ''), file) AS file_path, " +
                   "coalesce(nullif(line_start, 0), start_line) AS line_start, coalesce(nullif(line_end, 0), end_line) AS line_end, " +

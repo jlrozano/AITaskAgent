@@ -31,7 +31,7 @@ public static class EffectiveLimits
         [
             $"⏱️ Límites de {AnalysisTimeouts.SectionName}: pipeline {Minutes(timeouts.PipelineMinutes)} · detección {Minutes(timeouts.DetectMinutes)} · " +
             $"enriquecimiento {Minutes(timeouts.EnrichMinutes)} · informes {Minutes(timeouts.ReportsMinutes)} · cada auditor {Minutes(timeouts.AuditorMinutes)} · " +
-            $"síntesis {Minutes(timeouts.SynthesisMinutes)}; fijos en el código: facetas 5 min y preparación de la regeneración 5 min.",
+            $"síntesis {Minutes(timeouts.SynthesisMinutes)} · verificador {Minutes(timeouts.VerifierMinutes)}; fijos en el código: facetas 5 min y preparación de la regeneración 5 min.",
             $"⏱️ Límites de {JavaAnalyzerOptions.SectionName}{(java.Enabled ? "" : " (desactivado)")}: proceso Java {Seconds(java.TimeoutSeconds)} (TimeoutSeconds) · " +
             $"paso {Seconds(java.StepTimeoutSeconds)} (StepTimeoutSeconds).",
             $"⏱️ Plazos LLM de los roles del análisis (RequestTimeoutSeconds por intento; StreamingInactivityTimeoutSeconds, solo con streaming): {DescribeRoles(pipelineRoles)}.",

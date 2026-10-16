@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisEventDto } from '../api/types';
-import { cancelledDuringReports, cancelledRun, regenerationAfter, RUN_ID, runningStatus, successfulRun } from '../test/fixtures';
-import { canRegenerate, createRunState, isFailedReport, mainArgument, progressOf, runReducer, type RunState } from './runReducer';
+import { cancelledDuringReports, cancelledRun, regenerationAfter, RUN_ID, runningStatus, successfulRun, verificationAfter } from '../test/fixtures';
+import { preparedRun, preparedRunStatus } from '../test/preparationFixtures';
+import {
+  canRegenerate,
+  canUndoVerification,
+  canVerify,
+  createRunState,
+  isFailedReport,
+  mainArgument,
+  progressOf,
+  runReducer,
+  type RunState,
+} from './runReducer';
 
 function replay(events: AnalysisEventDto[], state: RunState = createRunState(runningStatus)): RunState {
   return events.reduce((s, event) => runReducer(s, { type: 'event', event }), state);
@@ -163,24 +174,24 @@ describe('runReducer', () => {
   });
 
   it('una fase que no llega a arrancar antes de la siguiente queda omitida', () => {
-    const withoutEnrich = successfulRun.filter((e) => e.source !== 'LanguageEnricherStep' && e.source !== 'BdpEnricherStep');
+    const withoutEnrich = successfulRun.filter((e) => e.source !== 'LanguageEnricherStep' && e.source !== 'DotNetEnricherStep');
     const state = replay(withoutEnrich);
     expect(state.phases.enrich.status).toBe('skipped');
   });
 
-  it('enrich no parpadea entre sus dos steps: solo el step.completed de BdpEnricherStep la cierra', () => {
+  it('enrich no parpadea entre sus dos steps: solo el step.completed de DotNetEnricherStep la cierra', () => {
     const languageDone = successfulRun.findIndex((e) => e.type === 'step.completed' && e.source === 'LanguageEnricherStep');
     const afterFirst = replay(successfulRun.slice(0, languageDone + 1));
     expect(afterFirst.phases.enrich).toMatchObject({ status: 'running', finishedAt: null, durationMs: null });
 
-    const bdpStarted = replay(successfulRun.slice(0, languageDone + 2));
-    expect(bdpStarted.phases.enrich.status).toBe('running');
-    expect(bdpStarted.phases.enrich.startedAt).toBe(afterFirst.phases.enrich.startedAt);
+    const dotNetStarted = replay(successfulRun.slice(0, languageDone + 2));
+    expect(dotNetStarted.phases.enrich.status).toBe('running');
+    expect(dotNetStarted.phases.enrich.startedAt).toBe(afterFirst.phases.enrich.startedAt);
 
-    const bdpDone = successfulRun.findIndex((e) => e.type === 'step.completed' && e.source === 'BdpEnricherStep');
-    const closed = replay(successfulRun.slice(0, bdpDone + 1));
+    const dotNetDone = successfulRun.findIndex((e) => e.type === 'step.completed' && e.source === 'DotNetEnricherStep');
+    const closed = replay(successfulRun.slice(0, dotNetDone + 1));
     expect(closed.phases.enrich.status).toBe('succeeded');
-    expect(closed.phases.enrich.finishedAt).toBe(successfulRun[bdpDone].ts);
+    expect(closed.phases.enrich.finishedAt).toBe(successfulRun[dotNetDone].ts);
     expect(closed.phases.facets.status).toBe('pending');
   });
 
@@ -189,18 +200,18 @@ describe('runReducer', () => {
     const failedFirst = successfulRun.map((e, i) =>
       i === languageDone ? { ...e, level: 'error' as const, data: { ...e.data, success: false, error: 'boom' } } : e,
     );
-    const bdpDone = successfulRun.findIndex((e) => e.type === 'step.completed' && e.source === 'BdpEnricherStep');
+    const dotNetDone = successfulRun.findIndex((e) => e.type === 'step.completed' && e.source === 'DotNetEnricherStep');
 
     const afterFailure = replay(failedFirst.slice(0, languageDone + 1));
     expect(afterFailure.phases.enrich).toMatchObject({ status: 'failed', error: 'boom' });
     // El step siguiente (attempt 1) no reabre la fase ni su éxito la da por buena.
-    const afterBdp = replay(failedFirst.slice(0, bdpDone + 1));
-    expect(afterBdp.phases.enrich).toMatchObject({ status: 'failed', error: 'boom' });
+    const afterDotNet = replay(failedFirst.slice(0, dotNetDone + 1));
+    expect(afterDotNet.phases.enrich).toMatchObject({ status: 'failed', error: 'boom' });
 
     const failedLast = successfulRun.map((e, i) =>
-      i === bdpDone ? { ...e, level: 'error' as const, data: { ...e.data, success: false, error: 'HTTP 500' } } : e,
+      i === dotNetDone ? { ...e, level: 'error' as const, data: { ...e.data, success: false, error: 'HTTP 500' } } : e,
     );
-    expect(replay(failedLast.slice(0, bdpDone + 1)).phases.enrich).toMatchObject({ status: 'failed', error: 'HTTP 500' });
+    expect(replay(failedLast.slice(0, dotNetDone + 1)).phases.enrich).toMatchObject({ status: 'failed', error: 'HTTP 500' });
   });
 
   it('cuenta avisos y errores y sube reportsVersion con cada informe y al terminar', () => {
@@ -426,7 +437,7 @@ describe('runReducer: regeneración de informes (R3, R8)', () => {
     expect(state.auditors.InyeccionDependenciasExtensiones.status).toBe('skipped');
   });
 
-  it('canRegenerate: solo carriles fallidos o cancelados y con la ejecución terminada', () => {
+  it('canRegenerate: carriles terminados (fallidos, cancelados y, por D1, correctos) con la ejecución terminada', () => {
     const done = replay(cancelledDuringReports);
     expect(canRegenerate(done, 'CodeSmells')).toBe(true); // failed
     expect(canRegenerate(done, 'InyeccionDependenciasExtensiones')).toBe(true); // cancelled
@@ -435,8 +446,161 @@ describe('runReducer: regeneración de informes (R3, R8)', () => {
     const running = replay(regeneration.slice(0, 1), done);
     expect(canRegenerate(running, 'InyeccionDependenciasExtensiones')).toBe(false);
 
+    // D1: rehacer un informe sano también se ofrece.
     const succeeded = replay(successfulRun);
-    expect(canRegenerate(succeeded, 'CodeSmells')).toBe(false);
+    expect(canRegenerate(succeeded, 'CodeSmells')).toBe(true);
+    expect(canRegenerate(replay(successfulRun.slice(0, 15)), 'CodeSmells')).toBe(false); // con la ejecución en curso
+  });
+});
+
+describe('runReducer: verificación a demanda', () => {
+  const verification = verificationAfter(successfulRun, ['CodeSmells']);
+  const lastOf = (events: AnalysisEventDto[], type: string) => events.findLast((e) => e.type === type)!;
+
+  it('canVerify: solo carriles con el auditor terminado bien, con la ejecución terminada y sin otra verificación en curso', () => {
+    const done = replay(successfulRun);
+    expect(canVerify(done, 'CodeSmells')).toBe(true);
+    expect(canVerify(done, 'CodigoMuerto')).toBe(false); // no es un carril
+
+    const failed = replay(cancelledDuringReports);
+    expect(canVerify(failed, 'CodeSmells')).toBe(false); // el auditor falló: no hay informe que verificar
+    expect(canVerify(failed, 'InyeccionDependenciasExtensiones')).toBe(false); // cancelado
+
+    expect(canVerify(replay(successfulRun.slice(0, 15)), 'CodeSmells')).toBe(false); // la ejecución sigue en curso
+    const verifying = replay(verification.slice(0, 1), done);
+    expect(canVerify(verifying, 'CodeSmells')).toBe(false); // y mientras verifica no hay botones
+  });
+
+  it('run.verification_started reabre la ejecución y arranca la verificación solo de esos carriles, sin tocar los auditores ni las fases', () => {
+    const done = replay(successfulRun);
+    const state = replay(verification.slice(0, 1), done);
+
+    expect(state.status).toBe('running');
+    expect(state.finishedAt).toBeNull();
+    expect(state.verifying).toBe(true);
+    expect(state.auditors.CodeSmells.verification.status).toBe('running');
+    expect(state.auditors.InyeccionDependenciasExtensiones.verification.status).toBe('idle');
+    expect(state.auditors.CodeSmells.status).toBe('succeeded');
+    expect(state.phases).toEqual(done.phases);
+  });
+
+  it('secuencia completa: el carril pasa a «corregido (n)» con sus versiones, sin tocar el auditor ni las fases, y el resumen queda desfasado', () => {
+    const done = replay(successfulRun);
+    const state = replay(verification, done);
+
+    expect(state.status).toBe('succeeded');
+    expect(state.verifying).toBe(false);
+    expect(state.auditors.CodeSmells.verification).toMatchObject({
+      status: 'corrected',
+      changes: 2,
+      previousVersionId: 'v0001',
+      versionId: 'v0002',
+      toolCalls: 1,
+      activeTool: null,
+    });
+    // Las tools y el LLM del verificador no son del auditor.
+    expect(state.auditors.CodeSmells.toolCalls).toBe(done.auditors.CodeSmells.toolCalls);
+    expect(state.auditors.CodeSmells.status).toBe('succeeded');
+    expect(state.auditors.CodeSmells.finishReason).toBe(done.auditors.CodeSmells.finishReason);
+    expect(state.auditors.CodeSmells.durationMs).toBe(done.auditors.CodeSmells.durationMs);
+    // Las fases siguen como estaban: la preparación y la síntesis de la verificación no las reabren.
+    expect(state.phases).toEqual(done.phases);
+    expect(state.synthesisStale).toBe(true);
+    expect(state.reportsVersion).toBeGreaterThan(done.reportsVersion);
+    expect(state.usage!.calls).toBe(done.usage!.calls + 1);
+    expect(canUndoVerification(state, 'CodeSmells')).toBe(true);
+    expect(canUndoVerification(state, 'InyeccionDependenciasExtensiones')).toBe(false);
+  });
+
+  it('sin correcciones queda «verificado» y no hay nada que deshacer ni resumen desfasado', () => {
+    const events = verificationAfter(successfulRun, ['CodeSmells'], { outcomes: { CodeSmells: { outcome: 'verified', changes: 0 } } });
+    const state = replay(events, replay(successfulRun));
+
+    expect(state.auditors.CodeSmells.verification.status).toBe('verified');
+    expect(state.synthesisStale).toBe(false);
+    expect(canUndoVerification(state, 'CodeSmells')).toBe(false);
+  });
+
+  it('con avisos de validación queda «con avisos» y conserva su versión anterior', () => {
+    const events = verificationAfter(successfulRun, ['CodeSmells'], {
+      outcomes: { CodeSmells: { outcome: 'warnings', changes: 1, previousVersionId: 'v0003', versionId: 'v0004' } },
+    });
+    const state = replay(events, replay(successfulRun));
+
+    expect(state.auditors.CodeSmells.verification).toMatchObject({ status: 'warnings', changes: 1, previousVersionId: 'v0003' });
+    expect(state.synthesisStale).toBe(true);
+    expect(canUndoVerification(state, 'CodeSmells')).toBe(true);
+  });
+
+  it('si el verificador falla, el carril lo dice con el motivo, no hay versión que deshacer y la ejecución no falla', () => {
+    const events = verificationAfter(successfulRun, ['CodeSmells'], {
+      outcomes: { CodeSmells: { outcome: 'failed', error: 'El verificador falló: HTTP 500' } },
+    });
+    const state = replay(events, replay(successfulRun));
+
+    expect(state.auditors.CodeSmells.verification).toMatchObject({ status: 'failed', message: 'El verificador falló: HTTP 500', previousVersionId: null });
+    expect(state.status).toBe('succeeded');
+    expect(state.errors).toBeGreaterThan(replay(successfulRun).errors); // el evento de nivel error cuenta en el registro
+    expect(state.synthesisStale).toBe(false);
+    expect(canUndoVerification(state, 'CodeSmells')).toBe(false);
+  });
+
+  it('con síntesis pedida el resumen no queda desfasado y la fase de síntesis no se reabre', () => {
+    const events = verificationAfter(successfulRun, ['CodeSmells'], { synthesis: true });
+    const state = replay(events, replay(successfulRun));
+
+    expect(state.verifySynthesis).toBe(true);
+    expect(state.synthesisStale).toBe(false);
+    expect(state.phases.synthesis).toEqual(replay(successfulRun).phases.synthesis);
+  });
+
+  it('cancelada a mitad, el carril vuelve a «sin verificar»; terminada con error, queda fallida', () => {
+    const cut = verification.findIndex((e) => e.type === 'tool.started') + 1;
+    const done = replay(successfulRun);
+    const lastSeq = verification[cut - 1].seq;
+    const completed = (status: string, error: string | null): AnalysisEventDto => ({
+      ...lastOf(verification, 'run.completed'),
+      seq: lastSeq + 1,
+      level: 'warning',
+      data: { status, exitCode: 1, durationMs: 5, failedReports: [], unverifiedReports: 0, executiveReportPath: null, error },
+    });
+
+    const cancelled = replay([...verification.slice(0, cut), completed('cancelled', 'Verificación cancelada.')], done);
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.verifying).toBe(false);
+    expect(cancelled.auditors.CodeSmells.verification.status).toBe('idle');
+    expect(cancelled.auditors.CodeSmells.status).toBe('succeeded');
+
+    const failed = replay([...verification.slice(0, cut), completed('failed', 'se cayó')], done);
+    expect(failed.auditors.CodeSmells.verification).toMatchObject({ status: 'failed', message: 'se cayó' });
+  });
+
+  it('una regeneración con resumen apaga el aviso de desfase y estrena el carril sin verificación', () => {
+    const verified = replay(verification, replay(successfulRun));
+    expect(verified.synthesisStale).toBe(true);
+
+    const regenerated = replay(regenerationAfter([...successfulRun, ...verification], ['CodeSmells']), verified);
+
+    expect(regenerated.synthesisStale).toBe(false);
+    expect(regenerated.auditors.CodeSmells.verification.status).toBe('idle');
+    expect(regenerated.verifying).toBe(false);
+  });
+
+  it('deshacer devuelve el carril a «sin verificar» y refresca los informes', () => {
+    const verified = replay(verification, replay(successfulRun));
+
+    const undone = runReducer(verified, { type: 'verification_undone', report: 'CodeSmells' });
+
+    expect(undone.auditors.CodeSmells.verification.status).toBe('idle');
+    expect(canUndoVerification(undone, 'CodeSmells')).toBe(false);
+    expect(undone.reportsVersion).toBe(verified.reportsVersion + 1);
+    expect(runReducer(verified, { type: 'verification_undone', report: 'NoExiste' })).toBe(verified);
+  });
+
+  it('el mismo replay desde 0 (recarga de la página) da el mismo estado que seguirlo en directo', () => {
+    const live = replay(verification, replay(successfulRun));
+    const fromZero = runReducer(createRunState(runningStatus), { type: 'events', events: [...successfulRun, ...verification] });
+    expect(fromZero).toEqual(live);
   });
 });
 
@@ -446,5 +610,96 @@ describe('mainArgument', () => {
     expect(mainArgument('{}')).toBeNull();
     expect(mainArgument('{"path":"src/muy/lar')).toBe('{"path":"src/muy/lar');
     expect(mainArgument(null)).toBeNull();
+  });
+});
+
+describe('runReducer: preparación por subsistema e investigaciones (modo B)', () => {
+  const prepared = (events: AnalysisEventDto[]) => replay(events, createRunState(preparedRunStatus));
+  const indexOf = (type: string, source: string) => preparedRun.findIndex((e) => e.type === type && e.source === source);
+  const upToEvent = (type: string, source: string) => preparedRun.slice(0, indexOf(type, source) + 1);
+
+  it('la ejecución completa deja las cinco fases y los dos carriles de modo B terminados, sin carriles por investigación', () => {
+    const state = prepared(preparedRun);
+    expect(Object.values(state.phases).map((p) => p.status)).toEqual(['succeeded', 'succeeded', 'succeeded', 'succeeded', 'succeeded']);
+    expect(state.status).toBe('succeeded');
+    // Un carril por informe: las investigaciones (`Investigation_<tipo>_<id>`) no abren carriles propios.
+    expect(state.auditorOrder).toEqual(['AnalisisFuncional', 'FlujosEndToEnd']);
+    expect(state.auditors.AnalisisFuncional).toMatchObject({ status: 'succeeded', health: 'Amber', fileName: '01_analisis_funcional.md', error: null });
+    expect(state.auditors.FlujosEndToEnd).toMatchObject({ status: 'succeeded', health: 'Amber', fileName: '04_flujos_end_to_end.md', error: null });
+    expect(progressOf(state)).toMatchObject({ done: 7, total: 7, ratio: 1 });
+    expect(state.pendingToolArgs).toEqual({});
+  });
+
+  it('la fase facets sigue en marcha entre las facetas y los cuatro pasos de preparación, y la cierra TimeBudgetStep', () => {
+    const facetsStart = preparedRun[indexOf('step.started', 'SqlFacetExtractorStep')].ts;
+    for (const source of ['RepositoryInventoryStep', 'DomainDiscoveryStep', 'CoveragePlanningStep']) {
+      const state = prepared(upToEvent('step.completed', source));
+      expect(state.phases.facets, source).toMatchObject({ status: 'running', finishedAt: null, startedAt: facetsStart });
+      expect(state.phases.reports.status, source).toBe('pending');
+    }
+
+    const closed = prepared(upToEvent('step.completed', 'TimeBudgetStep'));
+    const finishedAt = preparedRun[indexOf('step.completed', 'TimeBudgetStep')].ts;
+    expect(closed.phases.facets).toMatchObject({ status: 'succeeded', startedAt: facetsStart, finishedAt, error: null });
+    // La duración cubre las facetas y la preparación (de la primera a la última), no solo el último paso.
+    expect(closed.phases.facets.durationMs).toBe(Date.parse(finishedAt) - Date.parse(facetsStart));
+  });
+
+  it('el sub-step DomainNaming (LLM) y sus llamadas no mueven fases ni carriles, pero cuentan en el consumo', () => {
+    const state = prepared(upToEvent('llm.response', 'DomainNaming'));
+    expect(state.phases.facets.status).toBe('running');
+    expect(state.auditorOrder).toEqual(['AnalisisFuncional', 'FlujosEndToEnd']);
+    expect(Object.values(state.auditors).map((a) => a.status)).toEqual(['pending', 'pending']);
+    expect(state.usage).toMatchObject({ calls: 1, totalTokens: 700 });
+  });
+
+  it('el fallo de un paso de preparación marca la fase facets como fallida', () => {
+    const failedAt = indexOf('step.completed', 'CoveragePlanningStep');
+    const failing = preparedRun.slice(0, failedAt + 1).map((e, i) =>
+      i === failedAt ? { ...e, level: 'error' as const, data: { ...e.data, success: false, error: 'boom' } } : e,
+    );
+    const state = prepared(failing);
+    expect(state.phases.facets).toMatchObject({ status: 'failed', error: 'boom' });
+    expect(state.errors).toBe(1);
+  });
+
+  it('con la preparación apagada (Mode = Off) las facetas se cierran con SqlFacetExtractorStep como siempre', () => {
+    const preparation = ['RepositoryInventoryStep', 'DomainDiscoveryStep', 'DomainNaming', 'CoveragePlanningStep', 'TimeBudgetStep'];
+    const withoutPreparation = preparedRun.filter((e) => !preparation.includes(e.source ?? ''));
+    const closedAt = withoutPreparation.findIndex((e) => e.type === 'step.completed' && e.source === 'SqlFacetExtractorStep');
+    const state = prepared(withoutPreparation.slice(0, closedAt + 1));
+    expect(state.phases.facets).toMatchObject({ status: 'succeeded', durationMs: 1000 });
+  });
+
+  it('las investigaciones suman al carril de su informe: tools, consumo y tool activa, sin tocar el otro carril', () => {
+    // La primera investigación de AnalisisFuncional (catalog): llamada con una tool, sin cerrar todavía.
+    const toolStarted = preparedRun.findIndex((e) => e.type === 'tool.started' && e.source === 'Investigation_AnalisisFuncional_catalog');
+    const during = prepared(preparedRun.slice(0, toolStarted + 1));
+    expect(during.auditors.AnalisisFuncional).toMatchObject({ status: 'running', toolCalls: 1, activeTool: 'view_file' });
+    expect(during.auditors.FlujosEndToEnd).toMatchObject({ status: 'running', toolCalls: 0, activeTool: null });
+    // El argumento de la tool se empareja por step: la investigación tiene su propia cola.
+    expect(during.log.at(-1)).toMatchObject({ type: 'tool.started', source: 'Investigation_AnalisisFuncional_catalog', report: 'AnalisisFuncional', detail: 'src/catalog/Service.cs' });
+
+    // Las cuatro investigaciones (dos por informe, una tool cada una) antes de que arranque la consolidación.
+    const consolidating = preparedRun.findIndex((e) => e.type === 'llm.response' && e.source === 'Auditor_AnalisisFuncional');
+    const after = prepared(preparedRun.slice(0, consolidating));
+    expect(after.auditors.AnalisisFuncional).toMatchObject({ toolCalls: 2, toolErrors: 0, activeTool: null, status: 'running' });
+    expect(after.auditors.FlujosEndToEnd).toMatchObject({ toolCalls: 2, toolErrors: 0, activeTool: null, status: 'running' });
+    expect(after.auditors.AnalisisFuncional.toolTimes).toHaveLength(2);
+    // Consumo: una llamada de nombrado y dos por investigación (4 investigaciones).
+    expect(after.usage).toMatchObject({ calls: 1 + 4 * 2, unpricedCalls: 0 });
+  });
+
+  it('un lote con la ejecución entera da el mismo estado que aplicarla evento a evento, y repetirlo no cambia nada', () => {
+    const live = prepared(preparedRun);
+    const batched = runReducer(createRunState(preparedRunStatus), { type: 'events', events: preparedRun });
+    expect(batched).toEqual(live);
+    expect(runReducer(live, { type: 'events', events: preparedRun })).toBe(live);
+  });
+
+  it('los informes terminados de una ejecución con investigaciones se pueden regenerar y verificar', () => {
+    const state = prepared(preparedRun);
+    expect(canRegenerate(state, 'AnalisisFuncional')).toBe(true);
+    expect(canVerify(state, 'FlujosEndToEnd')).toBe(true);
   });
 });

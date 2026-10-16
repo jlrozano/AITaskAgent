@@ -110,5 +110,38 @@ public class TinyTemplateRenderedTests
             Directory.Delete(tempDir, recursive: true);
         }
     }
-}
 
+    private sealed class RecordingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    [Fact]
+    public void Unresolved_placeholder_logs_a_warning_with_its_name_and_still_renders_empty()
+    {
+        var logger = new RecordingLogger();
+
+        var result = TinyTemplateRendered.Render("a{{ nope.missing }}b", new Model("x"), logger: logger);
+
+        Assert.Equal("ab", result);
+        var warning = Assert.Single(logger.Entries);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, warning.Level);
+        Assert.Contains("nope.missing", warning.Message);
+    }
+
+    [Fact]
+    public void Resolved_or_defaulted_placeholders_do_not_log()
+    {
+        var logger = new RecordingLogger();
+
+        var result = TinyTemplateRendered.Render("{{ content }} {{ other ?? fallback }}", new Model("x"), logger: logger);
+
+        Assert.Equal("x fallback", result);
+        Assert.Empty(logger.Entries);
+    }
+}

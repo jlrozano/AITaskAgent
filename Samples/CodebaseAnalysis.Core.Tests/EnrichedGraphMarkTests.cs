@@ -15,7 +15,7 @@ namespace CodebaseAnalysis.Core.Tests;
 
 /// <summary>
 /// La marca de grafo enriquecido (<see cref="GraphStatusResult.IsEnriched"/>) es la del enriquecimiento de código de
-/// <see cref="BdpEnricherStep"/>: ni la ingesta de Office ni el analizador Java la ponen (auditoría 2026-09-29, H-10), y
+/// <see cref="DotNetEnricherStep"/>: ni la ingesta de Office ni el analizador Java la ponen (auditoría 2026-09-29, H-10), y
 /// tampoco el fallback del LLM, cuya salida se marca y se filtra en código (H-3).
 /// </summary>
 [Collection(ConsoleCollection.Name)]

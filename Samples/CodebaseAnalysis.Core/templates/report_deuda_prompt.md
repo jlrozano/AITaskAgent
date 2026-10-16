@@ -9,9 +9,19 @@ Genera el **Informe de Matriz de Deuda Técnica y Priorización de Refactorizaci
 {{ hotspots_ranking }}
 ```
 
-- **Cobertura Documental por Componente (`doc_coverage`)**:
+- **Cobertura Documental por Componente (`doc_coverage`)**: en C# y Java `documented` cuenta solo la documentación reconocida (`docstring_source` `xml` o `javadoc`); `documented_as_comment` son los comentarios `//` anteriores a la declaración y `cbm_docstring_unverified` los `docstring` sin fuente que dejó el indexador (no son documentación fiable). En el resto de lenguajes `documented` cuenta el `docstring` del indexador.
 ```json
 {{ doc_coverage_metrics }}
+```
+
+- **Marcas TODO / FIXME / HACK**: totales, por tipo, ficheros con más y las más graves (`FIXME` y `HACK` primero) con su cita `ruta:línea`. Deuda declarada por el propio equipo; en un repositorio grande no se listan todas, da los totales y los ejemplos verificados.
+```json
+{{ todo_markers }}
+```
+
+- **Código Comentado**: comentarios que el compilador parsea como código sin errores (no son prosa): bloques, líneas, ficheros con más y los bloques mayores con su cita. Son candidatos: lee el bloque antes de citarlo.
+```json
+{{ commented_code }}
 ```
 
 - **Elementos Obsoletos o Deprecados (`obsolete_elements`)**:
@@ -27,6 +37,24 @@ Genera el **Informe de Matriz de Deuda Técnica y Priorización de Refactorizaci
 - **Pantallas (JSP) con Acceso a Datos (SQL, `java.sql`, DAO) o Código de Negocio en Scriptlets (`suspicious`, con sus motivos; `session_access` es un dato aparte y no marca la pantalla)**:
 ```json
 {{ suspicious_jsps }}
+```
+
+### Preparación del Repositorio (inventario, mapa de dominios y plan de cobertura):
+Contexto para repartir el análisis por todo el repositorio. Los tres bloques llegan vacíos (`[]`, `{}` o sin texto) cuando no hubo preparación.
+
+- **Inventario del Repositorio** (tamaño, lenguajes, cobertura del grafo frente al disco y límites de los datos):
+```json
+{{ repository_inventory }}
+```
+
+- **Mapa de Dominios** (subsistemas detectados, con su resumen y los ficheros que los componen):
+```json
+{{ domain_map }}
+```
+
+- **Plan de Cobertura** (subsistemas elegidos por prioridad, y excluidos con su motivo):
+```json
+{{ coverage_plan }}
 ```
 
 ---
@@ -53,8 +81,16 @@ Genera el **Informe de Matriz de Deuda Técnica y Priorización de Refactorizaci
      - **Matriz Esfuerzo / Impacto de Hotspots** como `flowchart LR` con cuatro `subgraph`, uno por cuadrante (impacto alto y esfuerzo bajo, impacto alto y esfuerzo alto, impacto bajo y esfuerzo bajo, impacto bajo y esfuerzo alto), que contienen los identificadores de los hallazgos. No uses `quadrantChart`.
      - **Hoja de Ruta por Sprints** como `flowchart LR`, un `subgraph` por sprint con sus hitos en orden.
 
+4. **Protocolo de Cobertura por Subsistemas** (solo si el plan de cobertura trae subsistemas elegidos):
+   - Recorre uno a uno los subsistemas elegidos del plan y examina en cada uno sus hotspots, las marcas TODO/FIXME/HACK, el código comentado y los elementos obsoletos. No concentres el informe en el subsistema que tenga más datos pre-extraídos: un listado dominado por uno solo no representa el repositorio, y la deuda de los demás quedaría fuera de la matriz de priorización.
+   - Cada subsistema elegido recibe como mínimo una comprobación con herramientas, con su cita `ruta:línea`, o la línea «Sin hallazgos con la evidencia disponible» si lo comprobado está limpio. Lo que no llegues a recorrer se declara como no cubierto, no se rellena por suposición.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas recorridos, excluidos por el plan con su motivo, y no recorridos por falta de evidencia o de tiempo. Cada subsistema se nombra exactamente como figura en el mapa de dominios. Una frase final indica que las conclusiones valen para lo recorrido. Este apartado no define hallazgos ni lleva identificadores.
+   - Si el inventario, el mapa y el plan llegan vacíos, no hubo preparación: aplica el resto de las instrucciones sin este protocolo y omite el apartado «Cobertura».
+
 ---
 
 {{ include '_provided_documentation.md' }}
+
+**Identificadores de hallazgo de este informe:** el número de informe es `08`. Todos llevan el formato `08-CAT-nnn` (por ejemplo `08-IMP-001`, `08-DIS-001`).
 
 @[_common_rules.md]

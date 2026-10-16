@@ -243,6 +243,13 @@ public static class StrutsJspWriter
 
     private sealed record ClassNode(long Id, string FilePath);
 
+    /// <summary>Las clases Java del grafo por nombre simple y, si las escribió el analizador Java, por FQN exacto de javac.</summary>
+    private sealed class ClassIndex
+    {
+        public Dictionary<string, List<ClassNode>> ByName { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, long> ByFqn { get; } = new(StringComparer.Ordinal);
+    }
+
     private sealed class Pass(SqliteConnection conn, SqliteTransaction tx, string project, DateTimeOffset enrichedAt, RepositoryScanResult scan)
         : IDisposable
     {
@@ -478,7 +485,7 @@ public static class StrutsJspWriter
                         ["include"] = action.Include,
                         ["config_file"] = config.ConfigFile
                     };
-                    // Sin prefijo de proyecto, como las Route de cbm y de BdpGraphEnricher.
+                    // Sin prefijo de proyecto, como las Route de cbm y de DotNetEnricher.
                     var qn = $"__route__ANY__{routePath}";
                     if (await CreateNodeAsync(RouteLabel, routePath, qn, config.ConfigFile, action.Line, action.Line, properties, ct) is not { } id)
                         continue;
@@ -741,11 +748,11 @@ public static class StrutsJspWriter
             return string.Join('/', parts);
         }
 
-        private async Task<Dictionary<string, List<ClassNode>>> LoadClassesAsync(CancellationToken ct)
+        private async Task<ClassIndex> LoadClassesAsync(CancellationToken ct)
         {
-            var classes = new Dictionary<string, List<ClassNode>>(StringComparer.Ordinal);
+            var classes = new ClassIndex();
             using var select = Command("""
-                SELECT id, name, file_path FROM nodes
+                SELECT id, name, file_path, json_extract(properties, '$.fqn') FROM nodes
                 WHERE label = 'Class' AND project = @project AND file_path LIKE '%.java'
                 ORDER BY id
                 """);
@@ -754,20 +761,27 @@ public static class StrutsJspWriter
             while (await reader.ReadAsync(ct))
             {
                 var name = reader.GetString(1);
-                if (!classes.TryGetValue(name, out var list))
-                    classes[name] = list = [];
-                list.Add(new ClassNode(reader.GetInt64(0), reader.IsDBNull(2) ? "" : reader.GetString(2).Replace('\\', '/')));
+                if (!classes.ByName.TryGetValue(name, out var list))
+                    classes.ByName[name] = list = [];
+                var id = reader.GetInt64(0);
+                list.Add(new ClassNode(id, reader.IsDBNull(2) ? "" : reader.GetString(2).Replace('\\', '/')));
+                if (!reader.IsDBNull(3) && reader.GetString(3) is { Length: > 0 } fqn)
+                    classes.ByFqn.TryAdd(fqn, id);
             }
             return classes;
         }
 
         /// <summary>
-        /// Clase de la acción: <c>label='Class'</c>, <c>name</c> = nombre simple y <c>file_path</c> terminado en
-        /// <c>/&lt;paquete como ruta&gt;/&lt;Simple&gt;.java</c>. Una clase anidada (<c>a.B$C</c>) vive en <c>B.java</c>.
+        /// Clase de la acción. Primero por el FQN que javac escribió en la propiedad <c>fqn</c> del nodo (<c>a.B$C</c> es <c>a.B.C</c>);
+        /// si el analizador Java no pasó por esa clase, por el camino de antes: <c>label='Class'</c>, <c>name</c> = nombre simple y
+        /// <c>file_path</c> terminado en <c>/&lt;paquete como ruta&gt;/&lt;Simple&gt;.java</c> (una clase anidada vive en <c>B.java</c>).
         /// </summary>
-        private static long? FindClass(Dictionary<string, List<ClassNode>> classes, string type)
+        private static long? FindClass(ClassIndex index, string type)
         {
             var fqn = type.Trim();
+            if (index.ByFqn.TryGetValue(fqn.Replace('$', '.'), out var exact))
+                return exact;
+            var classes = index.ByName;
             var nested = fqn.IndexOf('$');
             var outerFqn = nested < 0 ? fqn : fqn[..nested];
             var simple = fqn[(Math.Max(fqn.LastIndexOf('.'), fqn.LastIndexOf('$')) + 1)..];

@@ -18,6 +18,7 @@
     <Project Path="OfficeTools.Tests/OfficeTools.Tests.csproj" />
     <Project Path="Samples/CodebaseAnalysis.Core.Tests/CodebaseAnalysis.Core.Tests.csproj" />
     <Project Path="Samples/CodebaseAnalysisWeb.Tests/CodebaseAnalysisWeb.Tests.csproj" />
+    <Project Path="Samples/DotNetEnricher.Tests/DotNetEnricher.Tests.csproj" />
   </Folder>
   <Folder Name="/Samples/">
     <Project Path="Samples/AdvancedLlmPipeline/Samples.AdvancedLlmPipeline.csproj" />
@@ -31,5 +32,6 @@
     <Project Path="Samples/CodebaseAnalysis.Core/CodebaseAnalysis.Core.csproj" />
     <Project Path="Samples/CodebaseAnalysisPipeline/Samples.CodebaseAnalysisPipeline.csproj" />
     <Project Path="Samples/CodebaseAnalysisWeb/CodebaseAnalysisWeb.csproj" />
+    <Project Path="Samples/DotNetEnricher/DotNetEnricher.csproj" />
   </Folder>
 </Solution>

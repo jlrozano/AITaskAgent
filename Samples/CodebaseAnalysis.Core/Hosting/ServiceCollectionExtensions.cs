@@ -4,7 +4,7 @@ using OpenAILLmService;
 
 namespace CodebaseAnalysis.Core.Hosting;
 
-/// <summary>Valores de <c>ServiceType</c> de un proveedor, y claves de su <see cref="ILlmService"/> en DI.</summary>
+/// <summary>Valores de <c>ServiceType</c> de un proveedor: el <see cref="ILlmService.Name"/> de cada servicio del sample.</summary>
 public static class LlmServiceTypes
 {
     public const string AzureOpenAI = "azure-openai";
@@ -15,10 +15,9 @@ public static class LlmServiceTypes
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registra los tres servicios LLM concretos, un <see cref="ILlmService"/> con clave por cada
-    /// <see cref="LlmServiceTypes"/> (así <see cref="LlmRoleFactory"/> resuelve el <c>ServiceType</c> de
-    /// cada proveedor, y un test puede registrar el suyo con otra clave) y el <see cref="ILlmService"/>
-    /// por defecto, que es Azure.
+    /// Registra los tres servicios LLM concretos como <see cref="ILlmService"/>: el framework resuelve el <c>ServiceType</c>
+    /// de cada proveedor por su <see cref="ILlmService.Name"/> entre los registrados. Azure va el último porque es el
+    /// <see cref="ILlmService"/> por defecto.
     /// </summary>
     public static IServiceCollection AddCodebaseAnalysisLlmServices(this IServiceCollection services)
     {
@@ -26,10 +25,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<OpenAILlmService>();
         services.AddSingleton<OpenRouterLlmService>();
 
-        services.AddKeyedSingleton<ILlmService>(LlmServiceTypes.AzureOpenAI, (sp, _) => sp.GetRequiredService<AzureOpenAILlmService>());
-        services.AddKeyedSingleton<ILlmService>(LlmServiceTypes.OpenAI, (sp, _) => sp.GetRequiredService<OpenAILlmService>());
-        services.AddKeyedSingleton<ILlmService>(LlmServiceTypes.OpenRouter, (sp, _) => sp.GetRequiredService<OpenRouterLlmService>());
-
+        services.AddSingleton<ILlmService>(sp => sp.GetRequiredService<OpenAILlmService>());
+        services.AddSingleton<ILlmService>(sp => sp.GetRequiredService<OpenRouterLlmService>());
         services.AddSingleton<ILlmService>(sp => sp.GetRequiredService<AzureOpenAILlmService>());
         return services;
     }

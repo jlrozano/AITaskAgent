@@ -1,0 +1,190 @@
+{
+  "batch": "llm-configuration",
+  "files": [
+    {"path": "Configuration/ServiceCollectionExtensions.cs", "role": "infrastructure/DI", "summary": "Extension methods que registran el framework en IServiceCollection (opciones, Pipeline, plantillas, canal de eventos, almacenes en memoria, caché, fábrica de ConversationContext) y UseAITaskAgent, que fuerza singletons y registra las ITool en el singleton estático AvailableTools. Contiene además ConfigureLlmEnvironmentOptions, que convierte la sección de configuración LlmProviders (modelos Raw) en un LlmEnvironment con proveedores, roles y fallbacks validados, y falla en arranque ante referencias inexistentes."},
+    {"path": "Core/Execution/ExcludeFromLlmSchemaAttribute.cs", "role": "model/attribute", "summary": "Atributo marcador de propiedad que excluye un campo del JSON schema enviado al LLM sin ocultarlo de la serialización Newtonsoft general (a diferencia de JsonIgnore), de modo que sigue visible a las plantillas. Lo consume StepResultFactory (fuera del lote)."},
+    {"path": "Core/Models/LlmResponseEmptyException.cs", "role": "model/exception", "summary": "Excepción para respuestas de proveedor sin choices (0 candidatos). Expone Model y Provider y ofrece dos constructores (con y sin excepción interna). El comentario afirma que es retriable pero la clase no transporta ningún indicador de ello."},
+    {"path": "Core/Models/ResumeRequest.cs", "role": "model", "summary": "DTO con la información necesaria para reanudar un pipeline suspendido: ruta del paso objetivo, entrada del usuario y metadatos opcionales."},
+    {"path": "Core/Models/StepValidationException.cs", "role": "model/exception", "summary": "Excepción para fallos de un paso de validación determinista; guarda StepName y ValidationError y compone el mensaje con ambos."},
+    {"path": "LLM/Abstractions/ILlmService.cs", "role": "contract", "summary": "Contrato de un servicio LLM: nombre de proveedor, invocación completa, invocación en streaming, estimación de tokens y tamaño máximo de contexto."},
+    {"path": "LLM/Abstractions/LlmHttpResponse.cs", "role": "model", "summary": "Record genérico que envuelve datos de respuesta con código HTTP y cabeceras, con IsSuccess calculado para 2xx. Destinado a lógica de reintento de los servicios."},
+    {"path": "LLM/Abstractions/NullLlmService.cs", "role": "implementation/sentinel", "summary": "ILlmService centinela interno que lanza InvalidOperationException si se invoca (preset YAML sin resolver). EstimateTokenCount usa length/4 y GetMaxContextTokens devuelve 0."},
+    {"path": "LLM/Configuration/LlmEnvironment.cs", "role": "model/config", "summary": "Raíz de configuración LLM: diccionarios de proveedores y roles (insensibles a mayúsculas), rol por defecto y lista de fallbacks globales sin resolver (FallbackProviderSettings)."},
+    {"path": "LLM/Configuration/LlmFallback.cs", "role": "model", "summary": "Record con un fallback ya resuelto: modelo, LlmProvider e inferencia opcional."},
+    {"path": "LLM/Configuration/LlmInferenceSettings.cs", "role": "model/config", "summary": "Record de parámetros de inferencia respaldado por un único JObject (Options). Las propiedades tipadas (Temperature, MaxTokens, UseStreaming, timeouts...) son fachadas que leen y escriben claves de ese JObject sin distinguir mayúsculas. Options.init fusiona en lugar de reemplazar. Incluye copia profunda en el constructor protegido."},
+    {"path": "LLM/Configuration/LlmPromptTemplates.cs", "role": "infrastructure", "summary": "Plantillas por defecto para inyectar el JSON schema en el system prompt o en el mensaje de usuario, con alias de solo lectura y helpers Format* que sustituyen los marcadores {schema} y {message} mediante string.Replace."},
+    {"path": "LLM/Configuration/LlmProvider.cs", "role": "model/config", "summary": "Describe un proveedor (BaseUrl, ApiKey, ApiVersion, inferencia por defecto, catálogo de modelos con precios, servicio) y calcula el coste en USD de una llamada a partir de precios por millón, con tratamiento de tokens cacheados. LlmModelSettings es el record de modelo con precios."},
+    {"path": "LLM/Configuration/LlmRole.cs", "role": "model/config", "summary": "Rol de LLM: proveedor, modelo, system prompt, inferencia, fallbacks y herramientas, todo con init."},
+    {"path": "LLM/Models/LlmProviderException.cs", "role": "model/exception", "summary": "Excepción que tipa un fallo del proveedor (HTTP, respuesta vacía, stream roto, circuito abierto) como distinto de un fallo de lógica del paso; es la única que activa el cambio a fallback en BaseLlmStep.SwitchToNextFallback. Lleva IsRetriable."},
+    {"path": "LLM/Models/LlmRequest.cs", "role": "model", "summary": "Record sellado de petición al LLM que hereda LlmInferenceSettings; añade conversación, ventana deslizante, system prompt, modelo, formato de respuesta, herramientas y credenciales de conexión (BaseUrl, ApiKey, ApiVersion). Copy() realiza un with superficial."},
+    {"path": "LLM/Models/LlmResponse.cs", "role": "model", "summary": "Record de un candidato generado: índice, contenido, razonamiento, motivo de fin normalizado y crudo, y tool calls."},
+    {"path": "LLM/Models/LlmStreamChunk.cs", "role": "model", "summary": "Fragmento de una respuesta en streaming: delta, indicador de thinking, fin, motivo de fin, contadores de tokens (total, prompt, completion, razonamiento, cacheados), deltas de tool calls, índice de choice y objeto nativo."},
+    {"path": "LLM/Steps/BaseLlmStep.LlmInvocation.cs", "role": "implementation/engine", "summary": "Parte parcial de BaseLlmStep con el bucle recursivo de herramientas (InvokeLlmWithToolsAsync), la detección de llamadas repetidas, la ejecución de tool calls, la invocación del servicio en modo batch o streaming con procesado de tags de acción, el cálculo de coste y la emisión de eventos LlmResponseEvent y telemetría."},
+    {"path": "LLM/Steps/BaseLlmStep.cs", "role": "implementation/engine", "summary": "Motor base de todos los pasos LLM: gestión del rol y fallbacks, estado por invocación en PipelineContext.StepState, ExecuteAsync con bookmark y reintento con feedback, FinalizeAsync que compacta la conversación, construcción de LlmRequest, configuración de salida JSON, parsing de respuesta y enriquecimiento del system prompt con herramientas y tags. Incluye la variante genérica BaseLlmStep<TIn,TOut>."},
+    {"path": "LLM/Steps/StatelessTemplateLlmStep.cs", "role": "implementation", "summary": "Paso de plantilla que crea una conversación limpia por ejecución en lugar de usar context.Conversation, con soporte de guardado/restauración de estado para HITL mediante campos de instancia."},
+    {"path": "LLM/Steps/TemplateLlmStep.cs", "role": "implementation", "summary": "Paso LLM con plantillas: nombres por defecto de plantilla de prompt/system derivados del nombre del paso, variables de paso en minúsculas y resolución de mensajes mediante PromptTemplateResolver y un ITemplateProvider opcional."},
+    {"path": "LLM/Support/LlmHelpers.cs", "role": "infrastructure", "summary": "Utilidades estáticas: limpieza de JSON de respuesta, clave normalizada de tool call, inyección del schema en system prompt o mensaje, truncado para errores y conversión de string a tipo destino."},
+    {"path": "LLM/Support/PromptTemplateResolver.cs", "role": "infrastructure", "summary": "Resuelve un prompt contra el input del paso y el contexto del pipeline (metadatos + variables en minúsculas) usando un ITemplateProvider o, si no hay, el renderizador estático TinyTemplateRendered. Compartido por TemplateLlmStep y YamlLlmStep."},
+    {"path": "Support/Template/FileTemplateProvider.cs", "role": "implementation", "summary": "Proveedor de plantillas desde ficheros .md de una carpeta, con caché LRU+TTL limitada por tamaño, comprobación de path traversal y render mediante un ITemplateRendered opcional o TinyTemplateRendered."},
+    {"path": "Support/Template/ITemplateRendered.cs", "role": "contract", "summary": "Contrato de motor de plantillas: Render(template, obj) devuelve texto con parámetros sustituidos."},
+    {"path": "Support/Template/TinyTemplateRendered.cs", "role": "implementation", "summary": "Motor de plantillas ligero basado en regex y JToken: elimina comentarios, expande includes {{ include 'x' }}, interpola {{ a.b | filtro ?? default }} con filtros json/yaml/csv/etc., y expande includes legacy @[ruta] al final. Serializa el modelo con propiedades en minúsculas. Incluye LowercaseNamingStrategy."}
+  ],
+  "types": [
+    {"name": "ServiceCollectionExtensions", "kind": "class", "path": "Configuration/ServiceCollectionExtensions.cs", "startLine": 24, "endLine": 324,
+     "purpose": "Clase estática de extensiones de DI. Registra opciones, Pipeline, infraestructura compartida y fábrica de ConversationContext; UseAITaskAgent inicializa singletons y registra ITool en el singleton estático AvailableTools.",
+     "collaborators": ["AITaskAgentOptions/PipelineOptions: se enlazan y proyectan desde configuración", "AvailableTools.Instance: registro estático de herramientas", "Pipeline, EventChannel, MemoryCacheService, TinyTemplateRendered: se registran como singletons", "ConfigureLlmEnvironmentOptions: configurador de LlmEnvironment"],
+     "members": [
+       {"name": "AddAITaskAgent(this IServiceCollection services)", "startLine": 31, "endLine": 94, "does": "Registra opciones del agente, configurador de LlmEnvironment, PipelineOptions, Pipeline, plantillas, EventChannel, almacenes en memoria, caché, ITools y fábrica transitoria de ConversationContext.", "inputs": "IServiceCollection; requiere IConfiguration con la sección raíz AITaskAgent en tiempo de resolución.", "outputs": "La misma colección para encadenar.", "sideEffects": "Muta la colección de servicios; mezcla AddSingleton y TryAddSingleton.", "throws": "ninguno en el registro; las factorías pueden fallar al resolverse."},
+       {"name": "UseAITaskAgent(this IServiceProvider serviceProvider)", "startLine": 100, "endLine": 114, "does": "Fuerza la creación de IPipeline y PipelineContextFactory y registra cada ITool resuelta en AvailableTools.Instance.", "inputs": "ServiceProvider ya construido.", "outputs": "El mismo provider.", "sideEffects": "Muta el singleton estático AvailableTools.Instance (estado global de proceso).", "throws": "InvalidOperationException si IPipeline o PipelineContextFactory no están registrados."},
+       {"name": "AddToolDiscovery(IServiceCollection services)", "startLine": 116, "endLine": 131, "does": "Registra como ITool singleton todos los tipos concretos de ITool del ensamblado de entrada; su llamada está comentada.", "inputs": "IServiceCollection.", "outputs": "void.", "sideEffects": "Muta la colección (si se invocara).", "throws": "ninguno"},
+       {"name": "SafeGetTypes(Assembly assembly)", "startLine": 133, "endLine": 136, "does": "Devuelve los tipos de un ensamblado o un array vacío si GetTypes lanza cualquier excepción.", "inputs": "Assembly.", "outputs": "Type[] (vacío ante error).", "sideEffects": "ninguno", "throws": "ninguno (catch general)."}
+     ]},
+    {"name": "ConfigureLlmEnvironmentOptions", "kind": "class", "path": "Configuration/ServiceCollectionExtensions.cs", "startLine": 140, "endLine": 294,
+     "purpose": "IConfigureOptions<LlmEnvironment> privado que lee la sección LlmProviders, enlaza modelos Raw, resuelve cada proveedor contra los ILlmService registrados y construye roles y fallbacks, lanzando excepciones claras ante configuración inconsistente.",
+     "collaborators": ["IServiceProvider: resuelve IConfiguration e ILlmService", "LlmProvider/LlmRole/LlmFallback: objetos que construye", "LlmEnvironmentRaw/LlmProviderRaw/LlmRoleRaw: modelos de binding", "ConfigurationPatchExtensions.GetEx: enlace de configuración"],
+     "members": [
+       {"name": "ConfigureLlmEnvironmentOptions(IServiceProvider sp) [ctor primario]", "startLine": 140, "endLine": 140, "does": "Captura el IServiceProvider.", "inputs": "IServiceProvider raíz.", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Configure(LlmEnvironment options)", "startLine": 142, "endLine": 265, "does": "Enlaza la sección, crea LlmProvider por entrada con su ILlmService (coincidencia exacta o por subcadena), construye fallbacks globales, copia los FallbackProviders en bruto, crea roles validando proveedor y modelo, asigna DefaultRole y valida que exista.", "inputs": "LlmEnvironment recién construido; configuración de LlmProviders y ILlmService registrados.", "outputs": "Muta options.Providers, Roles, FallbackProviders y DefaultRole.", "sideEffects": "Resuelve servicios del contenedor; escribe en options.", "throws": "InvalidOperationException si falta servicio, BaseUrl, Provider o Model de rol, o el rol por defecto no existe."},
+       {"name": "BuildFallback(FallbackProviderSettings f, Dictionary<string, LlmProvider> providers, string origin)", "startLine": 271, "endLine": 293, "does": "Convierte un fallback en bruto en LlmFallback validando proveedor y modelo.", "inputs": "Ajustes en bruto, diccionario de proveedores ya construidos, texto de origen para errores.", "outputs": "LlmFallback.", "sideEffects": "ninguno", "throws": "InvalidOperationException si el proveedor no existe o el modelo está vacío."}
+     ]},
+    {"name": "LlmEnvironmentRaw", "kind": "class", "path": "Configuration/ServiceCollectionExtensions.cs", "startLine": 296, "endLine": 302,
+     "purpose": "Modelo de enlace intermedio de configuración para LlmEnvironment: proveedores, roles, rol por defecto y fallbacks globales.",
+     "collaborators": ["ConfigureLlmEnvironmentOptions: lo rellena el binder y lo lee"],
+     "members": [
+       {"name": "Providers { get; set; }", "startLine": 298, "endLine": 298, "does": "Diccionario de LlmProviderRaw.", "inputs": "binder", "outputs": "propiedad", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Roles { get; set; }", "startLine": 299, "endLine": 299, "does": "Diccionario de LlmRoleRaw.", "inputs": "binder", "outputs": "propiedad", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "DefaultRole { get; set; }", "startLine": 300, "endLine": 300, "does": "Nombre del rol por defecto (default).", "inputs": "binder", "outputs": "propiedad", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "FallbackProviders { get; set; }", "startLine": 301, "endLine": 301, "does": "Lista de fallbacks globales en bruto.", "inputs": "binder", "outputs": "propiedad", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmProviderRaw", "kind": "class", "path": "Configuration/ServiceCollectionExtensions.cs", "startLine": 304, "endLine": 312,
+     "purpose": "Modelo de enlace de un proveedor: URL, clave, versión, tipo de servicio, inferencia y catálogo de modelos.",
+     "collaborators": ["LlmInferenceSettings, LlmModelSettings: tipos de propiedades"],
+     "members": [
+       {"name": "BaseUrl, ApiKey, ApiVersion, ServiceType, Inference, Models (propiedades)", "startLine": 306, "endLine": 311, "does": "Propiedades auto-implementadas de enlace.", "inputs": "binder", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmRoleRaw", "kind": "class", "path": "Configuration/ServiceCollectionExtensions.cs", "startLine": 314, "endLine": 321,
+     "purpose": "Modelo de enlace de un rol: nombre de proveedor, modelo, system prompt, inferencia y fallbacks propios.",
+     "collaborators": ["FallbackProviderSettings, LlmInferenceSettings: tipos de propiedades"],
+     "members": [
+       {"name": "Provider, Model, SystemPrompt, Inference, Fallbacks (propiedades)", "startLine": 316, "endLine": 320, "does": "Propiedades auto-implementadas de enlace.", "inputs": "binder", "outputs": "propiedades", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "ExcludeFromLlmSchemaAttribute", "kind": "class", "path": "Core/Execution/ExcludeFromLlmSchemaAttribute.cs", "startLine": 14, "endLine": 15,
+     "purpose": "Atributo sellado aplicable a propiedades que indica a StepResultFactory que omita el campo del schema JSON enviado al LLM.",
+     "collaborators": ["StepResultFactory: consumidor (fuera del lote, según el comentario)"],
+     "members": []},
+    {"name": "LlmResponseEmptyException", "kind": "class", "path": "Core/Models/LlmResponseEmptyException.cs", "startLine": 8, "endLine": 26,
+     "purpose": "Excepción de respuesta vacía de proveedor (0 choices) con Model y Provider.",
+     "collaborators": ["Exception: base"],
+     "members": [
+       {"name": "Model { get; }", "startLine": 10, "endLine": 10, "does": "Modelo consultado.", "inputs": "ctor", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Provider { get; }", "startLine": 11, "endLine": 11, "does": "Proveedor consultado.", "inputs": "ctor", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "LlmResponseEmptyException(string model, string provider)", "startLine": 13, "endLine": 18, "does": "Compone el mensaje y guarda modelo y proveedor.", "inputs": "model, provider", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "LlmResponseEmptyException(string model, string provider, Exception innerException)", "startLine": 20, "endLine": 25, "does": "Igual que el anterior con excepción interna.", "inputs": "model, provider, innerException", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "ResumeRequest", "kind": "class", "path": "Core/Models/ResumeRequest.cs", "startLine": 6, "endLine": 22,
+     "purpose": "DTO para reanudar un pipeline suspendido.",
+     "collaborators": [],
+     "members": [
+       {"name": "TargetStepPath { get; set; }", "startLine": 11, "endLine": 11, "does": "Ruta exacta del paso a la espera.", "inputs": "llamador", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "UserInput { get; set; }", "startLine": 16, "endLine": 16, "does": "Dato del usuario a inyectar; por defecto new object().", "inputs": "llamador", "outputs": "object", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Metadata { get; set; }", "startLine": 21, "endLine": 21, "does": "Estado personalizado opcional.", "inputs": "llamador", "outputs": "object?", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "StepValidationException", "kind": "class", "path": "Core/Models/StepValidationException.cs", "startLine": 6, "endLine": 24,
+     "purpose": "Excepción de fallo de validación determinista de un paso.",
+     "collaborators": ["Exception: base"],
+     "members": [
+       {"name": "StepName { get; }", "startLine": 8, "endLine": 8, "does": "Nombre del paso.", "inputs": "ctor", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "ValidationError { get; }", "startLine": 9, "endLine": 9, "does": "Texto del error de validación.", "inputs": "ctor", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "StepValidationException(string stepName, string validationError)", "startLine": 11, "endLine": 16, "does": "Construye el mensaje y guarda campos.", "inputs": "stepName, validationError", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "StepValidationException(string stepName, string validationError, Exception innerException)", "startLine": 18, "endLine": 23, "does": "Igual con excepción interna.", "inputs": "stepName, validationError, innerException", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "ILlmService", "kind": "interface", "path": "LLM/Abstractions/ILlmService.cs", "startLine": 8, "endLine": 38,
+     "purpose": "Contrato de proveedor LLM: invocación completa y en streaming, estimación de tokens y límite de contexto.",
+     "collaborators": ["LlmRequest/LlmResult/LlmStreamChunk: tipos de entrada y salida"],
+     "members": [
+       {"name": "Name { get; }", "startLine": 13, "endLine": 13, "does": "Nombre del proveedor.", "inputs": "n/a", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "InvokeAsync(LlmRequest request, CancellationToken ct)", "startLine": 18, "endLine": 20, "does": "Invoca el LLM y devuelve la respuesta completa.", "inputs": "request, token", "outputs": "Task<LlmResult>", "sideEffects": "I/O de red en implementaciones", "throws": "depende de la implementación"},
+       {"name": "InvokeStreamingAsync(LlmRequest request, CancellationToken ct)", "startLine": 25, "endLine": 27, "does": "Invoca con respuesta en streaming.", "inputs": "request, token", "outputs": "IAsyncEnumerable<LlmStreamChunk>", "sideEffects": "I/O de red en implementaciones", "throws": "depende de la implementación"},
+       {"name": "EstimateTokenCount(string text)", "startLine": 32, "endLine": 32, "does": "Estima tokens de un texto.", "inputs": "texto", "outputs": "int", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "GetMaxContextTokens(string? model = null)", "startLine": 37, "endLine": 37, "does": "Tamaño máximo de contexto del modelo.", "inputs": "modelo opcional", "outputs": "int", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmHttpResponse<TResponse>", "kind": "record", "path": "LLM/Abstractions/LlmHttpResponse.cs", "startLine": 8, "endLine": 14,
+     "purpose": "Envoltorio de datos con metadatos HTTP para lógica de reintento.",
+     "collaborators": ["HttpStatusCode: estado"],
+     "members": [
+       {"name": "Data { get; init; } (required)", "startLine": 10, "endLine": 10, "does": "Payload.", "inputs": "inicializador", "outputs": "TResponse", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "StatusCode { get; init; } (required)", "startLine": 11, "endLine": 11, "does": "Código HTTP.", "inputs": "inicializador", "outputs": "HttpStatusCode", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Headers { get; init; }", "startLine": 12, "endLine": 12, "does": "Cabeceras como diccionario (por defecto vacío).", "inputs": "inicializador", "outputs": "Dictionary<string,string>", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "IsSuccess { get; }", "startLine": 13, "endLine": 13, "does": "True si el código está en 200-299.", "inputs": "StatusCode", "outputs": "bool", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "NullLlmService", "kind": "class", "path": "LLM/Abstractions/NullLlmService.cs", "startLine": 10, "endLine": 26,
+     "purpose": "Servicio centinela interno: lanza al invocarse para hacer visible un preset no resuelto.",
+     "collaborators": ["ILlmService: implementa", "BaseLlmStep.GetLlmService: lo usa como sustituto cuando no hay servicio"],
+     "members": [
+       {"name": "Name { get; }", "startLine": 12, "endLine": 12, "does": "Devuelve Null.", "inputs": "n/a", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "InvokeAsync(LlmRequest, CancellationToken)", "startLine": 14, "endLine": 17, "does": "Lanza siempre.", "inputs": "request", "outputs": "nunca devuelve", "sideEffects": "ninguno", "throws": "InvalidOperationException"},
+       {"name": "InvokeStreamingAsync(LlmRequest, CancellationToken)", "startLine": 19, "endLine": 21, "does": "Lanza al llamarse (no al enumerar).", "inputs": "request", "outputs": "nunca devuelve", "sideEffects": "ninguno", "throws": "InvalidOperationException"},
+       {"name": "EstimateTokenCount(string text)", "startLine": 23, "endLine": 23, "does": "Longitud/4.", "inputs": "texto", "outputs": "int", "sideEffects": "ninguno", "throws": "NullReferenceException si text es null"},
+       {"name": "GetMaxContextTokens(string? model)", "startLine": 25, "endLine": 25, "does": "Devuelve 0.", "inputs": "modelo", "outputs": "int", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmEnvironment", "kind": "class", "path": "LLM/Configuration/LlmEnvironment.cs", "startLine": 7, "endLine": 33,
+     "purpose": "Raíz de configuración LLM resuelta: proveedores, roles, rol por defecto y fallbacks globales en bruto.",
+     "collaborators": ["LlmProvider, LlmRole, FallbackProviderSettings: contenidos"],
+     "members": [
+       {"name": "Providers { get; init; }", "startLine": 13, "endLine": 13, "does": "Diccionario insensible a mayúsculas de proveedores.", "inputs": "configurador", "outputs": "Dictionary", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Roles { get; init; }", "startLine": 19, "endLine": 19, "does": "Diccionario insensible a mayúsculas de roles.", "inputs": "configurador", "outputs": "Dictionary", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "DefaultRole { get; set; }", "startLine": 30, "endLine": 30, "does": "Nombre del rol por defecto.", "inputs": "configurador", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "FallbackProviders { get; init; }", "startLine": 32, "endLine": 32, "does": "Lista de fallbacks globales sin resolver.", "inputs": "configurador", "outputs": "List", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "FallbackProviderSettings", "kind": "class", "path": "LLM/Configuration/LlmEnvironment.cs", "startLine": 35, "endLine": 50,
+     "purpose": "Ajustes en bruto de un fallback: nombre de proveedor, modelo e inferencia opcional.",
+     "collaborators": ["ConfigureLlmEnvironmentOptions.BuildFallback: lo convierte en LlmFallback"],
+     "members": [
+       {"name": "Provider { get; init; }", "startLine": 40, "endLine": 40, "does": "Clave del proveedor.", "inputs": "binder", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Model { get; init; }", "startLine": 45, "endLine": 45, "does": "Modelo del fallback.", "inputs": "binder", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "Inference { get; init; }", "startLine": 49, "endLine": 49, "does": "Inferencia opcional.", "inputs": "binder", "outputs": "LlmInferenceSettings?", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmFallback", "kind": "record", "path": "LLM/Configuration/LlmFallback.cs", "startLine": 3, "endLine": 7,
+     "purpose": "Fallback resuelto: modelo, proveedor e inferencia opcional.",
+     "collaborators": ["LlmProvider, LlmInferenceSettings"],
+     "members": [
+       {"name": "LlmFallback(string Model, LlmProvider Provider, LlmInferenceSettings? Inference = null)", "startLine": 3, "endLine": 7, "does": "Constructor posicional del record.", "inputs": "modelo, proveedor, inferencia", "outputs": "record", "sideEffects": "ninguno", "throws": "ninguno"}
+     ]},
+    {"name": "LlmInferenceSettings", "kind": "record", "path": "LLM/Configuration/LlmInferenceSettings.cs", "startLine": 10, "endLine": 172,
+     "purpose": "Parámetros de inferencia como fachada tipada sobre un JObject de opciones. Es la fuente única de verdad; las propiedades leen y escriben claves sin distinguir mayúsculas.",
+     "collaborators": ["LlmRequest: hereda", "LlmProvider/LlmRole/LlmFallback: lo transportan", "BaseLlmStep.BuildLlmRequestAsync: lo lee y fusiona"],
+     "members": [
+       {"name": "LlmInferenceSettings()", "startLine": 14, "endLine": 14, "does": "Constructor vacío.", "inputs": "n/a", "outputs": "instancia", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "LlmInferenceSettings(LlmInferenceSettings other) [protected]", "startLine": 16, "endLine": 19, "does": "Copia profunda de las opciones.", "inputs": "other", "outputs": "instancia", "sideEffects": "ninguno", "throws": "NullReferenceException si other es null"},
+       {"name": "Options { get; init; }", "startLine": 32, "endLine": 42, "does": "Acceso al JObject; el init fusiona claves reemplazando arrays.", "inputs": "JObject opcional", "outputs": "JObject", "sideEffects": "Merge sobre el JObject interno", "throws": "ninguno"},
+       {"name": "Temperature { get; init; }", "startLine": 46, "endLine": 50, "does": "Fachada float? sobre la clave Temperature.", "inputs": "valor", "outputs": "float?", "sideEffects": "escribe en Options", "throws": "JsonException si el valor no convierte"},
+       {"name": "TopP { get; init; }", "startLine": 52, "endLine": 56, "does": "Fachada float?.", "inputs": "valor", "outputs": "float?", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "MaxTokens { get; init; }", "startLine": 58, "endLine": 62, "does": "Fachada int?.", "inputs": "valor", "outputs": "int?", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "UseStreaming { get; init; }", "startLine": 64, "endLine": 68, "does": "Fachada bool; false si no existe.", "inputs": "valor", "outputs": "bool", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "JsonSupport { get; init; }", "startLine": 70, "endLine": 74, "does": "Fachada bool; false por defecto.", "inputs": "valor", "outputs": "bool", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "ToolSupport { get; init; }", "startLine": 76, "endLine": 80, "does": "Fachada bool; true por defecto.", "inputs": "valor", "outputs": "bool", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "Stop { get; init; }", "startLine": 82, "endLine": 86, "does": "Fachada de lista de strings; el getter crea una lista nueva en cada lectura.", "inputs": "valor", "outputs": "IList<string>?", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "UseMaxCompletionTokens { get; init; }", "startLine": 96, "endLine": 100, "does": "Fachada bool; indica usar max_completion_tokens.", "inputs": "valor", "outputs": "bool", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "RequestTimeoutSeconds { get; init; }", "startLine": 111, "endLine": 115, "does": "Fachada int? del límite por intento.", "inputs": "valor", "outputs": "int?", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "StreamingInactivityTimeoutSeconds { get; init; }", "startLine": 122, "endLine": 126, "does": "Fachada int? del límite de inactividad en streaming.", "inputs": "valor", "outputs": "int?", "sideEffects": "escribe en Options", "throws": "como Temperature"},
+       {"name": "GetOption<T>(string key)", "startLine": 140, "endLine": 140, "does": "Lee una opción por nombre.", "inputs": "clave", "outputs": "T? o default", "sideEffects": "ninguno", "throws": "JsonException si no convierte"},
+       {"name": "Get<T>(string key) [protected]", "startLine": 142, "endLine": 146, "does": "Busca el token ignorando mayúsculas y lo convierte a T.", "inputs": "clave", "outputs": "T? o default", "sideEffects": "ninguno", "throws": "JsonException/InvalidCastException si el tipo no coincide"},
+       {"name": "Set(string key, object? value) [protected]", "startLine": 148, "endLine": 171, "does": "Elimina la clave si el valor es null; si no, actualiza la existente o la añade.", "inputs": "clave, valor", "outputs": "void", "sideEffects": "muta el JObject interno", "throws": "JsonException si el valor no serializa"}
+     ]},
+    {"name": "LlmPromptTemplates", "kind": "class", "path": "LLM/Configuration/LlmPromptTemplates.cs", "startLine": 8, "endLine": 111,
+     "purpose": "Plantillas por defecto para inyectar el schema en system prompt y mensaje de usuario, más helpers de formato.",
+     "collaborators": ["LlmHelpers: usa FormatSystemPrompt y FormatUserMessage"],
+     "members": [
+       {"name": "DefaultSystemPromptSchemaTemplate", "startLine": 15, "endLine": 35, "does": "Plantilla de system prompt con marcador {schema}.", "inputs": "n/a", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "DefaultUserMessageSchemaTemplate", "startLine": 42, "endLine": 64, "does": "Plantilla de mensaje de usuario con {message} y {schema}.", "inputs": "n/a", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "SystemPromptSchemaTemplate { get; }", "startLine": 73, "endLine": 73, "does": "Alias de solo lectura.", "inputs": "n/a", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "UserMessageSchemaTemplate { get; }", "startLine": 80, "endLine": 80, "does": "Alias de solo lectura.", "inputs": "n/a", "outputs": "string", "sideEffects": "ninguno", "throws": "ninguno"},
+       {"name": "FormatSystemPrompt(string schemaJson, string? customTemplate = null)", "startLine": 93, "endLine": 95, "does": "Sustituye {schema} en la plantilla indicada o en la por defecto.", "inputs": "schemaJson, plantilla opcional", "outputs": "string", "sideEffects": "ninguno", "throws": "NullReferenceException si schemaJson es null"},
+       {"name": "FormatUserMessage(string message, string schemaJson, string? customTemplate = null)", "startLine": 107, "endLine": 110, "does": "Sustituye {message} y luego {schema} sobre el texto resultante.", "inputs": "mensaje, schema, plantilla opcional", "outputs": "string", "sideEffects": "ninguno", "throws": "ArgumentNullException si message o schemaJson son null"}
+     ]}
+  ],
+  "findings": [],
+  "seedVerdicts": [],
+  "relations": [],
+  "openQuestions": []
+}

@@ -21,6 +21,7 @@ public static class KnowledgeErrorCodes
 {
     public const string NotFound = "not_found";
     public const string InvalidRequest = "invalid_request";
+    public const string InvalidPath = "invalid_path";
     public const string ReportTooLarge = "report_too_large";
     public const string ReportLimitReached = "report_limit_reached";
     public const string VersionNotFound = "version_not_found";

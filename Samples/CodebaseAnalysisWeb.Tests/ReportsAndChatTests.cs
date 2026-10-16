@@ -147,6 +147,132 @@ public sealed class ChatEndpointsTests : IDisposable
         Assert.True(summary.TryGetProperty("createdAt", out _));
     }
 
+    private WebTestFactory TwoModelsFactory() => new()
+    {
+        ExtraConfiguration = new Dictionary<string, string?>
+        {
+            ["AITaskAgent:LlmProviders:Roles:Chat.b:Provider"] = "Fake",
+            ["AITaskAgent:LlmProviders:Roles:Chat.b:Model"] = "fake-model-b",
+            ["AITaskAgent:LlmProviders:Roles:Chat.b:Inference:UseStreaming"] = "true",
+            ["CodebaseAnalysis:Chat:Models:0:Id"] = "a",
+            ["CodebaseAnalysis:Chat:Models:0:Label"] = "Modelo A",
+            ["CodebaseAnalysis:Chat:Models:0:Role"] = "ChatAssistant",
+            ["CodebaseAnalysis:Chat:Models:0:Streaming"] = "true",
+            ["CodebaseAnalysis:Chat:Models:1:Id"] = "b",
+            ["CodebaseAnalysis:Chat:Models:1:Label"] = "Modelo B",
+            ["CodebaseAnalysis:Chat:Models:1:Role"] = "Chat.b",
+            ["CodebaseAnalysis:Chat:Models:1:Streaming"] = "false",
+            ["CodebaseAnalysis:Chat:DefaultModel"] = "a"
+        }
+    };
+
+    [Fact]
+    public async Task The_models_endpoint_lists_the_configured_models_with_the_default()
+    {
+        using var factory = TwoModelsFactory();
+        var client = factory.CreateClient();
+
+        var body = await (await client.GetAsync("/api/chat/models")).ReadJsonAsync();
+
+        Assert.Equal("a", body.GetProperty("defaultId").GetString());
+        var models = body.GetProperty("models").EnumerateArray().ToList();
+        Assert.Equal(["a", "b"], models.Select(m => m.GetProperty("id").GetString()));
+        Assert.Equal("Modelo B", models[1].GetProperty("label").GetString());
+        Assert.Equal("fake-model-b", models[1].GetProperty("model").GetString());
+        Assert.True(models[0].GetProperty("streaming").GetBoolean());
+        Assert.False(models[1].GetProperty("streaming").GetBoolean());
+        Assert.True(models[1].TryGetProperty("provider", out _));
+    }
+
+    [Fact]
+    public async Task Without_a_models_list_the_models_endpoint_offers_the_chat_role_only()
+    {
+        var body = await (await _factory.CreateClient().GetAsync("/api/chat/models")).ReadJsonAsync();
+
+        Assert.Equal("fake-model", body.GetProperty("defaultId").GetString());
+        Assert.Equal(1, body.GetProperty("models").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task A_new_session_gets_the_default_model_and_it_can_be_changed_between_turns()
+    {
+        using var factory = TwoModelsFactory();
+        var (client, id) = await SessionAsync(factory);
+        var session = await (await client.GetAsync($"/api/chat/sessions/{id}")).ReadJsonAsync();
+        Assert.Equal("a", session.GetProperty("modelId").GetString());
+
+        using (var first = await client.PostSseAsync($"/api/chat/sessions/{id}/messages", new { message = "uno" }))
+        {
+            var turn = (await first.ReadAllSseAsync())[^1].Data.GetProperty("turn");
+            Assert.Equal("a", turn.GetProperty("modelId").GetString());
+            Assert.Equal("fake-model", turn.GetProperty("model").GetString());
+        }
+
+        var put = await client.PutAsync($"/api/chat/sessions/{id}/model", Http.JsonBody(new { modelId = "b" }));
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        Assert.Equal("b", (await put.ReadJsonAsync()).GetProperty("modelId").GetString());
+
+        using (var second = await client.PostSseAsync($"/api/chat/sessions/{id}/messages", new { message = "dos" }))
+        {
+            var turn = (await second.ReadAllSseAsync())[^1].Data.GetProperty("turn");
+            Assert.Equal("b", turn.GetProperty("modelId").GetString());
+            Assert.Equal("fake-model-b", turn.GetProperty("model").GetString());
+        }
+
+        // El historial se conserva y el modelo elegido queda en disco.
+        var persisted = await (await client.GetAsync($"/api/chat/sessions/{id}")).ReadJsonAsync();
+        Assert.Equal("b", persisted.GetProperty("modelId").GetString());
+        Assert.Equal(["a", "b"], persisted.GetProperty("turns").EnumerateArray().Select(t => t.GetProperty("modelId").GetString()));
+    }
+
+    [Fact]
+    public async Task Choosing_an_unknown_model_is_400_and_an_unknown_session_404()
+    {
+        using var factory = TwoModelsFactory();
+        var (client, id) = await SessionAsync(factory);
+
+        var unknown = await client.PutAsync($"/api/chat/sessions/{id}/model", Http.JsonBody(new { modelId = "nope" }));
+        var missing = await client.PutAsync("/api/chat/sessions/20260101-000000-zzzz/model", Http.JsonBody(new { modelId = "b" }));
+        var created = await client.PostAsync("/api/chat/sessions", Http.JsonBody(new { modelId = "nope" }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
+        Assert.Equal("invalid_request", (await unknown.ReadJsonAsync()).GetProperty("error").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, created.StatusCode);
+        Assert.Equal("a", (await (await client.GetAsync($"/api/chat/sessions/{id}")).ReadJsonAsync()).GetProperty("modelId").GetString());
+    }
+
+    [Fact]
+    public async Task A_session_with_a_retired_model_falls_back_to_the_default_instead_of_failing()
+    {
+        using var factory = TwoModelsFactory();
+        var (client, id) = await SessionAsync(factory);
+        var file = Path.Combine(_repo.Path, ".codebase", "chat", id + ".json");
+        File.WriteAllText(file, File.ReadAllText(file).Replace("\"modelId\": \"a\"", "\"modelId\": \"retirado\""));
+
+        using var response = await client.PostSseAsync($"/api/chat/sessions/{id}/messages", new { message = "hola" });
+        var turn = (await response.ReadAllSseAsync())[^1].Data.GetProperty("turn");
+
+        Assert.Equal("completed", turn.GetProperty("status").GetString());
+        Assert.Equal("a", turn.GetProperty("modelId").GetString());
+    }
+
+    [Fact]
+    public async Task The_model_cannot_change_while_the_session_has_a_turn_running()
+    {
+        using var factory = new WebTestFactory { Llm = new ScriptedStreamingLlmService { HangOnFinal = true } };
+        var (client, id) = await SessionAsync(factory);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.PostSseAsync($"/api/chat/sessions/{id}/messages", new { message = "pregunta" }, cts.Token);
+        await factory.Llm.FirstFinalDeltaSent.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        var put = await client.PutAsync($"/api/chat/sessions/{id}/model", Http.JsonBody(new { modelId = "fake-model" }));
+
+        Assert.Equal(HttpStatusCode.Conflict, put.StatusCode);
+        Assert.Equal("chat_turn_running", (await put.ReadJsonAsync()).GetProperty("error").GetString());
+        await cts.CancelAsync();
+    }
+
     [Fact]
     public async Task Invalid_messages_are_400_and_unknown_sessions_404()
     {

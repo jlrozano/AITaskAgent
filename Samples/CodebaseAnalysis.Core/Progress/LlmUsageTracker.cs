@@ -15,11 +15,15 @@ public sealed record LlmUsage
     /// <summary>Paso que hizo las llamadas (<c>Auditor_CodeSmells</c>, <c>SynthesizerLlm</c>...); null en el total.</summary>
     public string? Source { get; init; }
 
-    /// <summary>Tipo de informe del auditor (<c>CodeSmells</c>); null si el paso no es un auditor.</summary>
+    /// <summary>Tipo de informe del auditor o de la investigación (<c>CodeSmells</c>); null si el paso no es ninguno de los dos.</summary>
     public string? Report { get; init; }
 
     public int Calls { get; init; }
     public long PromptTokens { get; init; }
+
+    /// <summary>Tokens de entrada servidos desde la caché de prompt del proveedor; incluidos en <see cref="PromptTokens"/>.</summary>
+    public long CachedPromptTokens { get; init; }
+
     public long CompletionTokens { get; init; }
     public long TotalTokens { get; init; }
     public decimal? CostUsd { get; init; }
@@ -29,6 +33,7 @@ public sealed record LlmUsage
     {
         Calls = Calls + 1,
         PromptTokens = PromptTokens + (call.PromptTokens ?? 0),
+        CachedPromptTokens = CachedPromptTokens + (call.CachedPromptTokens ?? 0),
         CompletionTokens = CompletionTokens + (call.CompletionTokens ?? 0),
         // Sin reparto, el total del evento; con él, la suma, que es lo que se cobra.
         TotalTokens = TotalTokens + (call.PromptTokens is null && call.CompletionTokens is null
@@ -48,6 +53,7 @@ public sealed record LlmUsage
             data["report"] = Report;
         data["calls"] = Calls;
         data["promptTokens"] = PromptTokens;
+        data["cachedPromptTokens"] = CachedPromptTokens;
         data["completionTokens"] = CompletionTokens;
         data["totalTokens"] = TotalTokens;
         data["costUsd"] = CostUsd;
@@ -55,7 +61,10 @@ public sealed record LlmUsage
         return data;
     }
 
-    /// <summary>Una línea en español: llamadas, tokens de entrada y salida y el coste o por qué no lo hay.</summary>
+    /// <summary>
+    /// Una línea en español: llamadas, tokens de entrada (y cuántos fueron caché, si alguno), de salida y el coste o por qué
+    /// no lo hay.
+    /// </summary>
     public string Describe()
     {
         var culture = CultureInfo.GetCultureInfo("es-ES");
@@ -65,8 +74,9 @@ public sealed record LlmUsage
             decimal c when UnpricedCalls > 0 => string.Format(culture, "{0:0.000} $ ({1} llamadas sin precio: es un mínimo)", c, UnpricedCalls),
             decimal c => string.Format(culture, "{0:0.000} $", c)
         };
-        return string.Format(culture, "{0} llamadas · {1:N0} tokens de entrada · {2:N0} de salida · coste {3}",
-            Calls, PromptTokens, CompletionTokens, cost);
+        var cached = CachedPromptTokens > 0 ? string.Format(culture, " ({0:N0} en caché)", CachedPromptTokens) : "";
+        return string.Format(culture, "{0} llamadas · {1:N0} tokens de entrada{4} · {2:N0} de salida · coste {3}",
+            Calls, PromptTokens, CompletionTokens, cost, cached);
     }
 }
 
@@ -111,7 +121,7 @@ public sealed class LlmUsageTracker
                 usage = new LlmUsage
                 {
                     Source = source,
-                    Report = AnalysisPipelineFactory.TryParseAuditorStepName(source, out var type) ? type.ToString() : null
+                    Report = ReportOf(source)
                 };
                 _order.Add(source);
             }
@@ -119,6 +129,15 @@ public sealed class LlmUsageTracker
             _total = _total.Add(call);
         }
     }
+
+    /// <summary>
+    /// El informe al que se atribuye un paso: el de su auditor o el de una de sus investigaciones por subsistema (cuyo coste es
+    /// del informe aunque cada una sea su propia fuente). null si no es ninguno de los dos.
+    /// </summary>
+    private static string? ReportOf(string source) =>
+        AnalysisPipelineFactory.TryParseAuditorStepName(source, out var auditor) ? auditor.ToString()
+        : AnalysisPipelineFactory.TryParseInvestigationStepName(source, out var investigated, out _) ? investigated.ToString()
+        : null;
 
     public LlmUsageSummary Snapshot()
     {

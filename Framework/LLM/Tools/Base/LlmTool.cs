@@ -15,6 +15,12 @@ namespace AITaskAgent.LLM.Tools.Base;
 /// </summary>
 public abstract class LlmTool : ITool
 {
+    /// <summary>Key of the call's raw JSON arguments in the <c>AdditionalData</c> of the tool events.</summary>
+    public const string ParametersDataKey = "parameters";
+
+    /// <summary>Key of the tool's textual result in the <c>AdditionalData</c> of a successful <see cref="ToolCompletedEvent"/>.</summary>
+    public const string ResultDataKey = "result";
+
     /// <summary>Gets the unique name of the tool.</summary>
     public abstract string Name { get; }
 
@@ -69,11 +75,15 @@ public abstract class LlmTool : ITool
         // Hook: Derived classes add specific tags
         EnrichActivityBefore(activity, argumentsJson, context);
 
+        // The arguments and, on success, the result travel under AdditionalData "parameters" and "result", the same keys
+        // McpToolWrapper uses, so a UI can show what a call received and returned. The event holds a reference to strings
+        // that exist anyway (the call's arguments and the tool message); consumers truncate before storing or sending.
         ToolStartedEvent startedEvent = new()
         {
             StepName = stepName,
             ToolName = Name,
-            CorrelationId = context.CorrelationId
+            CorrelationId = context.CorrelationId,
+            AdditionalData = new() { [ParametersDataKey] = argumentsJson }
         };
         // Hook: Derived classes enrich started event
         ToolStartedEvent enrichedStartedEvent = EnrichStartedEvent(startedEvent, argumentsJson, context);
@@ -134,7 +144,10 @@ public abstract class LlmTool : ITool
                 Success = success,
                 Duration = duration,
                 ErrorMessage = errorMessage,
-                CorrelationId = context.CorrelationId
+                CorrelationId = context.CorrelationId,
+                AdditionalData = success
+                    ? new() { [ParametersDataKey] = argumentsJson, [ResultDataKey] = result }
+                    : new() { [ParametersDataKey] = argumentsJson }
             };
             ToolCompletedEvent enrichedEvent = EnrichCompletedEvent(baseEvent, result, context);
             await context.SendEventAsync(enrichedEvent, cancellationToken);

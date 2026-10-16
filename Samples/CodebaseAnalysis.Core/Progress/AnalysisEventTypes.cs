@@ -13,10 +13,22 @@ public static class AnalysisEventTypes
     public const string ReportWritten = "analysis.report_written";
 
     /// <summary>
+    /// Un informe ha pasado por el verificador (<see cref="AnalysisProgress.ReportVerified"/>), se haya modificado o no. Su
+    /// <c>Metadata</c> lleva <see cref="MetadataKeys.Outcome"/>, <see cref="MetadataKeys.Changes"/> y las versiones.
+    /// </summary>
+    public const string ReportVerified = "analysis.report_verified";
+
+    /// <summary>
     /// El chat creó o modificó un informe (<c>create_report</c>, <c>update_report</c>). Su <c>Metadata</c> lleva los campos
     /// de <c>ReportChange</c> (plan v2 §5.3) y <c>ChatEventMapper</c> lo convierte en el evento SSE <c>report.changed</c>.
     /// </summary>
     public const string ChatReportChanged = "chat.report_changed";
+
+    /// <summary>
+    /// Estado de la pasada compartida (<c>SharedPassProgress</c>). Su <c>Metadata</c> es el estado entero (ya en camelCase) y
+    /// <see cref="AnalysisEventMapper"/> la convierte en el evento SSE <c>sharedpass.progress</c>.
+    /// </summary>
+    public const string SharedPassProgress = "analysis.shared_pass_progress";
 
     public static class MetadataKeys
     {
@@ -28,6 +40,11 @@ public static class AnalysisEventTypes
         public const string Health = "health";
         public const string CriticalFindings = "criticalFindings";
         public const string Truncated = "truncated";
+        public const string Outcome = "outcome";
+        public const string Changes = "changes";
+        public const string PreviousVersionId = "previousVersionId";
+        public const string VersionId = "versionId";
+        public const string Error = "error";
     }
 
     /// <summary>Valores de <see cref="MetadataKeys.Channel"/>.</summary>

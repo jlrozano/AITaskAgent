@@ -46,9 +46,15 @@ public sealed class AnalysisEventMapperTests
     [Theory]
     [InlineData(DetectAndIndexGraphStep.StepName, "detect")]
     [InlineData(LanguageEnricherStep.StepName, "enrich")]
-    [InlineData(BdpEnricherStep.StepName, "enrich")]
+    [InlineData(DotNetEnricherStep.StepName, "enrich")]
     [InlineData(PrepareRegenerationStep.StepName, "facets")]
     [InlineData(SqlFacetExtractorStep.StepName, "facets")]
+    [InlineData(RepositoryInventoryStep.StepName, "facets")]
+    [InlineData(DomainDiscoveryStep.StepName, "facets")]
+    [InlineData(DomainDiscoveryStep.NamingStepName, "facets")]
+    [InlineData(CoveragePlanningStep.StepName, "facets")]
+    [InlineData(TimeBudgetStep.StepName, "facets")]
+    [InlineData("Investigation_FlujosEndToEnd_billing", "reports")]
     [InlineData(AnalysisPipelineFactory.ParallelReportsStepName, "reports")]
     [InlineData(ExecutiveSynthesizerStep.StepName, "synthesis")]
     [InlineData("Auditor_ErroresYBugs", "reports")]
@@ -71,7 +77,7 @@ public sealed class AnalysisEventMapperTests
         var during = MapOne(mapper, Log("WorkflowAndMarkdownEnricher", "info", "durante"));
         MapOne(mapper, new StepStartedEvent { StepName = LanguageEnricherStep.StepName });
         var native = MapOne(mapper, Log("JavaAnalyzerRunner", "info", "nativo"));
-        MapOne(mapper, new StepStartedEvent { StepName = BdpEnricherStep.StepName });
+        MapOne(mapper, new StepStartedEvent { StepName = DotNetEnricherStep.StepName });
         var semantic = MapOne(mapper, Log("SemanticEnrichmentStep", "info", "semántico"));
 
         Assert.Null(before.Phase);
@@ -89,6 +95,48 @@ public sealed class AnalysisEventMapperTests
         var helper = MapOne(mapper, Log("KnowledgeGraphIngestor", "info", "retirando informes"));
 
         Assert.Equal("facets", helper.Phase);
+    }
+
+    [Fact]
+    public void The_preparation_steps_are_top_level_and_open_the_facets_phase_for_helpers()
+    {
+        foreach (var step in new[] { RepositoryInventoryStep.StepName, DomainDiscoveryStep.StepName, CoveragePlanningStep.StepName, TimeBudgetStep.StepName })
+        {
+            var mapper = new AnalysisEventMapper(RunId);
+            // Antes de que empiece el paso, un ayudante sin fase no hereda ninguna; después, la de facetas.
+            MapOne(mapper, new StepStartedEvent { StepName = DetectAndIndexGraphStep.StepName });
+            MapOne(mapper, new StepStartedEvent { StepName = step });
+            var helper = MapOne(mapper, Log("GraphReader", "info", "leyendo"));
+
+            Assert.Equal("facets", helper.Phase);
+        }
+    }
+
+    [Fact]
+    public void Investigations_count_in_the_lane_of_their_report_and_in_the_reports_phase()
+    {
+        var mapper = new AnalysisEventMapper(RunId);
+        var name = AnalysisPipelineFactory.InvestigationStepName(ReportType.ErroresYBugs, "billing");
+
+        var log = MapOne(mapper, Log(name, "info", "investigando"));
+        var llm = MapOne(mapper, new LlmResponseEvent { StepName = name, Content = "notas", FinishReason = FinishReason.Stop, TokensUsed = 7 });
+        var tool = MapOne(mapper, new ToolStartedEvent { StepName = name, ToolName = "graph_search" });
+
+        Assert.All(new[] { log, llm, tool }, dto =>
+        {
+            Assert.Equal("ErroresYBugs", dto.Report);
+            Assert.Equal("reports", dto.Phase);
+            Assert.Equal(name, dto.Source);
+        });
+    }
+
+    [Fact]
+    public void A_name_that_only_looks_like_an_investigation_has_no_report()
+    {
+        var dto = MapOne(new AnalysisEventMapper(RunId), Log("Investigation_Nope_billing", "info", "x"));
+
+        Assert.Null(dto.Report);
+        Assert.Null(dto.Phase);
     }
 
     [Fact]

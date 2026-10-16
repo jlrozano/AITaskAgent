@@ -74,16 +74,21 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
         facetResult.RawFacets["technology_stack"] = facetResult.DetectedLanguages;
         context.Report(StepName, AnalysisLogLevel.Info, $"🔍 Ecosistema Tecnológico Detectado: {facetResult.DetectedLanguages}");
 
-        // 1. Métricas Funcionales y Generales
-        facetResult.MetricsSummary = await QueryToJsonAsync(conn, @"
-            SELECT 
-                COUNT(1) AS total_nodes,
-                (SELECT COUNT(1) FROM edges) AS total_edges,
+        // 1. Métricas Funcionales y Generales. Los totales son del código: sin los nodos ni las aristas del registro del LLM
+        // (origin = 'llm', plan 2026-10-16), que quedan en el grafo cuando se reutiliza tras una pasada compartida.
+        facetResult.MetricsSummary = await QueryToJsonAsync(conn, $@"
+            SELECT
+                (SELECT COUNT(1) FROM nodes n WHERE NOT {Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmNodePredicate("n")}) AS total_nodes,
+                (SELECT COUNT(1) FROM edges e WHERE NOT {Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmNodePredicate("e")}) AS total_edges,
                 (SELECT COUNT(1) FROM nodes WHERE label = 'Route') AS total_routes,
                 (SELECT COUNT(1) FROM nodes WHERE label = 'Flow') AS total_flows,
                 (SELECT COUNT(1) FROM nodes WHERE label = 'DiRegistration') AS total_di,
-                (SELECT COUNT(1) FROM nodes WHERE json_extract(properties, '$.dead_code_candidate') = 1) AS dead_code_count
-            FROM nodes;", cancellationToken);
+                (SELECT COUNT(1) FROM nodes WHERE json_extract(properties, '$.dead_code_candidate') = 1) AS dead_code_count;", cancellationToken);
+        if (await CodeGraphCountsAsync(conn, cancellationToken) is { } codeCounts)
+        {
+            facetResult.TotalNodes = codeCounts.Nodes;
+            facetResult.TotalEdges = codeCounts.Edges;
+        }
 
         // Métricas calculadas del grafo cuando faltan las propiedades (auditoría H-2). Sin ellas, cada faceta usa solo las
         // propiedades y un valor desconocido queda como null, nunca como cero.
@@ -114,7 +119,7 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
         facetResult.FlowsSummary = await QueryToJsonAsync(conn, @"
             SELECT name, qualified_name,
                    json_extract(properties, '$.step_count') AS steps,
-                   json_extract(properties, '$.entry_method') AS entry_point,
+                   coalesce(json_extract(properties, '$.entry_method'), json_extract(properties, '$.entry_method_qn')) AS entry_point,
                    properties
             FROM nodes WHERE label = 'Flow'
             ORDER BY qualified_name LIMIT 30;", cancellationToken);
@@ -128,6 +133,7 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
                    n.properties
             {MetricsJoin}
             WHERE n.label IN ('Class', 'Record', 'Interface', 'Entity', 'AccessTable', 'Table')
+              AND {Enrichment.AnalysisGraph.AnalysisGraphLabels.NotDerivedTablePredicate("n")}
             ORDER BY coalesce({FanInExpr}, -1) DESC, n.qualified_name LIMIT 50;", cancellationToken, parameters: metricParameters);
 
         // 2. Code Smells (con snippets de código fuente en los métodos más complejos)
@@ -162,24 +168,43 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             WHERE n.label IN ('Class', 'Interface', 'Method', 'Module', 'Form', 'Sub', 'Function') AND ({FanInExpr} IS NOT NULL OR {FanOutExpr} IS NOT NULL)
             ORDER BY fan_in DESC, fan_out DESC, n.qualified_name LIMIT 30;", cancellationToken, parameters: metricParameters);
 
-        // 3. Código Muerto
-        facetResult.DeadCodeCandidates = await QueryToJsonAsync(conn, @"
-            SELECT name, qualified_name, label, file,
-                   coalesce(nullif(line_start, 0), start_line, 1) AS start_line,
-                   coalesce(nullif(line_end, 0), end_line, 0) AS end_line,
-                   json_extract(properties, '$.dead_code_confidence') AS confidence,
-                   json_extract(properties, '$.dead_code_reason') AS reason
-            FROM nodes
-            WHERE json_extract(properties, '$.dead_code_candidate') = 1
-            ORDER BY confidence DESC, qualified_name LIMIT 25;", cancellationToken);
+        // Duplicación: los pares SIMILAR_TO que ya calculó el indexador.
+        try
+        {
+            (facetResult.DuplicateSummary, facetResult.DuplicateCandidates) = await CompilerFactsFacets.DuplicatesAsync(conn, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            facetResult.DuplicateSummary = facetResult.DuplicateCandidates = FacetErrorNote(ex);
+        }
 
-        facetResult.UnusedDiRegistrations = await QueryToJsonAsync(conn, @"
+        // 3. Código Muerto
+        // Sin duplicados (un tipo candidato no repite sus miembros), con los métodos privados sin uso aparte y por confianza;
+        // los totales van en el resumen (en un repositorio grande son miles).
+        try
+        {
+            var dead = await CompilerFactsFacets.DeadCodeAsync(conn, cancellationToken);
+            (facetResult.DeadCodeCandidates, facetResult.DeadCodeSummary, facetResult.DeadPrivateMethods) = (dead.Candidates, dead.Summary, dead.PrivateMethods);
+        }
+        catch (Exception ex)
+        {
+            facetResult.DeadCodeCandidates = facetResult.DeadCodeSummary = facetResult.DeadPrivateMethods = FacetErrorNote(ex);
+        }
+
+        // Registros de DI sin consumidor: los que Roslyn marca (consumer_count = 0) y, solo sin ese dato, el fan_in 0 de cbm.
+        facetResult.UnusedDiRegistrations = await QueryToJsonAsync(conn, $@"
             SELECT name, qualified_name, file,
                    coalesce(nullif(line_start, 0), start_line, 1) AS start_line,
                    coalesce(nullif(line_end, 0), end_line, 0) AS end_line,
-                   properties
+                   json_extract(properties, '$.service_type') AS service_type,
+                   json_extract(properties, '$.implementation_type') AS implementation_type,
+                   json_extract(properties, '$.lifetime') AS lifetime,
+                   json_extract(properties, '$.consumer_count') AS consumer_count,
+                   json_extract(properties, '$.consumed_by_framework') AS consumed_by_framework,
+                   json_extract(properties, '$.unused_registration') AS unused_registration,
+                   json_extract(properties, '$.is_external') AS is_external
             FROM nodes
-            WHERE label = 'DiRegistration' AND (json_extract(properties, '$.unused_registration') = 1 OR json_extract(properties, '$.fan_in') = 0)
+            WHERE {CompilerFactsFacets.UnusedDiWhere}
             ORDER BY qualified_name LIMIT 25;", cancellationToken);
 
         facetResult.OrphanRoutes = await QueryToJsonAsync(conn, @"
@@ -242,13 +267,20 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
                    json_extract(n.properties, '$.type_fqn') AS type_fqn,
                    (SELECT COUNT(1) FROM edges w WHERE w.target_id = n.id AND w.type = 'WRITES') AS writes
             FROM nodes n
-            WHERE n.label IN ('Field', 'Variable') AND json_extract({SafeJson("n.properties")}, '$.field_name') IS NOT NULL
-              AND json_extract(n.properties, '$.accessibility') = 'private'
-              AND NOT (coalesce(json_extract(n.properties, '$.is_static'), 0) = 1 AND coalesce(json_extract(n.properties, '$.is_final'), 0) = 1)
-              AND NOT EXISTS (SELECT 1 FROM edges r WHERE r.target_id = n.id AND r.type = 'READS')
+            WHERE {CompilerFactsFacets.UnreadFieldWhere}
             ORDER BY n.file, start_line, n.qualified_name LIMIT {MaxDeadCodeCandidates};",
             UnreadFieldCandidate, row => Example(row, "field_name", "qualified_name", "file", "start_line"),
             individualLimit: 30, individualFacet: "unread_fields", dynamicScan, cancellationToken);
+
+        // Los campos solo escritos (estado que nadie lee) y el recuento.
+        try
+        {
+            (facetResult.UnreadFieldsSummary, facetResult.WriteOnlyFields) = await CompilerFactsFacets.UnreadFieldsAsync(conn, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            facetResult.UnreadFieldsSummary = facetResult.WriteOnlyFields = FacetErrorNote(ex);
+        }
 
         // Acciones Struts que ninguna clase del grafo atiende (sin HANDLES entrante), con el motivo que da el propio nodo.
         // Primero las que declaran una clase que no está en el grafo; después, por fichero y línea.
@@ -301,19 +333,15 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             ORDER BY e.type, target, source LIMIT 50;", cancellationToken);
 
         // 5. Errores y Bugs (con fragmentos de código fuente adjuntos)
-        facetResult.CriticalHotspotsExceptions = await QueryToJsonAsync(conn, @"
-            SELECT name, qualified_name, file, 
-                   coalesce(nullif(line_start, 0), start_line, 1) AS start_line,
-                   coalesce(nullif(line_end, 0), end_line, 0) AS end_line,
-                   CAST(json_extract(properties, '$.hotspot') AS REAL) AS hotspot,
-                   json_extract(properties, '$.throws') AS throws,
-                   json_extract(properties, '$.cyclomatic') AS cyclomatic,
-                   json_extract(properties, '$.detected_issues') AS detected_issues
-            FROM nodes 
-            WHERE CAST(json_extract(properties, '$.hotspot') AS REAL) > 5 
-               OR json_extract(properties, '$.throws') IS NOT NULL
-               OR json_extract(properties, '$.detected_issues') IS NOT NULL
-            ORDER BY hotspot DESC, qualified_name LIMIT 30;", cancellationToken, repositoryPath: repoPath, attachSnippets: true, maxSnippetLines: 70, maxSnippetItems: 10);
+        // Los nodos con hallazgos graves de detected_issues primero y, hasta 30, los de más hotspot o con throws.
+        try
+        {
+            facetResult.CriticalHotspotsExceptions = await CompilerFactsFacets.CriticalHotspotsAsync(conn, repoPath, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            facetResult.CriticalHotspotsExceptions = FacetErrorNote(ex);
+        }
 
         // Solo las rutas que el grafo declara sin autenticación (auth_required = false). Sin el dato (p. ej. las acciones de
         // Struts, cuyo plugin no lo escribe) la validación es desconocida y no se listan como «sin validación».
@@ -322,10 +350,23 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
                    coalesce(nullif(line_start, 0), start_line, 1) AS start_line,
                    coalesce(nullif(line_end, 0), end_line, 1) AS end_line,
                    coalesce(json_extract(properties, '$.http_verb'), json_extract(properties, '$.http_method')) AS verb,
-                   json_extract(properties, '$.route_path') AS path
+                   coalesce(json_extract(properties, '$.route_path'), name) AS path,
+                   coalesce(json_extract(properties, '$.auth_inferred'), 0) AS auth_inferred,
+                   CASE WHEN json_extract(properties, '$.auth_inferred') = 1
+                        THEN 'la ruta no declara autenticación ni hay política global que la exija (inferido)'
+                        ELSE '[AllowAnonymous] explícito' END AS auth_basis
             FROM nodes
             WHERE label = 'Route' AND json_extract(properties, '$.auth_required') = 0
-            ORDER BY path, qualified_name LIMIT 40;", cancellationToken);
+            ORDER BY auth_inferred DESC, path, qualified_name LIMIT 40;", cancellationToken);
+
+        try
+        {
+            facetResult.RouteAuthSummary = await CompilerFactsFacets.RouteAuthSummaryAsync(conn, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            facetResult.RouteAuthSummary = FacetErrorNote(ex);
+        }
 
         // JSP marcadas como sospechosas por el plugin Struts/JSP (SQL, imports de acceso a datos o código de negocio usado en
         // un scriptlet; el acceso a sesión va aparte en session_access y no la marca), con sus motivos. Las de más motivos y
@@ -346,17 +387,18 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             WHERE n.label = 'Jsp' AND json_extract(n.properties, '$.suspicious') = 1
             ORDER BY reason_count DESC, scriptlets DESC, n.qualified_name LIMIT 25;", cancellationToken);
 
-        facetResult.SuspectPatterns = await QueryToJsonAsync(conn, @"
-            SELECT name, qualified_name, file, 
-                   coalesce(nullif(line_start, 0), start_line, 1) AS start_line,
-                   coalesce(nullif(line_end, 0), end_line, 0) AS end_line,
-                   properties,
-                   json_extract(properties, '$.detected_issues') AS detected_issues
-            FROM nodes 
-            WHERE json_extract(properties, '$.anti_pattern') IS NOT NULL 
-               OR json_extract(properties, '$.smell') IS NOT NULL
-               OR json_extract(properties, '$.detected_issues') IS NOT NULL
-            ORDER BY file, start_line, qualified_name LIMIT 30;", cancellationToken);
+        // Hallazgos de las reglas del compilador: totales por regla y los más relevantes con su cita (no todos).
+        var captiveDependencies = 0;
+        try
+        {
+            var issues = await CompilerFactsFacets.IssuesAsync(conn, cancellationToken);
+            (facetResult.DetectedIssuesSummary, facetResult.SuspectPatterns, facetResult.CaptiveDependencies, captiveDependencies) =
+                (issues.Summary, issues.Shown, issues.Captive, issues.CaptiveCount);
+        }
+        catch (Exception ex)
+        {
+            facetResult.DetectedIssuesSummary = facetResult.SuspectPatterns = facetResult.CaptiveDependencies = FacetErrorNote(ex);
+        }
 
         // 6. Arquitectura y Acoplamiento
         facetResult.ProjectComponents = await QueryToJsonAsync(conn, @"
@@ -425,11 +467,12 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
         facetResult.RoutesSecurityMatrix = await QueryToJsonAsync(conn, @"
             SELECT name, qualified_name,
                    coalesce(json_extract(properties, '$.http_verb'), json_extract(properties, '$.http_method')) AS verb,
-                   json_extract(properties, '$.route_path') AS path,
+                   coalesce(json_extract(properties, '$.route_path'), name) AS path,
                    coalesce(json_extract(properties, '$.auth_required'), 'desconocido') AS auth_required,
+                   json_extract(properties, '$.auth_inferred') AS auth_inferred,
                    json_extract(properties, '$.auth_roles') AS roles
             FROM nodes WHERE label = 'Route'
-            ORDER BY path, qualified_name LIMIT 50;", cancellationToken);
+            ORDER BY CASE json_extract(properties, '$.auth_required') WHEN 0 THEN 0 WHEN 1 THEN 2 ELSE 1 END, path, qualified_name LIMIT 50;", cancellationToken);
 
         facetResult.RoutesContracts = await QueryToJsonAsync(conn, @"
             SELECT name, qualified_name,
@@ -453,10 +496,18 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             ORDER BY hotspot DESC, n.qualified_name LIMIT 30;", cancellationToken, repositoryPath: repoPath, attachSnippets: true, maxSnippetLines: 70, maxSnippetItems: 10,
             parameters: metricParameters);
 
-        facetResult.DocCoverageMetrics = await QueryToJsonAsync(conn, @"
-            SELECT label, COUNT(1) AS total,
-                   SUM(CASE WHEN json_extract(properties, '$.docstring') IS NOT NULL OR json_extract(properties, '$.xml_doc') IS NOT NULL THEN 1 ELSE 0 END) AS documented
-            FROM nodes WHERE label NOT IN ('UserDocument', 'UserDocSection') GROUP BY label;", cancellationToken);
+        // En C# y Java solo cuenta la documentación que reconoció el enriquecedor (docstring_source xml/javadoc); los // de cbm no.
+        facetResult.DocCoverageMetrics = await QueryToJsonAsync(conn, CompilerFactsFacets.DocCoverageSql, cancellationToken);
+
+        try
+        {
+            facetResult.TodoMarkers = await CompilerFactsFacets.TodoMarkersAsync(conn, cancellationToken);
+            facetResult.CommentedCode = await CompilerFactsFacets.CommentedCodeAsync(conn, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            facetResult.TodoMarkers = facetResult.CommentedCode = FacetErrorNote(ex);
+        }
 
         // [Obsolete] de C# (attributes) y @Deprecated de Java (annotations, que el analizador Java escribe con el nombre simple
         // de cada anotación).
@@ -493,10 +544,19 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
 
         facetResult.DiLifetimesMapping = await QueryToJsonAsync(conn, @"
             SELECT name, qualified_name,
-                   json_extract(properties, '$.di_lifetime') AS di_lifetime,
+                   coalesce(json_extract(properties, '$.di_lifetime'), json_extract(properties, '$.lifetime')) AS di_lifetime,
                    properties
             FROM nodes WHERE label = 'DiRegistration'
             ORDER BY qualified_name LIMIT 50;", cancellationToken);
+
+        try
+        {
+            facetResult.DiSummary = await CompilerFactsFacets.DiSummaryAsync(conn, captiveDependencies, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            facetResult.DiSummary = FacetErrorNote(ex);
+        }
 
         facetResult.ExtensionPointsCatalog = await QueryToJsonAsync(conn, @"
             SELECT name, qualified_name, file, 
@@ -526,7 +586,7 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             {MetricsJoin}
             WHERE n.label NOT IN ('DocSection', 'PromptTemplate', 'Section', 'Folder', 'File', 'Variable',
                                 'Table', 'AccessTable', 'Query', 'AccessQuery', 'Route', 'Flow',
-                                'UserDocument', 'UserDocSection')
+                                'UserDocument', 'UserDocSection', 'Subsystem', 'InvestigationNote')
               AND (n.name LIKE 'Create%' OR n.name LIKE 'Build%' OR n.name LIKE 'Make%' OR n.name LIKE 'New%'
                    OR n.name LIKE '%Factory%' OR n.name LIKE '%Builder%' OR n.name LIKE '%Provider%'
                    OR n.name LIKE '%Container%' OR n.name LIKE '%Registry%' OR n.name LIKE '%Locator%'
@@ -547,6 +607,17 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
             }
         }
         facetResult.HardcodedSecrets = await HardcodedSecretScanner.ScanAsync(graphFiles, repoPath, cancellationToken);
+
+        // Constantes que resolvió el compilador (javac, Roslyn): credenciales en claro y nombres de clase de la reflexión.
+        try
+        {
+            facetResult.ResolvedSecrets = await CompilerFactsFacets.ResolvedSecretsAsync(conn, cancellationToken);
+            facetResult.ReflectionTargets = await CompilerFactsFacets.ReflectionTargetsAsync(conn, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            facetResult.ResolvedSecrets = facetResult.ReflectionTargets = FacetErrorNote(ex);
+        }
 
         // 10. Pasos de Workflow, Templates de Prompts y Documentación Markdown
         facetResult.WorkflowStepsCatalog = await QueryToJsonAsync(conn, @"
@@ -672,7 +743,7 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
     public const string SourceResolvedCallsAndTypeUsesFormat = "calculado: aristas CALLS y USES_TYPE de otros tipos resueltas por {0}";
 
     /// <summary>Propiedades del nodo o <c>{}</c> si no son JSON válido, para <c>json_each</c>, que falla con JSON inválido.</summary>
-    private static string SafeJson(string column) => $"(CASE WHEN json_valid({column}) THEN {column} ELSE '{{}}' END)";
+    internal static string SafeJson(string column) => $"(CASE WHEN json_valid({column}) THEN {column} ELSE '{{}}' END)";
 
     /// <summary>
     /// Arista resuelta por un enriquecedor: lleva <c>enriched_by</c> con alguno que no sea el fallback del LLM, cuyas
@@ -696,8 +767,8 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
     private const string LocSourceExpr = "CASE WHEN json_extract(n.properties, '$.loc_total') IS NOT NULL THEN @src_graph WHEN (" + LineSpanExpr + ") IS NOT NULL THEN @src_lines END";
     private const string CyclomaticTotalExpr = "coalesce(CAST(json_extract(n.properties, '$.cyclomatic_total') AS INTEGER), fm.calc_cyclomatic_total)";
     private const string CyclomaticTotalSourceExpr = "CASE WHEN json_extract(n.properties, '$.cyclomatic_total') IS NOT NULL THEN @src_graph WHEN fm.calc_cyclomatic_total IS NOT NULL THEN @src_cyclomatic END";
-    private const string StartLineExpr = "coalesce(nullif(n.line_start, 0), n.start_line, 1)";
-    private const string EndLineExpr = "coalesce(nullif(n.line_end, 0), n.end_line, 0)";
+    internal const string StartLineExpr = "coalesce(nullif(n.line_start, 0), n.start_line, 1)";
+    internal const string EndLineExpr = "coalesce(nullif(n.line_end, 0), n.end_line, 0)";
     private const string MetricsJoin = "FROM nodes n LEFT JOIN temp.facet_metrics fm ON fm.node_id = n.id";
 
     /// <summary>
@@ -872,8 +943,31 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
     };
 
     /// <summary>Lo que recibe el auditor si una consulta falla: no es un conjunto vacío y lo dice.</summary>
-    private static string FacetErrorNote(Exception ex) =>
+    internal static string FacetErrorNote(Exception ex) =>
         $"[] /* Faceta no disponible por un error SQL ({ex.Message}): no es un conjunto vacío, es un dato desconocido */";
+
+    /// <summary>
+    /// Nodos y aristas del código, sin los del registro del LLM (<c>origin = 'llm'</c>): los totales de los informes. Los pasos
+    /// anteriores cuentan el grafo entero, que tras una pasada compartida reutilizado lleva el registro. Null si no se puede leer
+    /// (se quedan los de la entrada).
+    /// </summary>
+    internal static async Task<(int Nodes, int Edges)?> CodeGraphCountsAsync(SqliteConnection conn, CancellationToken ct)
+    {
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT (SELECT COUNT(1) FROM nodes n WHERE NOT {Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmNodePredicate("n")}),
+                       (SELECT COUNT(1) FROM edges e WHERE NOT {Enrichment.AnalysisGraph.AnalysisGraphLabels.LlmNodePredicate("e")})
+                """;
+            using var reader = await cmd.ExecuteReaderAsync(ct);
+            return await reader.ReadAsync(ct) ? (Convert.ToInt32(reader.GetInt64(0)), Convert.ToInt32(reader.GetInt64(1))) : null;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
 
     private static async Task<string> QueryToJsonAsync(
         SqliteConnection conn,
@@ -899,7 +993,7 @@ public class SqlFacetExtractorStep : IStep<GraphStatusResult, ReportFacetInput>
     }
 
     /// <summary>Las filas de <paramref name="query"/>, con las líneas normalizadas y, si se pide, el fragmento de código; lanza si falla.</summary>
-    private static async Task<List<Dictionary<string, object?>>> QueryRowsAsync(
+    internal static async Task<List<Dictionary<string, object?>>> QueryRowsAsync(
         SqliteConnection conn,
         string query,
         CancellationToken ct,

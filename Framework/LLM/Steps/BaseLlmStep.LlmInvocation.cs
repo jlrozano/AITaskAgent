@@ -121,17 +121,44 @@ public abstract partial class BaseLlmStep
 
         var toolCalls = primaryCandidate.ToolCalls!;
 
-        if (IsStuckRepeatingToolCalls(toolCalls, out var stuckMessage))
+        if (Logger.IsEnabled(LogLevel.Trace))
         {
-            return StopWithMessage(result, primaryCandidate, stuckMessage);
+            // What the model wrote in this turn besides the calls: its text between tool calls and its reasoning.
+            Logger.LogTrace(
+                "Step {StepName} iteration {Iteration} model turn (finish: {FinishReason}, reasoning tokens: {ReasoningTokens})\n" +
+                "[Content]: {Content}\n[Reasoning]: {Reasoning}\n[ToolCalls]: {ToolCalls}",
+                Name,
+                toolIteration + 1,
+                primaryCandidate.RawFinishReason ?? primaryCandidate.FinishReason?.ToString(),
+                result.ReasoningTokens,
+                primaryCandidate.Content,
+                primaryCandidate.Reasoning,
+                string.Join(", ", toolCalls.Select(c => $"{c.Name}({c.Arguments})")));
+        }
+
+        if (IsStuckRepeatingToolCalls(GetState(context), toolCalls, out var stuckMessage))
+        {
+            // The turn's content (which may carry the references of tags that already ran) is kept as the answer.
+            return StopWithMessage(result, primaryCandidate, stuckMessage, keepContent: true);
         }
 
         if (Logger.IsEnabled(LogLevel.Information))
         {
-            Logger.LogInformation(
-                "LLM requested {ToolCount} canonical tool calls (iteration {Iteration})",
-                toolCalls.Count,
-                toolIteration + 1);
+            if (result.ReasoningTokens is { } turnReasoningTokens)
+            {
+                Logger.LogInformation(
+                    "LLM requested {ToolCount} canonical tool calls (iteration {Iteration}, reasoning tokens: {ReasoningTokens})",
+                    toolCalls.Count,
+                    toolIteration + 1,
+                    turnReasoningTokens);
+            }
+            else
+            {
+                Logger.LogInformation(
+                    "LLM requested {ToolCount} canonical tool calls (iteration {Iteration})",
+                    toolCalls.Count,
+                    toolIteration + 1);
+            }
         }
         if (Logger.IsEnabled(LogLevel.Debug))
         {
@@ -155,12 +182,20 @@ public abstract partial class BaseLlmStep
         // it (the old behaviour) is what let the model repeat a write it had already performed.
         GetState(context).Conversation?.AddAssistantMessageWithToolCalls(toolCalls, primaryCandidate.Content);
 
-        await ExecuteToolCallsAsync(
+        var stopRequested = await ExecuteToolCallsAsync(
             Name,
             toolCalls,
             Tools,
             context,
             cancellationToken);
+
+        if (stopRequested != null)
+        {
+            // A tool asked to end the loop. This turn's text is already in the conversation with its calls, so the
+            // final answer is the tool's message rather than a second copy of it.
+            Logger.LogWarning("Step {StepName} stopped: a tool asked to end the tool loop ({Reason})", Name, stopRequested);
+            return StopWithMessage(result, primaryCandidate, stopRequested, keepContent: false);
+        }
 
         // Recursively invoke LLM after tool results are added to conversation.
         // We accumulate tokens and cost across iterations to provide an accurate total in the final result.
@@ -183,78 +218,117 @@ public abstract partial class BaseLlmStep
             // Null only when no iteration was priced: 0 would read as a free call, not as a model without a price.
             costUsd: result.CostUsd is null && nextResult.CostUsd is null ? null : (result.CostUsd ?? 0) + (nextResult.CostUsd ?? 0),
             model: nextResult.Model,
-            nativeResponse: nextResult.NativeResponse
+            nativeResponse: nextResult.NativeResponse,
+            reasoningTokens: result.ReasoningTokens is null && nextResult.ReasoningTokens is null
+                ? null
+                : (result.ReasoningTokens ?? 0) + (nextResult.ReasoningTokens ?? 0),
+            cachedPromptTokens: result.CachedPromptTokens is null && nextResult.CachedPromptTokens is null
+                ? null
+                : (result.CachedPromptTokens ?? 0) + (nextResult.CachedPromptTokens ?? 0)
         );
     }
 
-    /// <summary>
-    /// Tag names executed while processing the most recent LLM response, whichever channel carried
-    /// them. Reset on every call to <see cref="InvokeLlmAsync"/> and read right after by
-    /// <see cref="ExecuteToolCallsAsync"/>, which runs before the next invocation.
-    /// </summary>
-    private readonly HashSet<string> _tagsExecutedInLastResponse = new(StringComparer.OrdinalIgnoreCase);
+    // InvocationState.TagsExecutedInLastResponse: tag names executed while processing the most recent LLM
+    // response, whichever channel carried them. Reset on every call to InvokeLlmAsync and read right after by
+    // ExecuteToolCallsAsync, which runs before the next invocation. Like the repeat detector's window, it lives in the
+    // per-invocation state and not in a field: the same step object serves concurrent runs.
 
-    /// <summary>Keys of the tool calls requested in the previous iteration.</summary>
-    private HashSet<string>? _lastToolCallKeys;
+    /// <summary>Iterations remembered by the repeat detector.</summary>
+    private const int ToolCallWindowSize = 10;
 
-    /// <summary>How many consecutive iterations have asked for exactly the same calls.</summary>
-    private int _consecutiveIdenticalToolCalls;
+    /// <summary>Iterations of the window in which the same read-only call may appear before the step is cut.</summary>
+    private const int ReadOnlyRepeatLimit = 3;
 
     /// <summary>Forgets the previous turn's tool calls; called at the start of every turn.</summary>
-    private void ResetToolCallRepeatTracking()
+    private static void ResetToolCallRepeatTracking(InvocationState state)
     {
-        _lastToolCallKeys = null;
-        _consecutiveIdenticalToolCalls = 0;
+        state.ToolCallWindow.Clear();
+        state.ToolCallProgressWindow.Clear();
+        state.ConsecutiveIdenticalToolCalls = 0;
     }
 
     /// <summary>
     /// Detects a model looping on the same tool calls.
     ///
     /// MaxToolIterations already bounds the loop, but waiting for it wastes several round-trips and
-    /// tells the model nothing. Comparing each iteration against the previous one cuts the loop as
-    /// soon as it is clear no progress is being made.
-    ///
-    /// Read-only calls get more rope (3 repeats) than mutating ones (1): re-reading a file can be
-    /// legitimate exploration, whereas repeating a write with identical arguments cannot.
+    /// tells the model nothing. Two rules cut it as soon as it is clear no progress is being made:
+    /// - A read-only call whose key shows up in 3 or more of the last 10 iterations (this one
+    ///   included), consecutive or not: it catches cycles (A,B,A,B,A) that comparing each iteration
+    ///   with the previous one cannot see. Re-reading a file twice can be legitimate exploration; a
+    ///   third time inside the window is not.
+    ///   A turn whose response executed a tag (a note, a file write...) is progress: only occurrences
+    ///   from the last such turn on count, and a progress turn never counts as a repetition itself.
+    ///   Re-reading after writing a note is the designed behaviour of protocols that discard what was read.
+    /// - Calls that modify stay strict: the same set repeated on consecutive iterations is cut on the
+    ///   2nd repetition, since repeating a write with identical arguments cannot be exploration.
     /// </summary>
-    private bool IsStuckRepeatingToolCalls(List<ToolCall> toolCalls, out string message)
+    private bool IsStuckRepeatingToolCalls(InvocationState state, List<ToolCall> toolCalls, out string message)
     {
         message = "";
+        var window = state.ToolCallWindow;
 
         var keys = toolCalls.Select(LlmHelpers.NormalizeToolCallKey).ToHashSet();
 
-        if (_lastToolCallKeys is null || !keys.SetEquals(_lastToolCallKeys))
+        var identicalToPrevious = window.Count > 0 && keys.SetEquals(window.Last());
+        state.ConsecutiveIdenticalToolCalls = identicalToPrevious ? state.ConsecutiveIdenticalToolCalls + 1 : 0;
+
+        // Window as it was before this iteration; the current one counts as one more occurrence.
+        var previous = window.ToList();
+        var previousProgress = state.ToolCallProgressWindow.ToList();
+        var progressNow = state.TagsExecutedInLastResponse.Count > 0;
+        window.Enqueue(keys);
+        state.ToolCallProgressWindow.Enqueue(progressNow);
+        while (window.Count > ToolCallWindowSize)
         {
-            _lastToolCallKeys = keys;
-            _consecutiveIdenticalToolCalls = 0;
-            return false;
+            window.Dequeue();
+            state.ToolCallProgressWindow.Dequeue();
         }
 
-        _consecutiveIdenticalToolCalls++;
+        var isReadOnly = (ToolCall call) =>
+            Tools.FirstOrDefault(t => t.Name.Equals(call.Name, StringComparison.OrdinalIgnoreCase))?.IsReadOnly == true;
 
-        var allReadOnly = toolCalls.All(call =>
-            Tools.FirstOrDefault(t => t.Name.Equals(call.Name, StringComparison.OrdinalIgnoreCase))?.IsReadOnly == true);
-
-        var threshold = allReadOnly ? 3 : 1;
-
-        if (_consecutiveIdenticalToolCalls <= threshold)
+        var windowStart = Math.Max(0, previous.Count - (ToolCallWindowSize - 1));
+        // Occurrences only count from the last turn with progress; if this very turn made progress, none do.
+        windowStart = Math.Max(windowStart, Math.Max(0, previousProgress.LastIndexOf(true)));
+        var occurrences = (ToolCall call) =>
         {
-            if (Logger.IsEnabled(LogLevel.Debug))
+            if (progressNow) return 1;
+            var key = LlmHelpers.NormalizeToolCallKey(call);
+            return 1 + previous.Skip(windowStart).Count(iteration => iteration.Contains(key));
+        };
+        var repeatedReadOnly = toolCalls
+            .Where(isReadOnly)
+            .Where(call => occurrences(call) >= ReadOnlyRepeatLimit)
+            .ToList();
+
+        var mutatingRepeat = identicalToPrevious
+            && state.ConsecutiveIdenticalToolCalls > 1
+            && !toolCalls.All(isReadOnly);
+
+        if (repeatedReadOnly.Count == 0 && !mutatingRepeat)
+        {
+            if (identicalToPrevious && Logger.IsEnabled(LogLevel.Debug))
             {
                 Logger.LogDebug(
-                    "Step {StepName} repeated the same tool calls ({Count}/{Threshold} before stopping)",
-                    Name, _consecutiveIdenticalToolCalls, threshold);
+                    "Step {StepName} repeated the same tool calls ({Count} consecutive)",
+                    Name, state.ConsecutiveIdenticalToolCalls);
             }
             return false;
         }
 
-        var names = string.Join(", ", toolCalls.Select(c => c.Name).Distinct());
+        var culprits = mutatingRepeat ? toolCalls : repeatedReadOnly;
+        var names = string.Join(", ", culprits.Select(c => c.Name).Distinct());
+        var times = mutatingRepeat
+            ? state.ConsecutiveIdenticalToolCalls + 1
+            : culprits.Max(occurrences);
+
         Logger.LogWarning(
             "Step {StepName} stopped: tool calls [{Tools}] repeated {Count} times without progress",
-            Name, names, _consecutiveIdenticalToolCalls + 1);
+            Name, names, times);
 
         message =
-            $"Execution stopped: [{names}] was called {_consecutiveIdenticalToolCalls + 1} times in a row " +
+            $"Execution stopped: [{names}] was called {times} times " +
+            (mutatingRepeat ? "in a row " : $"within the last {ToolCallWindowSize} iterations ") +
             "with identical arguments and no progress. Answer with the information you already have.";
 
         return true;
@@ -262,15 +336,20 @@ public abstract partial class BaseLlmStep
 
     /// <summary>
     /// Turns a tool-calling response into a final one carrying <paramref name="message"/>, so the
-    /// model learns why it was cut off instead of the step failing opaquely.
+    /// model learns why it was cut off instead of the step failing opaquely. With
+    /// <paramref name="keepContent"/>, a turn that wrote text keeps it as the answer (the message
+    /// only fills an empty one). Either way the candidate is marked with
+    /// <see cref="LlmResponse.ToolLoopStopMessage"/>, so a derived step can tell the cut from an
+    /// answer the model chose to give.
     /// </summary>
-    private static LlmResult StopWithMessage(LlmResult result, LlmResponse candidate, string message)
+    private static LlmResult StopWithMessage(LlmResult result, LlmResponse candidate, string message, bool keepContent)
     {
         var stopped = candidate with
         {
-            Content = string.IsNullOrWhiteSpace(candidate.Content) ? message : candidate.Content,
+            Content = keepContent && !string.IsNullOrWhiteSpace(candidate.Content) ? candidate.Content : message,
             ToolCalls = null,
-            FinishReason = FinishReason.Stop
+            FinishReason = FinishReason.Stop,
+            ToolLoopStopMessage = message
         };
 
         return LlmResult.Success(
@@ -280,7 +359,9 @@ public abstract partial class BaseLlmStep
             completionTokens: result.CompletionTokens,
             costUsd: result.CostUsd,
             model: result.Model,
-            nativeResponse: result.NativeResponse);
+            nativeResponse: result.NativeResponse,
+            reasoningTokens: result.ReasoningTokens,
+            cachedPromptTokens: result.CachedPromptTokens);
     }
 
     private List<ToolCall> DeduplicateToolCalls(List<ToolCall> toolCalls)
@@ -308,7 +389,8 @@ public abstract partial class BaseLlmStep
         return [.. uniqueCalls.Values];
     }
 
-    private async Task ExecuteToolCallsAsync(
+    /// <summary>Runs the batch; returns the message of the first tool that asked to end the loop, if any.</summary>
+    private async Task<string?> ExecuteToolCallsAsync(
         string stepName,
         List<ToolCall> toolCalls,
         IList<ITool>? availableTools,
@@ -329,8 +411,10 @@ public abstract partial class BaseLlmStep
                 conversation?.AddToolMessage(toolCall.Id, "Error: No tools available");
             }
 
-            return;
+            return null;
         }
+
+        string? stopRequested = null;
 
         foreach (var toolCall in toolCalls)
         {
@@ -350,7 +434,7 @@ public abstract partial class BaseLlmStep
                     h => h.TagName.Equals(toolCall.Name, StringComparison.OrdinalIgnoreCase));
 
                 string errorMessage;
-                if (matchingTag != null && _tagsExecutedInLastResponse.Contains(toolCall.Name))
+                if (matchingTag != null && GetState(context).TagsExecutedInLastResponse.Contains(toolCall.Name))
                 {
                     // The model wrote the tag AND called it as a tool in the same response, so the
                     // action already happened. Restating GetInstructions() here would tell it to
@@ -409,6 +493,12 @@ public abstract partial class BaseLlmStep
 
                 conversation?.AddToolMessage(toolCall.Id, result ?? string.Empty);
             }
+            catch (ToolLoopStopRequestedException ex)
+            {
+                // Its message is the tool's result, so every call keeps its answer; the loop ends after the batch.
+                conversation?.AddToolMessage(toolCall.Id, ex.Message);
+                stopRequested ??= ex.Message;
+            }
             catch (Exception ex)
             {
                 if (Logger.IsEnabled(LogLevel.Error))
@@ -418,6 +508,8 @@ public abstract partial class BaseLlmStep
                 conversation?.AddToolMessage(toolCall.Id, $"Error executing tool: {ex.Message}");
             }
         }
+
+        return stopRequested;
     }
 
     private async Task<LlmResult> InvokeLlmAsync(
@@ -428,7 +520,7 @@ public abstract partial class BaseLlmStep
     {
         // Scoped to this single response: ExecuteToolCallsAsync reads it right after this method
         // returns, before the next invocation clears it again.
-        _tagsExecutedInLastResponse.Clear();
+        GetState(context).TagsExecutedInLastResponse.Clear();
 
         var llmService = GetLlmService(context);
         var model = GetModel(context);
@@ -491,7 +583,7 @@ public abstract partial class BaseLlmStep
                 purgedContent += await scanner.FlushAsync(context, cancellationToken);
                 purgedContent = AppendReferences(purgedContent, reasoningReferences);
 
-                _tagsExecutedInLastResponse.UnionWith(scanner.ExecutedTags);
+                GetState(context).TagsExecutedInLastResponse.UnionWith(scanner.ExecutedTags);
 
                 var processedCandidates = new List<LlmResponse>(result.Candidates)
                 {
@@ -509,7 +601,9 @@ public abstract partial class BaseLlmStep
                     completionTokens: result.CompletionTokens,
                     costUsd: result.CostUsd,
                     model: result.Model,
-                    nativeResponse: result.NativeResponse);
+                    nativeResponse: result.NativeResponse,
+                    reasoningTokens: result.ReasoningTokens,
+                    cachedPromptTokens: result.CachedPromptTokens);
             }
         }
         else
@@ -523,6 +617,8 @@ public abstract partial class BaseLlmStep
             var totalTokens = 0;
             int? promptTokens = null;
             int? completionTokens = null;
+            int? reasoningTokens = null;
+            int? cachedPromptTokens = null;
 
             // The scanner's state machine spans chunks, and only the primary choice (index 0) gets
             // one: it is the choice the step goes on to use, and a tag is an action with side
@@ -646,6 +742,8 @@ public abstract partial class BaseLlmStep
                 // del finish_reason o en un chunk final separado (Ollama). Captúralo siempre.
                 if (chunk.PromptTokens.HasValue) promptTokens = chunk.PromptTokens.Value;
                 if (chunk.CompletionTokens.HasValue) completionTokens = chunk.CompletionTokens.Value;
+                if (chunk.ReasoningTokens.HasValue) reasoningTokens = chunk.ReasoningTokens.Value;
+                if (chunk.CachedPromptTokens.HasValue) cachedPromptTokens = chunk.CachedPromptTokens.Value;
             }
 
             // End of stream: a tag still open was never a tag - its text goes out as plain text on
@@ -654,7 +752,7 @@ public abstract partial class BaseLlmStep
             {
                 var wasThinking = lastChannelWasThinking.GetValueOrDefault(choiceIdx, false);
                 await EmitPurgedAsync(choiceIdx, await scanner.FlushAsync(context, cancellationToken), wasThinking);
-                _tagsExecutedInLastResponse.UnionWith(scanner.ExecutedTags);
+                GetState(context).TagsExecutedInLastResponse.UnionWith(scanner.ExecutedTags);
             }
 
             // Finalize all candidates
@@ -707,7 +805,7 @@ public abstract partial class BaseLlmStep
 
             var primaryCandidate = candidates[0];
             var finalReason = primaryCandidate.FinishReason ?? FinishReason.Other;
-            var streamedCost = PriceOf(provider, model, model, promptTokens, completionTokens);
+            var streamedCost = PriceOf(provider, model, model, promptTokens, completionTokens, cachedPromptTokens);
 
             await context.SendEventAsync(new LlmResponseEvent
             {
@@ -720,6 +818,7 @@ public abstract partial class BaseLlmStep
                 TokensUsed = totalTokens,
                 PromptTokens = promptTokens,
                 CompletionTokens = completionTokens,
+                CachedPromptTokens = cachedPromptTokens,
                 CostUsd = streamedCost,
                 Model = model,
                 Provider = llmService?.Name,
@@ -732,7 +831,9 @@ public abstract partial class BaseLlmStep
                 promptTokens: promptTokens,
                 completionTokens: completionTokens,
                 costUsd: streamedCost,
-                model: model);
+                model: model,
+                reasoningTokens: reasoningTokens,
+                cachedPromptTokens: cachedPromptTokens);
         }
 
         // Services report tokens but not cost: they never see the provider's model catalogue.
@@ -740,7 +841,7 @@ public abstract partial class BaseLlmStep
         // declares the per-million prices - from being configuration nobody reads.
         if (result.CostUsd is null && result.IsSuccess)
         {
-            result.CostUsd = PriceOf(provider, result.Model, model, result.PromptTokens, result.CompletionTokens);
+            result.CostUsd = PriceOf(provider, result.Model, model, result.PromptTokens, result.CompletionTokens, result.CachedPromptTokens);
         }
 
         // ── Normalización post-ensamblado ──
@@ -805,6 +906,7 @@ public abstract partial class BaseLlmStep
                         TokensUsed = result.TokensUsed ?? 0,
                         PromptTokens = isPrimary ? result.PromptTokens : null,
                         CompletionTokens = isPrimary ? result.CompletionTokens : null,
+                        CachedPromptTokens = isPrimary ? result.CachedPromptTokens : null,
                         CostUsd = isPrimary ? result.CostUsd : null,
                         Model = model,
                         Provider = llmService?.Name,
@@ -822,10 +924,10 @@ public abstract partial class BaseLlmStep
     /// the model that was requested: Azure answers with the versioned model name (<c>gpt-4.1-mini-2025-04-14</c>) while
     /// the catalogue, like the role, names the deployment.
     /// </summary>
-    private static decimal? PriceOf(Configuration.LlmProvider provider, string? responseModel, string requestedModel, int? promptTokens, int? completionTokens) =>
-        provider.CalculateCost(responseModel ?? requestedModel, promptTokens, completionTokens)
+    private static decimal? PriceOf(Configuration.LlmProvider provider, string? responseModel, string requestedModel, int? promptTokens, int? completionTokens, int? cachedPromptTokens) =>
+        provider.CalculateCost(responseModel ?? requestedModel, promptTokens, completionTokens, cachedPromptTokens)
         ?? (responseModel != null && !string.Equals(responseModel, requestedModel, StringComparison.OrdinalIgnoreCase)
-            ? provider.CalculateCost(requestedModel, promptTokens, completionTokens)
+            ? provider.CalculateCost(requestedModel, promptTokens, completionTokens, cachedPromptTokens)
             : null);
 
     /// <summary>

@@ -1,0 +1,642 @@
+[
+ {
+  "symbol": "PipelineContext.StepState / Runtime",
+  "question": "Que ocurre con StepState (internal, no serializado) y Runtime al suspender y reanudar un pipeline; quien serializa PipelineContext con Newtonsoft y reinyecta Runtime.",
+  "needs": [
+   "Core/Execution/Pipeline.cs",
+   "IPipelineContextStorage (otras implementaciones)"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "PipelineContextFactory.Create",
+  "question": "Las dos sobrecargas con parametros opcionales (Create(conversation=null) y Create(conversation=null, subscribers=null)) son ambiguas para una llamada sin argumentos; cuales son los llamadores reales (Pipeline.ExecuteAsync lo invoca segun el grafo)?",
+  "needs": [
+   "Core/Execution/Pipeline.cs"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "PipelineContextFactory.Create",
+  "question": "EventChannel local creado por llamada: tiene recursos que liberar (IDisposable, lector en segundo plano)?",
+  "needs": [
+   "Observability/EventChannel.cs"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "InMemoryPipelineContextStorage.ClearAsync",
+  "question": "El grafo atribuye a ClearAsync una llamada a PipelineMiddlewareRegistry.Clear, pero el codigo del lote (linea 37) solo llama a _storage.Clear(); es una relacion aproximada incorrecta del indexador?",
+  "needs": [
+   "Core/Execution/PipelineMiddlewareRegistry.cs"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "MessageHistory.Messages",
+  "question": "Messages es un IReadOnlyList sin setter; los atributos JsonIgnore sugieren serializacion de MessageHistory con PipelineContext. Se rehidratan los mensajes al deserializar el contexto?",
+  "needs": [
+   "configuracion de Newtonsoft en la suspension del pipeline",
+   "ConversationContext (serializacion)"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "ConversationOptions",
+  "question": "Quien consume MaxTokens, UseSlidingWindow y SlidingWindowMaxTokens, y donde se construye ConversationContext con las opciones configuradas (AITaskAgentOptions.Conversation)?",
+  "needs": [
+   "Configuration/AITaskAgentOptions.cs",
+   "LLM/Steps/BaseLlmStep"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "IConversationStorage",
+  "question": "Que consumidores invocan IConversationStorage y cual es la implementacion registrada en produccion (el grafo solo muestra InMemoryConversationStorage como singleton)?",
+  "needs": [
+   "registro DI de servicios LLM",
+   "pasos LLM de conversacion"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "MessageHistory.EstimateMessageTokens",
+  "question": "ToolCall.Name y ToolCall.Arguments pueden ser null? Con el contador por defecto un null produce NullReferenceException.",
+  "needs": [
+   "LLM/Models/ToolCall.cs"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "StreamingTagParser",
+  "question": "Se crea una instancia por respuesta o se reutiliza entre turnos? ExecutedTags y CompletedTagReferences acumulan sin reiniciarse.",
+  "needs": [
+   "LLM/Steps/BaseLlmStep.LlmInvocation.cs"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "FileConversationStorage.GetConversationAsync",
+  "question": "Message.Native (NativeObject) se serializa y deserializa correctamente con TypeNameHandling.None?",
+  "needs": [
+   "LLM/Models/NativeObject.cs"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "PipelineContext.CloneForBranch",
+  "question": "ParallelStep llama a AddPathPart sobre el clon antes de ejecutar pasos hijos? Determina si F13 se manifiesta.",
+  "needs": [
+   "Core/Steps/ParallelStep.cs"
+  ],
+  "batch": "conversation"
+ },
+ {
+  "symbol": "StepManager",
+  "question": "Quién invoca SetServiceProvider, AddStep, RegisterStepsFromAssembly y CreateStep; sin esos llamadores no se puede confirmar si el registro se inicializa antes de usarse.",
+  "needs": [
+   "YamlPipelineFactory",
+   "ServiceCollectionExtensions.AddAITaskAgent"
+  ],
+  "batch": "core-attributes"
+ },
+ {
+  "symbol": "DefaultStepActivator.Create",
+  "question": "Qué origen tiene el Type que reciben SchemaCompiler, JsonResponseParser, Serializations.WithoutExceptionProperties y TinyTemplateRendered (entrada externa o tipos del propio código).",
+  "needs": [
+   "SchemaCompiler.CompileAndLoadAsync",
+   "JsonResponseParser",
+   "Serializations.WithoutExceptionProperties",
+   "TinyTemplateRendered"
+  ],
+  "batch": "core-attributes"
+ },
+ {
+  "symbol": "StepResultFactory",
+  "question": "Las aristas CALLS del grafo hacia ICacheService.Remove y PipelineMiddlewareRegistry.Clear desde AddPropertiesFromType y CreateSchemaForType parecen colisiones de nombre con HashSet.Remove y Enumeration.Clear; el código del lote no usa esos servicios.",
+  "needs": [
+   "ICacheService",
+   "PipelineMiddlewareRegistry"
+  ],
+  "batch": "core-attributes"
+ },
+ {
+  "symbol": "ValidatorTagAttribute",
+  "question": "Qué componente descubre los validadores con este atributo; en el lote no hay lectura de ValidatorTagAttribute.",
+  "needs": [
+   "YamlPipelineFactory",
+   "IStepValidator"
+  ],
+  "batch": "core-attributes"
+ },
+ {
+  "symbol": "MemoryCacheService.GetOrCreateAsync",
+  "question": "Qué consumidores usan la caché y con qué cardinalidad de claves, para valorar duplicación de factories y crecimiento sin límite.",
+  "needs": [
+   "ICacheService",
+   "consumidores de ICacheService"
+  ],
+  "batch": "core-attributes"
+ },
+ {
+  "symbol": "FinishReasonExtensions.Parse",
+  "question": "Cómo tratan LlmHelpers y ToolCallXmlParser el valor Streaming cuando el proveedor envía finish_reason vacío en el chunk final.",
+  "needs": [
+   "LlmHelpers.ConvertOrThrow",
+   "LlmHelpers.NormalizeToolCallKey",
+   "ToolCallXmlParser.TryParseJsonToolCallToken"
+  ],
+  "batch": "core-attributes"
+ },
+ {
+  "symbol": "ConfigurationPatchExtensions.BindEx",
+  "question": "Qué hace DiContractResolver con propiedades y constructores respecto a la población de objetos existentes.",
+  "needs": [
+   "DiContractResolver"
+  ],
+  "batch": "core-attributes"
+ },
+ {
+  "symbol": "TypedStep.ExecuteAsync",
+  "question": "¿Qué pasa RetryMiddleware como lastStepResult en un reintento: el error genérico (ErrorStepResult) o un resultado del tipo TOut?",
+  "needs": [
+   "Core.Execution.Middlewares.RetryMiddleware.InvokeAsync"
+  ],
+  "batch": "core-steps"
+ },
+ {
+  "symbol": "StepResult.GetParameters",
+  "question": "¿Se invoca GetParameters sobre un ParallelResult al renderizar plantillas, o el motor usa el indexador directamente?",
+  "needs": [
+   "TinyTemplate / renderizador de plantillas",
+   "Core.Execution.StepResultFactory"
+  ],
+  "batch": "core-steps"
+ },
+ {
+  "symbol": "ParallelStep.ExecuteAsync",
+  "question": "¿Cómo trata el Pipeline un ParallelResult cuyas ramas devolvieron SuspendInfo, y qué hace CloneForBranch con Metadata y conversación?",
+  "needs": [
+   "Core.Models.PipelineContext.CloneForBranch",
+   "Core.Execution.Pipeline"
+  ],
+  "batch": "core-steps"
+ },
+ {
+  "symbol": "Factory<T>",
+  "question": "¿Dónde se registra Factory<T> (genérico abierto, fábrica) y con qué keyName?",
+  "needs": [
+   "Registro DI de IFactory<>"
+  ],
+  "batch": "core-steps"
+ },
+ {
+  "symbol": "LoopStep.ExecuteAsync",
+  "question": "¿Qué semántica tiene ExecuteStepsWithNextStepsAsync con isBranchScope y la caché por ruta, y se deshace AddPathPart ante excepciones?",
+  "needs": [
+   "Core.Models.PipelineContext.ExecuteStepsWithNextStepsAsync"
+  ],
+  "batch": "core-steps"
+ },
+ {
+  "symbol": "BranchStartedEvent/BranchCompletedEvent/PipelineResum*Event/LoopExhaustedEvent/StepTimeoutEvent/StepCachedHitEvent",
+  "question": "El grafo muestra Ca=0; no se sabe si algun emisor los construye (posible codigo muerto) o si el indexador no lo capta.",
+  "needs": [
+   "emisores en Core.Execution / pipelines"
+  ],
+  "batch": "event"
+ },
+ {
+  "symbol": "AITaskAgentConstants.EventTypes",
+  "question": "Existen en el catalogo central constantes para step.cached_hit, step.timeout, branch.* y pipeline.resum*?",
+  "needs": [
+   "Core/AITaskAgentConstants.cs"
+  ],
+  "batch": "event"
+ },
+ {
+  "symbol": "StepCompletedEvent.StepResult",
+  "question": "Como se serializan los eventos hacia sinks externos y se excluye StepResult?",
+  "needs": [
+   "sinks/serializadores de IProgressEvent"
+  ],
+  "batch": "event"
+ },
+ {
+  "symbol": "RetryMiddleware.InvokeAsync",
+  "question": "¿Puede IFallbackable.SwitchToNextFallback devolver true indefinidamente (por ejemplo ante cancelación) y provocar un bucle infinito al reiniciar attempt = 1?",
+  "needs": [
+   "Core.Abstractions.IFallbackable",
+   "LLM.Steps.BaseLlmStep"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "Pipeline.ExecuteAsync",
+  "question": "¿Qué hace PipelineContext.SendEventAsync con un token cancelado y qué ocurre con EventChannel tras DisposeAsync si el contexto se reutiliza en la reanudación?",
+  "needs": [
+   "Core.Models.PipelineContext",
+   "Observability.EventChannel"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "ServiceProviderPipelineMiddlewareExtensions.RegisterPipelineMiddleware",
+  "question": "¿PipelineMiddlewareRegistry.Register deduplica por tipo y es seguro entre hilos?",
+  "needs": [
+   "Core.Execution.PipelineMiddlewareRegistry"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "YamlPipelineFactory.CreateFromYaml",
+  "question": "¿Deserialize<T>(string) de YamlDotNet procesa solo el primer documento cuando hay separadores '---'?",
+  "needs": [
+   "YamlDotNet.Serialization.Deserializer"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "YamlPipelineFactory.ValidateAndOrder",
+  "question": "¿Cómo convierte StepBase/StepResultFactory la entrada cuando el IStepResult previo no es del tipo InputType del paso en un DAG con ramas?",
+  "needs": [
+   "Core.Steps.StepBase",
+   "Core.Execution.StepResultFactory"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "YamlPipelineFactory.ResolveRole",
+  "question": "¿Puede LlmEnvironment.DefaultRole ser null o vacío? Con profileName null provocaría ArgumentNullException en TryGetValue.",
+  "needs": [
+   "LLM.Configuration.LlmEnvironment"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "YamlLlmStep.GetConversationContext",
+  "question": "Con UseConversationHistory=false se crea un contexto nuevo en cada llamada; ¿llama BaseLlmStep varias veces por ejecución o reintento, perdiendo historial y retroalimentación del error entre intentos?",
+  "needs": [
+   "LLM.Steps.BaseLlmStep",
+   "LLM.Conversation.Context.ConversationContext"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "SchemaCompiler.RenameGeneratedClass",
+  "question": "¿Genera NJsonSchema siempre una clase con el nombre exacto del typeNameHint, y qué pasa con esquemas recursivos que referencian el tipo raíz renombrado?",
+  "needs": [
+   "NJsonSchema.CodeGeneration.CSharp.CSharpGenerator"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "SchemaCompiler.GetRequiredReferences",
+  "question": "¿Incluye typeof(V8ScriptEngine).Assembly todos los tipos base necesarios (ScriptEngine, AddHostObject) para compilar el código con validación JS, o hace falta Microsoft.ClearScript.Core?",
+  "needs": [
+   "Microsoft.ClearScript.V8",
+   "Microsoft.ClearScript.Core"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "YamlLlmStep.StepId",
+  "question": "¿Aplica YamlDotNet el modificador required de C#? Si no, un paso sin stepId conserva el nombre GUID sin error.",
+  "needs": [
+   "YamlDotNet.Serialization"
+  ],
+  "batch": "execution"
+ },
+ {
+  "symbol": "JsonResponseParser",
+  "question": "Quien instancia el parser y con que settings? El grafo muestra una relacion saliente a DefaultStepActivator.Create, que no se ve en el codigo del lote.",
+  "needs": [
+   "Core.Steps.DefaultStepActivator.Create",
+   "registro DI de JsonResponseParser"
+  ],
+  "batch": "json"
+ },
+ {
+  "symbol": "JsonSchemaValidator",
+  "question": "Existe algun llamador de los validadores fuera del lote (Ca=0, sin relaciones entrantes)?",
+  "needs": [
+   "busqueda de usos de JsonSchemaValidator en el repositorio"
+  ],
+  "batch": "json"
+ },
+ {
+  "symbol": "Serializations.WithoutExeption",
+  "question": "Que implementaciones de IStepError existen y tienen propiedades object/colecciones que puedan contener excepciones? Quien invoca WithoutExeption (fan_in=0)?",
+  "needs": [
+   "Core.Abstractions.IStepError",
+   "implementaciones de IStepError"
+  ],
+  "batch": "json"
+ },
+ {
+  "symbol": "NewtonsoftJsonDataConverter.Convert",
+  "question": "Como gestiona StepResultFactory las excepciones de ToObject y los valores null devueltos para tipos valor?",
+  "needs": [
+   "Core.Execution.StepResultFactory"
+  ],
+  "batch": "json"
+ },
+ {
+  "symbol": "BaseLlmStep.ExecuteAsync",
+  "question": "Tras SwitchToNextFallback, RetryMiddleware reinicia attempt a 1 para que se reconstruya state.Request, o conserva el contador? De ello depende F20.",
+  "needs": [
+   "Core.Execution.Middlewares.RetryMiddleware.InvokeAsync"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "BaseLlmStep.GetState",
+  "question": "PipelineContext.StepState es un diccionario concurrente? Cada rama de ParallelStep recibe un PipelineContext propio como afirma el comentario de InvocationState?",
+  "needs": [
+   "Core.Models.PipelineContext",
+   "ParallelStep"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "TemplateLlmStep.TemplateLlmStep",
+  "question": "Qué hace AvailableTools.GetTools ante nombres de herramienta no registrados todavía (UseAITaskAgent se llama después de construir pasos)?",
+  "needs": [
+   "LLM.Tools.Implementation.AvailableTools"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "FileTemplateProvider.GetTemplate",
+  "question": "Los ficheros de plantilla de los samples se llaman X_prompt.md o X_prompt.md.md? Define si F10 se manifiesta en uso real.",
+  "needs": [
+   "Samples (plantillas .md)",
+   "ITemplateProvider"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "LlmResponseEmptyException",
+  "question": "Quién lanza LlmResponseEmptyException y LlmHttpResponse, y cómo se traducen a LlmResult.Failure/LlmProviderException?",
+  "needs": [
+   "OpenAILLmService/OpenAILlmService.cs",
+   "otras implementaciones de ILlmService"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "ConfigureLlmEnvironmentOptions.Configure",
+  "question": "BindEx/GetEx puede enlazar el record LlmModelSettings con constructor posicional y su parámetro Inference no nulo cuando falta en configuración?",
+  "needs": [
+   "Configuration.ConfigurationPatchExtensions"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "BaseLlmStep.InvokeLlmAsync",
+  "question": "StreamingTagParser/ITagHandler pueden ejecutarse de forma idempotente o tiene RetryMiddleware alguna protección frente a repetir efectos de tags?",
+  "needs": [
+   "LLM.Streaming.StreamingTagParser",
+   "LLM.Streaming.ITagHandler",
+   "RetryMiddleware"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "NullLlmService.InvokeAsync",
+  "question": "Existen YamlPipelineFactory.InjectDependencies e ILlmResolver como cita el mensaje de error de NullLlmService?",
+  "needs": [
+   "YAML.Execution.YamlPipelineFactory"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "TinyTemplateRendered.RenderInternal",
+  "question": "Qué datos controlados por usuario llegan al modelo de plantilla (Input, Context.Metadata) en los pipelines reales? Determina el alcance práctico de F12.",
+  "needs": [
+   "YAML.Steps.YamlLlmStep",
+   "pasos que llenan context.Metadata"
+  ],
+  "batch": "llm-configuration"
+ },
+ {
+  "symbol": "EventChannel.DisposeAsync",
+  "question": "El grafo muestra una llamada de DisposeAsync a ICacheService.Clear que no existe en el código del lote. Es una resolución aproximada errónea de CALLS (por ejemplo, por List.Clear) o hay una dependencia real?",
+  "needs": [
+   "Support.Caching.ICacheService"
+  ],
+  "batch": "observability"
+ },
+ {
+  "symbol": "IEventChannel",
+  "question": "Pipeline.ExecuteAsync dispone el canal inyectado como Singleton. Se crea un EventChannel nuevo por ejecución o se comparte entre ejecuciones concurrentes?",
+  "needs": [
+   "Core.Execution.Pipeline.ExecuteAsync",
+   "Core.Models.PipelineContextFactory.Create"
+  ],
+  "batch": "observability"
+ },
+ {
+  "symbol": "IStepTracer",
+  "question": "Quién registra o invoca IStepTracer y quién construye StepTraceEvent? No hay productores ni consumidores en el lote.",
+  "needs": [
+   "Registros DI",
+   "Core.Models.PipelineContext"
+  ],
+  "batch": "observability"
+ },
+ {
+  "symbol": "EventChannel.SendAsync",
+  "question": "Se invoca SendAsync concurrentemente (ramas paralelas) sobre el mismo EventChannel, lo que invalidaría SingleWriter = true?",
+  "needs": [
+   "Core.Models.PipelineContext.CloneForBranch",
+   "Core.Models.PipelineContext.SendEventAsync"
+  ],
+  "batch": "observability"
+ },
+ {
+  "symbol": "IProgressEvent",
+  "question": "Cuál es el contrato de SuppressFromUser, EventType y CorrelationId, y puede CorrelationId ser null en eventos reales?",
+  "needs": [
+   "Observability.IProgressEvent"
+  ],
+  "batch": "observability"
+ },
+ {
+  "symbol": "LlmIntentionResult.ValidateAsync",
+  "question": "La tarea de StepBase/LlmStepResult.ValidateAsync se completa siempre de forma sincrona? Determina si .Result puede interbloquear.",
+  "needs": [
+   "Core.StepResults.StepResult.ValidateAsync",
+   "Core.Steps.StepBase.ValidateAsync"
+  ],
+  "batch": "option"
+ },
+ {
+  "symbol": "RouterStep.SelectTargetStep",
+  "question": "Como procesa el motor NextSteps: una entrada duplicada ejecuta el destino dos veces?",
+  "needs": [
+   "Core.Execution (ejecucion de NextSteps)",
+   "StepResult.NextSteps"
+  ],
+  "batch": "option"
+ },
+ {
+  "symbol": "LlmIntentionResult.ValidateAsync",
+  "question": "Puede Intention.SelectedOption ser null tras la deserializacion?",
+  "needs": [
+   "LLM.Results.Intention"
+  ],
+  "batch": "option"
+ },
+ {
+  "symbol": "IntentionAnalyzerStep.FinalizeAsync",
+  "question": "Que mensaje anade la base FinalizeAsync al historial y cual elimina RemoveMessage con indice Count-1?",
+  "needs": [
+   "LLM.Steps.BaseLlmStep.FinalizeAsync",
+   "MessageHistory.RemoveMessage"
+  ],
+  "batch": "option"
+ },
+ {
+  "symbol": "AITaskAgentOptions.CircuitBreaker",
+  "question": "Algun codigo construye CircuitBreaker o RateLimiter a partir de CircuitBreakerOptions y RateLimitOptions?",
+  "needs": [
+   "Configuration.ServiceCollectionExtensions.AddAITaskAgent"
+  ],
+  "batch": "option"
+ },
+ {
+  "symbol": "DiContractResolver",
+  "question": "Donde se instancia este resolver y para que tipos de modelo se usa?",
+  "needs": [
+   "Core.Execution.StepResultFactory"
+  ],
+  "batch": "option"
+ },
+ {
+  "symbol": "LlmOptions",
+  "question": "Alguien consume LlmOptions o es un resto previo a LlmInferenceSettings?",
+  "needs": [
+   "LLM.Models.LlmRequest",
+   "LLM.Configuration.LlmInferenceSettings"
+  ],
+  "batch": "option"
+ },
+ {
+  "symbol": "RouterStep",
+  "question": "Se valida que las opciones de IntentionAnalyzerStep coincidan con las claves de Routes del RouterStep que le sigue?",
+  "needs": [
+   "codigo de construccion de pipelines"
+  ],
+  "batch": "option"
+ },
+ {
+  "symbol": "PipelineMiddlewareRegistry.Clear",
+  "question": "El grafo reporta llamadas desde InMemoryPipelineContextStorage.ClearAsync y StepResultFactory.CreateSchemaForType a PipelineMiddlewareRegistry.Clear. Si son reales, limpiar un almacenamiento o crear un esquema vaciaría los middlewares globales; si son una resolución aproximada de un Clear de otra colección, no hay problema.",
+  "needs": [
+   "Core/Execution/InMemoryPipelineContextStorage.cs",
+   "Core/Execution/StepResultFactory.cs"
+  ],
+  "batch": "shared"
+ },
+ {
+  "symbol": "ICacheService.Remove",
+  "question": "El grafo reporta que StepResultFactory y MessageHistory.ClearAfterBookmark llaman a ICacheService.Remove; no se puede confirmar si es una llamada real a la caché o una resolución aproximada de otro Remove.",
+  "needs": [
+   "Core/Execution/StepResultFactory.cs",
+   "LLM/Conversation/MessageHistory.cs"
+  ],
+  "batch": "shared"
+ },
+ {
+  "symbol": "Metrics",
+  "question": "Metrics (Ca=0 en el grafo) solo declara instrumentos; no se ve en este lote quién los incrementa. Si nada los usa, son código muerto y no se emiten métricas.",
+  "needs": [
+   "Core/Execution (pipeline y pasos)",
+   "LLM/Steps"
+  ],
+  "batch": "shared"
+ },
+ {
+  "symbol": "IStep.MaxRetries",
+  "question": "No se ve cómo se interpreta MaxRetries => 1: si es el número total de intentos o de reintentos adicionales.",
+  "needs": [
+   "Core/Execution/Pipeline.cs"
+  ],
+  "batch": "shared"
+ },
+ {
+  "symbol": "LlmResult.CostUsd",
+  "question": "El comentario afirma que BaseLlmStep rellena CostUsd tras la llamada; no se puede verificar desde este lote.",
+  "needs": [
+   "LLM/Steps/BaseLlmStep.LlmInvocation.cs"
+  ],
+  "batch": "shared"
+ },
+ {
+  "symbol": "NativeObject.Value",
+  "question": "NativeObject no tiene atributos de serialización; ToolCall excluye Native de JSON, pero no se ve si Message lo serializa por otra vía.",
+  "needs": [
+   "LLM/Models/Message.cs",
+   "LLM/Conversation/Storage/YamlFileConversationStorage.cs"
+  ],
+  "batch": "shared"
+ },
+ {
+  "symbol": "ToolCallXmlParser",
+  "question": "Quien invoca ParseToolCalls, ParseJsonInContentToolCalls y RemoveToolCallTags y con que conjunto de herramientas? Sin ello no se fija el alcance de F3 ni se resuelven los DEAD?",
+  "needs": [
+   "LLM providers (OpenAILlmService u otros)",
+   "BaseLlmStep"
+  ],
+  "batch": "tool"
+ },
+ {
+  "symbol": "ToolCallXmlParser.ParseGlmArguments",
+  "question": "El formato real de GLM incluye cierres explicitos de arg_key y arg_value? Determina si GlmArgRegex casa (F6).",
+  "needs": [
+   "salida real del modelo GLM"
+  ],
+  "batch": "tool"
+ },
+ {
+  "symbol": "ToolCallXmlParser.TryParseJsonToolCallToken",
+  "question": "El grafo lista una llamada a FinishReasonExtensions.Parse desde este metodo; el codigo del lote no la contiene (probable imprecision de CALLS aproximadas).",
+  "needs": [
+   "LLM.Constants.FinishReason.FinishReasonExtensions.Parse"
+  ],
+  "batch": "tool"
+ },
+ {
+  "symbol": "ToolCallXmlParser.ParseToolCalls",
+  "question": "Que comparador usa el HashSet toolNames recibido? Determina si toolNames.Contains distingue mayusculas, cuando FindBestToolMatch no lo hace.",
+  "needs": [
+   "codigo que construye toolNames"
+  ],
+  "batch": "tool"
+ },
+ {
+  "symbol": "LlmTool.ExecuteAsync",
+  "question": "SendEventAsync propaga OperationCanceledException o excepciones de los suscriptores? Condiciona la gravedad de F12.",
+  "needs": [
+   "Core.Models.PipelineContext.SendEventAsync"
+  ],
+  "batch": "tool"
+ },
+ {
+  "symbol": "AvailableTools.Instance",
+  "question": "Se usa Instance en algun sitio ademas de la instancia registrada en DI, o se registra Instance en el contenedor?",
+  "needs": [
+   "Configuration.ServiceCollectionExtensions.UseAITaskAgent"
+  ],
+  "batch": "tool"
+ },
+ {
+  "symbol": "ITool.IsReadOnly",
+  "question": "Que consume IsReadOnly y como detecta BaseLlmStep repeticiones de llamadas identicas? No se ve en el lote.",
+  "needs": [
+   "BaseLlmStep.ExecuteToolCallsAsync"
+  ],
+  "batch": "tool"
+ }
+]

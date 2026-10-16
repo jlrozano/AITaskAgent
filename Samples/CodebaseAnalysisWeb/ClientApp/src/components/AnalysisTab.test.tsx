@@ -33,9 +33,13 @@ function renderTab(state: RunState, openWorkspace: WorkspaceDto = workspace) {
     cancelling: false,
     regenerating: null,
     regenerateError: null,
+    verifying: null,
+    verifyError: null,
     start: vi.fn(),
     cancel: vi.fn(),
     regenerate: vi.fn(),
+    verify: vi.fn(),
+    undoVerification: vi.fn(),
     clearError: vi.fn(),
   };
   render(

@@ -1,0 +1,2356 @@
+{
+ "batch": "execution",
+ "files": [
+  {
+   "path": "Core/Abstractions/IPipelineMiddleware.cs",
+   "role": "contract",
+   "summary": "Define IPipelineMiddleware, el contrato de middleware de pasos con la forma de ASP.NET Core: recibe paso, entrada, contexto, delegado next (que acepta un CancellationToken para poder sustituirlo) y token. Es el punto de extensión por el que se componen Observability, Timeout, Retry y los middlewares de usuario."
+  },
+  {
+   "path": "Core/Constants/AITaskAgentConstants.EventTypes.cs",
+   "role": "constants",
+   "summary": "Fragmento parcial de AITaskAgentConstants con la clase anidada EventTypes: cadenas const para los tipos de evento de observabilidad (pipeline.started, step.completed, tag.started, loop.exhausted, etc.). Solo datos, sin lógica."
+  },
+  {
+   "path": "Core/Constants/AITaskAgentConstants.TelemetryTags.cs",
+   "role": "constants",
+   "summary": "Fragmento parcial de AITaskAgentConstants con TelemetryTags: nombres de tags OpenTelemetry (pipeline.name, step.name, llm.model...) y nombre/versión de ActivitySource y Meter. Mezcla etiquetas con constantes de identidad de la fuente de telemetría. Solo datos."
+  },
+  {
+   "path": "Core/Constants/AITaskAgentConstants.ValidationTypes.cs",
+   "role": "constants",
+   "summary": "Fragmento parcial de AITaskAgentConstants con ValidationTypes: los dos valores 'structural' y 'semantic' que RetryMiddleware pone en StepValidationEvent.ValidationType."
+  },
+  {
+   "path": "Core/Execution/IPipeline.cs",
+   "role": "contract",
+   "summary": "Define IPipeline, la superficie que usan las aplicaciones: dos timeouts por defecto y ExecuteAsync<T> que ejecuta una lista de pasos con composición de middleware, contexto opcional, timeout de pipeline y suscriptores de eventos por ejecución."
+  },
+  {
+   "path": "Core/Execution/IPipelineRuntime.cs",
+   "role": "contract",
+   "summary": "Define IPipelineRuntime, la superficie que el motor ofrece al contexto en ejecución: LoggerFactory y ExecuteStepsWithNextStepsAsync, usada por pasos compuestos (Parallel, Loop, routers) para ejecutar hijos con la misma cadena de middleware. Existe para evitar service location de IPipeline desde el contexto."
+  },
+  {
+   "path": "Core/Execution/Middlewares/ObservabilityMiddleware.cs",
+   "role": "implementation",
+   "summary": "Middleware interno que abre una Activity por paso, emite StepStartedEvent/StepCompletedEvent, registra métricas (ejecuciones, duración, errores) y delega el enriquecimiento en IEnrichable. Cubre el camino de excepción volviendo a emitir un evento de fin y relanzando."
+  },
+  {
+   "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+   "role": "implementation",
+   "summary": "Middleware terminal de la cadena: no llama a next, ejecuta step.ExecuteAsync en un bucle de intentos. Reintenta errores sin excepción, validación estructural (IStepResult.ValidateAsync) y semántica (IStep.ValidateAsync); las excepciones y los errores con OriginalException no se reintentan y activan el cambio de fallback si el paso es IFallbackable."
+  },
+  {
+   "path": "Core/Execution/Middlewares/TimeoutMiddleware.cs",
+   "role": "implementation",
+   "summary": "Middleware que impone un timeout global (no por intento) sobre todo lo que cuelga de next, usando un CTS enlazado. Si salta el timeout y no hay cancelación externa, emite StepTimeoutEvent y devuelve un ErrorStepResult."
+  },
+  {
+   "path": "Core/Execution/Pipeline.cs",
+   "role": "implementation",
+   "summary": "Motor de ejecución de pipelines: valida nombres, resuelve la entrada (incluida la reanudación tras suspensión HITL), aplica timeout de pipeline, abre telemetría, compone la cadena User -> Observability -> Timeout -> Retry y ejecuta los pasos secuencialmente con soporte de NextSteps, cache diferida de resultados por ruta y suspensión/reanudación. Implementa también IPipelineRuntime."
+  },
+  {
+   "path": "Core/Execution/PipelineOptions.cs",
+   "role": "model",
+   "summary": "Opciones de timeout por defecto (60 min de pipeline, 30 min de paso). El comentario habla de IOptions y de Pipeline.Configure, pero Pipeline crea su propia instancia."
+  },
+  {
+   "path": "Core/Execution/PipelineRuntimeBase.cs",
+   "role": "contract",
+   "summary": "Base abstracta de motores de pipeline: implementa IPipelineRuntime garantizando LoggerFactory no nulo (NullLoggerFactory como respaldo) y declara abstracto ExecuteStepsWithNextStepsAsync. No implementa IPipeline a propósito."
+  },
+  {
+   "path": "Core/Execution/ServiceProviderPipelineMiddlewareExtensions.cs",
+   "role": "infrastructure",
+   "summary": "Extensiones de IServiceProvider para registrar middlewares de pipeline: resuelven la instancia del contenedor o la construyen con ActivatorUtilities y la guardan en PipelineMiddlewareRegistry (registro externo al lote)."
+  },
+  {
+   "path": "YAML/Abstractions/IYamlStep.cs",
+   "role": "contract",
+   "summary": "Interfaz marcadora para pasos deserializables desde YAML: StepId, InputSchema, OutputSchema y DependsOn, todas init."
+  },
+  {
+   "path": "YAML/Attributes/YamlStepTagAttribute.cs",
+   "role": "model",
+   "summary": "Atributo [YamlStepTag(nombre)] que marca una clase como descubrible por YamlPipelineFactory mediante el tag YAML !nombre."
+  },
+  {
+   "path": "YAML/Compilation/SchemaCompiler.cs",
+   "role": "implementation",
+   "summary": "Compila JSON Schemas a tipos C# en memoria: NJsonSchema genera el POCO, se renombra a {Nombre}Data, se genera un wrapper {Nombre} que hereda de LlmStepResult<{Nombre}Data> con ValidateAsync opcional vía función JS en V8, Roslyn compila a un ensamblado que se carga en AssemblyLoadContext.Default. Mantiene un caché por nombre."
+  },
+  {
+   "path": "YAML/Execution/YamlPipelineFactory.cs",
+   "role": "implementation",
+   "summary": "Construye pipelines declarados en YAML: lee y une ficheros, descubre por reflexión los IYamlStep con [YamlStepTag], deserializa con YamlDotNet usando DI como fábrica de objetos, resuelve roles LLM, inyecta tipos compilados de entrada/salida, valida el DAG (ciclos, dependencias, compatibilidad de esquemas) y ordena topológicamente. Contiene también YamlPipelineDocument (modelo interno) y YamlPipeline (resultado ejecutable)."
+  },
+  {
+   "path": "YAML/Steps/YamlLlmStep.cs",
+   "role": "implementation",
+   "summary": "Paso LLM deserializable desde YAML (!LlmStep). Hereda ejecución, reintentos y fallback de BaseLlmStep; se construye con un rol marcador (NullLlmService) que la factoría sustituye con ApplyRole; sobrescribe los hooks de mensaje de usuario, sistema y contexto de conversación."
+  }
+ ],
+ "types": [
+  {
+   "name": "IPipelineMiddleware",
+   "kind": "interface",
+   "path": "Core/Abstractions/IPipelineMiddleware.cs",
+   "startLine": 9,
+   "endLine": 26,
+   "purpose": "Contrato de middleware de ejecución de un paso. Recibe el paso, su entrada, el contexto, un delegado next(CancellationToken) y el token de cancelación, y devuelve el IStepResult.",
+   "collaborators": [
+    "IStep, IStepResult, PipelineContext: parámetros del contrato",
+    "Pipeline.BuildMiddlewareChain: compone las implementaciones en una cadena"
+   ],
+   "members": [
+    {
+     "name": "InvokeAsync(IStep, IStepResult, PipelineContext, Func<CancellationToken,Task<IStepResult>>, CancellationToken)",
+     "startLine": 20,
+     "endLine": 25,
+     "does": "Ejecuta la lógica del middleware y decide si invoca next.",
+     "inputs": "Paso, entrada previa, contexto, delegado al siguiente eslabón y token.",
+     "outputs": "Task<IStepResult> con el resultado del paso o uno sustituido por el middleware.",
+     "sideEffects": "depende de la implementación",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "AITaskAgentConstants",
+   "kind": "class",
+   "path": "Core/Constants/AITaskAgentConstants.EventTypes.cs",
+   "startLine": 6,
+   "endLine": 52,
+   "purpose": "Clase estática parcial que agrupa constantes del framework; en este fichero aporta EventTypes.",
+   "collaborators": [
+    "EventTypes: clase anidada"
+   ],
+   "members": []
+  },
+  {
+   "name": "EventTypes",
+   "kind": "class",
+   "path": "Core/Constants/AITaskAgentConstants.EventTypes.cs",
+   "startLine": 11,
+   "endLine": 51,
+   "purpose": "Constantes string con los tipos de evento de observabilidad (pipeline.*, step.*, tool.*, llm.response, tag.*, loop.exhausted).",
+   "collaborators": [
+    "Core.Base.Metrics y Core.Base.Telemetry la usan según el grafo (relaciones entrantes)"
+   ],
+   "members": [
+    {
+     "name": "PipelineStarted..LoopExhausted (13 const string)",
+     "startLine": 13,
+     "endLine": 50,
+     "does": "Valores literales de tipo de evento.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "AITaskAgentConstants",
+   "kind": "class",
+   "path": "Core/Constants/AITaskAgentConstants.TelemetryTags.cs",
+   "startLine": 6,
+   "endLine": 71,
+   "purpose": "Fragmento parcial de la clase estática de constantes; aporta TelemetryTags.",
+   "collaborators": [
+    "TelemetryTags: clase anidada"
+   ],
+   "members": []
+  },
+  {
+   "name": "TelemetryTags",
+   "kind": "class",
+   "path": "Core/Constants/AITaskAgentConstants.TelemetryTags.cs",
+   "startLine": 12,
+   "endLine": 70,
+   "purpose": "Nombres de tags OpenTelemetry y constantes de identidad de ActivitySource y Meter.",
+   "collaborators": [
+    "ObservabilityMiddleware y Pipeline las usan en SetTag y en las métricas"
+   ],
+   "members": [
+    {
+     "name": "PipelineName..PipelineTimeoutMs (const string)",
+     "startLine": 15,
+     "endLine": 69,
+     "does": "Valores literales de tag, nombre y versión de fuentes de telemetría.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "AITaskAgentConstants",
+   "kind": "class",
+   "path": "Core/Constants/AITaskAgentConstants.ValidationTypes.cs",
+   "startLine": 6,
+   "endLine": 19,
+   "purpose": "Fragmento parcial de la clase estática de constantes; aporta ValidationTypes.",
+   "collaborators": [
+    "ValidationTypes: clase anidada"
+   ],
+   "members": []
+  },
+  {
+   "name": "ValidationTypes",
+   "kind": "class",
+   "path": "Core/Constants/AITaskAgentConstants.ValidationTypes.cs",
+   "startLine": 11,
+   "endLine": 18,
+   "purpose": "Constantes 'structural' y 'semantic' para StepValidationEvent.ValidationType.",
+   "collaborators": [
+    "RetryMiddleware las asigna en los eventos de validación fallida"
+   ],
+   "members": [
+    {
+     "name": "Structural / Semantic (const string)",
+     "startLine": 14,
+     "endLine": 17,
+     "does": "Valores literales del tipo de validación.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "IPipeline",
+   "kind": "interface",
+   "path": "Core/Execution/IPipeline.cs",
+   "startLine": 11,
+   "endLine": 48,
+   "purpose": "Superficie de la aplicación para ejecutar pipelines; documentado como singleton en DI.",
+   "collaborators": [
+    "PipelineContext, IStep, IProgressEvent: parámetros",
+    "Pipeline: implementación"
+   ],
+   "members": [
+    {
+     "name": "DefaultPipelineTimeout { get; }",
+     "startLine": 16,
+     "endLine": 16,
+     "does": "Timeout por defecto de la ejecución completa.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "DefaultStepTimeout { get; }",
+     "startLine": 21,
+     "endLine": 21,
+     "does": "Timeout por defecto de cada paso.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync<T>(string, IReadOnlyList<IStep>, T, PipelineContext?, TimeSpan?, CancellationToken, IEnumerable<Func<IProgressEvent,CancellationToken,Task>>?)",
+     "startLine": 40,
+     "endLine": 47,
+     "does": "Ejecuta los pasos secuencialmente con middleware.",
+     "inputs": "Nombre, pasos, entrada, contexto opcional, timeout opcional, token, suscriptores opcionales.",
+     "outputs": "IStepResult del último paso ejecutado.",
+     "sideEffects": "según implementación",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "IPipelineRuntime",
+   "kind": "interface",
+   "path": "Core/Execution/IPipelineRuntime.cs",
+   "startLine": 21,
+   "endLine": 49,
+   "purpose": "Superficie que el motor ofrece al contexto de ejecución y a los pasos compuestos: logger factory y ejecución de sub-pipelines respetando NextSteps.",
+   "collaborators": [
+    "PipelineContext: mantiene la referencia al runtime (ciclo señalado por el grafo)",
+    "Pasos compuestos: lo invocan para ejecutar hijos"
+   ],
+   "members": [
+    {
+     "name": "LoggerFactory { get; }",
+     "startLine": 27,
+     "endLine": 27,
+     "does": "Fábrica de loggers no nula.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteStepsWithNextStepsAsync(IReadOnlyList<IStep>, IStepResult, PipelineContext, string, CancellationToken, bool isBranchScope=false)",
+     "startLine": 42,
+     "endLine": 48,
+     "does": "Ejecuta un sub-pipeline con la misma cadena de middleware.",
+     "inputs": "Pasos, resultado inicial, contexto (clon en ramas), nombre y token.",
+     "outputs": "IStepResult final del sub-pipeline.",
+     "sideEffects": "según implementación",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ObservabilityMiddleware",
+   "kind": "class",
+   "path": "Core/Execution/Middlewares/ObservabilityMiddleware.cs",
+   "startLine": 15,
+   "endLine": 138,
+   "purpose": "Middleware que traza, mide y emite eventos de inicio y fin por paso, con ganchos de enriquecimiento si el paso implementa IEnrichable.",
+   "collaborators": [
+    "Telemetry.Source: crea la Activity",
+    "Metrics: contadores e histograma de pasos",
+    "IEnrichable: enriquece actividad y eventos",
+    "PipelineContext.SendEventAsync: emite eventos",
+    "StepStartedEvent, StepCompletedEvent: eventos emitidos"
+   ],
+   "members": [
+    {
+     "name": "InvokeAsync(IStep, IStepResult, PipelineContext, Func<CancellationToken,Task<IStepResult>>, CancellationToken)",
+     "startLine": 17,
+     "endLine": 137,
+     "does": "Abre Activity, emite StepStartedEvent con AttemptNumber=1, invoca next, registra métricas y emite StepCompletedEvent; en excepción registra métricas, emite un evento de fin con Success=false y relanza.",
+     "inputs": "Paso, entrada, contexto, next y token del llamador.",
+     "outputs": "El IStepResult devuelto por next.",
+     "sideEffects": "Activity, tags, métricas globales, dos eventos al canal del contexto.",
+     "throws": "Relanza cualquier excepción de next o del envío de eventos."
+    }
+   ]
+  },
+  {
+   "name": "RetryMiddleware",
+   "kind": "class",
+   "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+   "startLine": 14,
+   "endLine": 167,
+   "purpose": "Middleware terminal que ejecuta el paso en un bucle de hasta MaxRetries intentos con tres causas de reintento (error sin excepción, validación estructural, validación semántica) y gestión de fallback.",
+   "collaborators": [
+    "IFallbackable: SwitchToNextFallback tras error fatal",
+    "ErrorStepResult: FromException/FromMessage",
+    "StepValidationEvent, StepStartedEvent: eventos por intento",
+    "Metrics.StepRetries: contador",
+    "IStep.FinalizeAsync/ValidateAsync: cierre y validación semántica"
+   ],
+   "members": [
+    {
+     "name": "RetryMiddleware(ILogger<RetryMiddleware>) [constructor primario]",
+     "startLine": 14,
+     "endLine": 16,
+     "does": "Guarda el logger.",
+     "inputs": "ILogger inyectado por Pipeline.CreateInternalMiddlewares.",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "InvokeAsync(IStep, IStepResult, PipelineContext, Func<CancellationToken,Task<IStepResult>>, CancellationToken)",
+     "startLine": 18,
+     "endLine": 166,
+     "does": "Itera intentos; ejecuta step.ExecuteAsync directamente (no usa next); captura excepciones y las convierte en ErrorStepResult sin reintentar; reintenta errores sin OriginalException y fallos de validación; llama a FinalizeAsync al terminar.",
+     "inputs": "Paso, entrada, contexto, token (ya enlazado con el timeout), intento y resultado previo hacia el paso.",
+     "outputs": "Último resultado, éxito o error final.",
+     "sideEffects": "Eventos StepStarted (intentos > 1) y StepValidation, métricas de reintento, logs, mutación de result.Error, FinalizeAsync del paso.",
+     "throws": "No propaga excepciones del paso; las excepciones de ValidateAsync fuera del try sí escapan."
+    }
+   ]
+  },
+  {
+   "name": "TimeoutMiddleware",
+   "kind": "class",
+   "path": "Core/Execution/Middlewares/TimeoutMiddleware.cs",
+   "startLine": 16,
+   "endLine": 65,
+   "purpose": "Middleware que aplica un timeout global al tramo Timeout -> Retry -> Paso, con el timeout del paso o el valor por defecto.",
+   "collaborators": [
+    "PipelineContext.SendEventAsync: emite StepTimeoutEvent",
+    "ErrorStepResult.FromMessage: resultado de error",
+    "IStep.Timeout: sobrescribe el valor por defecto"
+   ],
+   "members": [
+    {
+     "name": "TimeoutMiddleware(ILogger<TimeoutMiddleware>, TimeSpan? defaultTimeout=null) [constructor primario]",
+     "startLine": 16,
+     "endLine": 21,
+     "does": "Guarda logger y timeout por defecto.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "InvokeAsync(IStep, IStepResult, PipelineContext, Func<CancellationToken,Task<IStepResult>>, CancellationToken)",
+     "startLine": 23,
+     "endLine": 64,
+     "does": "Sin timeout delega en next; con timeout crea CTS enlazado con CancelAfter y captura OperationCanceledException causada solo por el CTS.",
+     "inputs": "Paso, entrada, contexto, next y token externo.",
+     "outputs": "Resultado de next o ErrorStepResult de timeout.",
+     "sideEffects": "Log de advertencia y StepTimeoutEvent al canal del contexto.",
+     "throws": "Propaga excepciones distintas del timeout y la cancelación externa."
+    }
+   ]
+  },
+  {
+   "name": "Pipeline",
+   "kind": "class",
+   "path": "Core/Execution/Pipeline.cs",
+   "startLine": 22,
+   "endLine": 446,
+   "purpose": "Motor de ejecución de pipelines: resuelve entrada y reanudación, aplica timeouts, telemetría y eventos, compone la cadena de middleware y ejecuta pasos con NextSteps, cache de resultados por ruta y suspensión HITL.",
+   "collaborators": [
+    "PipelineMiddlewareRegistry: middlewares de usuario (estático, externo)",
+    "ObservabilityMiddleware, TimeoutMiddleware, RetryMiddleware: middlewares internos",
+    "PipelineContext/PipelineContextFactory: contexto y rutas",
+    "StepValidation, StepResultFactory, ErrorStepResult, EmptyStep: apoyo",
+    "IEventChannel: canal de eventos local",
+    "IResume: guardado y restauración de estado de pasos suspendidos"
+   ],
+   "members": [
+    {
+     "name": "DefaultPipelineTimeout / DefaultStepTimeout { get; }",
+     "startLine": 31,
+     "endLine": 37,
+     "does": "Propiedades de solo lectura asignadas en el constructor.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Pipeline(TimeSpan?, TimeSpan?, ILoggerFactory?)",
+     "startLine": 42,
+     "endLine": 54,
+     "does": "Inicializa runtime base, logger, un PipelineOptions propio y los timeouts por defecto (parámetro o valor de PipelineOptions).",
+     "inputs": "Timeouts opcionales y logger factory opcional.",
+     "outputs": "Instancia con ambos timeouts siempre con valor.",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "delegate StepExecutor(IStep, IStepResult, PipelineContext, CancellationToken)",
+     "startLine": 60,
+     "endLine": 60,
+     "does": "Delegado de la cadena de middleware ya compuesta.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "PendingResumeKey(PipelineContext)",
+     "startLine": 67,
+     "endLine": 68,
+     "does": "Clave de metadata por CorrelationId para la respuesta de reanudación pendiente.",
+     "inputs": "Contexto.",
+     "outputs": "string",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ResumeStateKey(PipelineContext)",
+     "startLine": 74,
+     "endLine": 75,
+     "does": "Clave de metadata por CorrelationId para el estado persistido de reanudación.",
+     "inputs": "Contexto.",
+     "outputs": "string",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync<T>(string, IReadOnlyList<IStep>, T, PipelineContext?, TimeSpan?, CancellationToken, IEnumerable<...>?)",
+     "startLine": 83,
+     "endLine": 222,
+     "does": "Valida argumentos y nombres únicos, detecta reanudación, crea el contexto si falta y le asigna Runtime, construye la cadena, crea CTS de timeout enlazado, abre Activity, emite PipelineStarted/Completed y ejecuta los pasos; en finally libera el CTS enlazado y el canal de eventos si difiere del singleton.",
+     "inputs": "Pasos no vacíos, entrada no nula (si es reanudación debe ser IStepResult), contexto opcional.",
+     "outputs": "IStepResult final (puede ser error o suspendido).",
+     "sideEffects": "Muta context.Runtime y Metadata, eventos, métricas, logs, Dispose del canal de eventos.",
+     "throws": "ArgumentNullException, ArgumentException (sin pasos), InvalidCastException en reanudación con entrada no IStepResult, excepciones de StepValidation y de envío de eventos."
+    },
+    {
+     "name": "ExecuteStepsWithNextStepsAsync(IReadOnlyList<IStep>, IStepResult, PipelineContext, string, CancellationToken, bool=false) [override público]",
+     "startLine": 230,
+     "endLine": 241,
+     "does": "Reconstruye la cadena de middleware y delega en la sobrecarga privada; sin pipelineActivity.",
+     "inputs": "Parámetros de IPipelineRuntime.",
+     "outputs": "IStepResult del sub-pipeline.",
+     "sideEffects": "Asignación de listas y middlewares por llamada.",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteStepsWithNextStepsAsync(... StepExecutor, string, ILogger, Activity?, CancellationToken, bool) [privado estático]",
+     "startLine": 243,
+     "endLine": 351,
+     "does": "Recorre pasos: ejecuta, detiene en error, gestiona suspensión (guarda estado, emite PipelineSuspendedEvent, cachea en StepResults), ejecuta NextSteps recursivamente con ruta anidada y cachea el resultado solo tras éxito completo.",
+     "inputs": "Pasos, resultado previo como entrada, contexto con StepResults y Metadata.",
+     "outputs": "Último resultado, error o suspensión.",
+     "sideEffects": "StepResults, Metadata, CurrentStepPath, NextSteps.Clear(), eventos, logs.",
+     "throws": "InvalidOperationException si SuspendInfo llega sin IResume en el paso."
+    },
+    {
+     "name": "ExecuteStepAsync(IStep, IStepResult, PipelineContext, StepExecutor, ILogger, CancellationToken)",
+     "startLine": 357,
+     "endLine": 411,
+     "does": "Devuelve el resultado cacheado (limpiando NextSteps) o restaura un paso suspendido con la respuesta pendiente; en otro caso ejecuta la cadena; convierte toda excepción en ErrorStepResult.",
+     "inputs": "Paso, entrada, contexto y cadena.",
+     "outputs": "IStepResult cacheado, nuevo o de error.",
+     "sideEffects": "Elimina claves de Metadata; RestoreStateAsync del paso; logs.",
+     "throws": "No propaga excepciones (incluida la cancelación)."
+    },
+    {
+     "name": "BuildMiddlewareChain(List<IPipelineMiddleware>)",
+     "startLine": 416,
+     "endLine": 431,
+     "does": "Compone los middlewares en orden inverso con un delegado terminal que llama step.ExecuteAsync.",
+     "inputs": "Lista ordenada de middlewares.",
+     "outputs": "StepExecutor compuesto.",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CreateInternalMiddlewares()",
+     "startLine": 440,
+     "endLine": 445,
+     "does": "Crea Observability, Timeout y Retry con sus loggers.",
+     "inputs": "Estado del pipeline (loggerFactory, DefaultStepTimeout).",
+     "outputs": "Lista de tres middlewares nuevos.",
+     "sideEffects": "Instancia loggers y middlewares en cada llamada.",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "PipelineOptions",
+   "kind": "class",
+   "path": "Core/Execution/PipelineOptions.cs",
+   "startLine": 7,
+   "endLine": 21,
+   "purpose": "Opciones de timeout por defecto del pipeline y del paso.",
+   "collaborators": [
+    "Pipeline: lo instancia con new en su constructor"
+   ],
+   "members": [
+    {
+     "name": "SectionName",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Constante 'Pipeline'.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "DefaultPipelineTimeout { get; set; } = 60 min",
+     "startLine": 14,
+     "endLine": 14,
+     "does": "Timeout por defecto del pipeline.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "DefaultStepTimeout { get; set; } = 30 min",
+     "startLine": 20,
+     "endLine": 20,
+     "does": "Timeout por defecto del paso.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "PipelineRuntimeBase",
+   "kind": "class",
+   "path": "Core/Execution/PipelineRuntimeBase.cs",
+   "startLine": 17,
+   "endLine": 37,
+   "purpose": "Base abstracta que implementa IPipelineRuntime con LoggerFactory garantizado no nulo.",
+   "collaborators": [
+    "Pipeline: la hereda",
+    "NullLoggerFactory: respaldo"
+   ],
+   "members": [
+    {
+     "name": "PipelineRuntimeBase(ILoggerFactory?)",
+     "startLine": 23,
+     "endLine": 24,
+     "does": "Asigna LoggerFactory o NullLoggerFactory.Instance.",
+     "inputs": "Logger factory opcional.",
+     "outputs": "Instancia inicializada.",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "LoggerFactory { get; }",
+     "startLine": 27,
+     "endLine": 27,
+     "does": "Propiedad de solo lectura.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteStepsWithNextStepsAsync(...) [abstracto]",
+     "startLine": 30,
+     "endLine": 36,
+     "does": "Contrato abstracto para ejecutar sub-pipelines.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "ServiceProviderPipelineMiddlewareExtensions",
+   "kind": "class",
+   "path": "Core/Execution/ServiceProviderPipelineMiddlewareExtensions.cs",
+   "startLine": 9,
+   "endLine": 64,
+   "purpose": "Extensiones de IServiceProvider para registrar middlewares en el registro estático PipelineMiddlewareRegistry.",
+   "collaborators": [
+    "PipelineMiddlewareRegistry.Register: destino (externo)",
+    "ActivatorUtilities: construcción cuando el contenedor no lo tiene"
+   ],
+   "members": [
+    {
+     "name": "RegisterPipelineMiddleware<TMiddleware>(this IServiceProvider)",
+     "startLine": 18,
+     "endLine": 29,
+     "does": "Resuelve o construye el middleware y lo registra.",
+     "inputs": "Proveedor no nulo.",
+     "outputs": "El mismo IServiceProvider.",
+     "sideEffects": "Escribe en el registro estático.",
+     "throws": "ArgumentNullException; excepciones de construcción."
+    },
+    {
+     "name": "RegisterPipelineMiddlewares(this IServiceProvider, params Type[])",
+     "startLine": 38,
+     "endLine": 63,
+     "does": "Valida cada tipo, lo resuelve o construye y lo registra.",
+     "inputs": "Proveedor y tipos que deben implementar IPipelineMiddleware.",
+     "outputs": "El mismo IServiceProvider.",
+     "sideEffects": "Escribe en el registro estático.",
+     "throws": "ArgumentNullException, ArgumentException si un tipo no implementa la interfaz."
+    }
+   ]
+  },
+  {
+   "name": "IYamlStep",
+   "kind": "interface",
+   "path": "YAML/Abstractions/IYamlStep.cs",
+   "startLine": 7,
+   "endLine": 23,
+   "purpose": "Contrato marcador de pasos YAML con identificador, esquemas de entrada/salida y dependencias.",
+   "collaborators": [
+    "YamlPipelineFactory: lo consume",
+    "YamlLlmStep: lo implementa"
+   ],
+   "members": [
+    {
+     "name": "StepId {get;init;}",
+     "startLine": 9,
+     "endLine": 9,
+     "does": "Identificador del paso.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "InputSchema {get;init;}",
+     "startLine": 15,
+     "endLine": 15,
+     "does": "Nombre del esquema de entrada, nullable.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "OutputSchema {get;init;}",
+     "startLine": 20,
+     "endLine": 20,
+     "does": "Nombre del esquema de salida, nullable.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "DependsOn {get;init;}",
+     "startLine": 22,
+     "endLine": 22,
+     "does": "Ids de pasos de los que depende.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "YamlStepTagAttribute",
+   "kind": "class",
+   "path": "YAML/Attributes/YamlStepTagAttribute.cs",
+   "startLine": 7,
+   "endLine": 10,
+   "purpose": "Atributo con el nombre de tag YAML que identifica un tipo de paso.",
+   "collaborators": [
+    "YamlPipelineFactory.BuildDeserializer: lo lee por reflexión"
+   ],
+   "members": [
+    {
+     "name": "YamlStepTagAttribute(string tagName) / TagName",
+     "startLine": 7,
+     "endLine": 9,
+     "does": "Guarda el nombre de tag.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "SchemaCompiler",
+   "kind": "class",
+   "path": "YAML/Compilation/SchemaCompiler.cs",
+   "startLine": 22,
+   "endLine": 232,
+   "purpose": "Compila JSON Schemas a tipos C# en memoria, con caché por nombre, y los carga en el contexto de carga por defecto.",
+   "collaborators": [
+    "NJsonSchema: parseo y generación del POCO",
+    "Roslyn: compilación",
+    "ClearScript V8: validación JS dentro del código generado",
+    "LlmStepResult<>: base del wrapper",
+    "YamlPipelineFactory: consume GetCompiledType"
+   ],
+   "members": [
+    {
+     "name": "_compiled (ConcurrentDictionary<string,Type>)",
+     "startLine": 24,
+     "endLine": 24,
+     "does": "Caché de tipos por nombre de esquema.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CompileFromFolderAsync(string)",
+     "startLine": 27,
+     "endLine": 37,
+     "does": "Lee todos los *.json recursivamente y compila cada uno en paralelo usando el nombre de fichero como nombre de esquema.",
+     "inputs": "Carpeta existente.",
+     "outputs": "Task completada cuando todos compilan.",
+     "sideEffects": "Lectura de ficheros, compilación y carga de ensamblados.",
+     "throws": "DirectoryNotFoundException, InvalidOperationException de compilación, AggregateException vía Task.WhenAll."
+    },
+    {
+     "name": "CompileAsync(string name, string jsonSchema, string? jsValidateFunction=null)",
+     "startLine": 43,
+     "endLine": 67,
+     "does": "Devuelve el tipo cacheado o genera, enriquece, compila y cachea.",
+     "inputs": "Nombre (se usa como identificador C# y nombre de ensamblado) y esquema.",
+     "outputs": "Type del wrapper generado.",
+     "sideEffects": "Carga un ensamblado en AssemblyLoadContext.Default y escribe en el caché.",
+     "throws": "Errores de NJsonSchema, InvalidOperationException de compilación."
+    },
+    {
+     "name": "GetCompiledType(string)",
+     "startLine": 70,
+     "endLine": 75,
+     "does": "Busca el tipo en el caché.",
+     "inputs": "Nombre ya compilado.",
+     "outputs": "Type.",
+     "sideEffects": "ninguno",
+     "throws": "KeyNotFoundException si no se compiló."
+    },
+    {
+     "name": "BuildValidationMethod(string?)",
+     "startLine": 79,
+     "endLine": 97,
+     "does": "Devuelve el cuerpo C# de ValidateAsync: siempre válido si no hay JS; si hay JS, crea un V8ScriptEngine, expone context y self, ejecuta el JS e invoca validate.",
+     "inputs": "Función JS opcional.",
+     "outputs": "Texto de código C#.",
+     "sideEffects": "ninguno (el código generado crea un motor V8 por validación)",
+     "throws": "ninguno"
+    },
+    {
+     "name": "EnrichGeneratedCode(string, string, string)",
+     "startLine": 99,
+     "endLine": 143,
+     "does": "Renombra el POCO a {Nombre}Data y añade el wrapper {Nombre} heredando LlmStepResult<{Nombre}Data> con dos constructores y ValidateAsync.",
+     "inputs": "Nombre, código crudo y cuerpo de validación.",
+     "outputs": "Código fuente C# completo.",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "RenameGeneratedClass(string, string, string)",
+     "startLine": 149,
+     "endLine": 157,
+     "does": "Reemplaza por regex la declaración 'class Nombre'.",
+     "inputs": "Código, nombre antiguo y nuevo.",
+     "outputs": "Código con la clase renombrada.",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CompileAndLoadAsync(string, string)",
+     "startLine": 159,
+     "endLine": 189,
+     "does": "Compila con Roslyn a memoria y carga el ensamblado en AssemblyLoadContext.Default; devuelve el tipo.",
+     "inputs": "Nombre y fuente.",
+     "outputs": "Type cargado.",
+     "sideEffects": "Carga de ensamblado no descargable.",
+     "throws": "InvalidOperationException si falla la compilación o no encuentra el tipo."
+    },
+    {
+     "name": "GetRequiredReferences()",
+     "startLine": 191,
+     "endLine": 231,
+     "does": "Reúne referencias de metadatos (runtime, Newtonsoft, framework, V8, DataAnnotations, netstandard/System.Runtime/System.Collections).",
+     "inputs": "ninguno",
+     "outputs": "MetadataReference[].",
+     "sideEffects": "Lee ficheros de ensamblados por su Location.",
+     "throws": "Excepciones de CreateFromFile fuera del try (el de V8 se traga)."
+    }
+   ]
+  },
+  {
+   "name": "YamlPipelineDocument",
+   "kind": "class",
+   "path": "YAML/Execution/YamlPipelineFactory.cs",
+   "startLine": 20,
+   "endLine": 24,
+   "purpose": "Modelo interno del documento YAML: nombre y lista de IYamlStep.",
+   "collaborators": [
+    "YamlPipelineFactory: deserializa a este tipo"
+   ],
+   "members": [
+    {
+     "name": "Name {get;init;}",
+     "startLine": 22,
+     "endLine": 22,
+     "does": "Nombre del pipeline.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Steps {get;init;}",
+     "startLine": 23,
+     "endLine": 23,
+     "does": "Lista de pasos deserializados.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    }
+   ]
+  },
+  {
+   "name": "YamlPipeline",
+   "kind": "class",
+   "path": "YAML/Execution/YamlPipelineFactory.cs",
+   "startLine": 29,
+   "endLine": 39,
+   "purpose": "Pipeline construido y listo para ejecutar: nombre, pasos ordenados y el IPipeline.",
+   "collaborators": [
+    "IPipeline.ExecuteAsync: delega la ejecución"
+   ],
+   "members": [
+    {
+     "name": "YamlPipeline(string, IReadOnlyList<IStep>, IPipeline) [constructor primario]",
+     "startLine": 29,
+     "endLine": 29,
+     "does": "Guarda nombre, pasos y pipeline.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "Name / Steps",
+     "startLine": 31,
+     "endLine": 32,
+     "does": "Propiedades de solo lectura.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ExecuteAsync<T>(T, PipelineContext?, CancellationToken)",
+     "startLine": 34,
+     "endLine": 38,
+     "does": "Ejecuta pipeline.ExecuteAsync con el nombre y los pasos; no reenvía timeout ni suscriptores.",
+     "inputs": "Entrada, contexto opcional y token.",
+     "outputs": "IStepResult final.",
+     "sideEffects": "Según Pipeline.ExecuteAsync.",
+     "throws": "Según Pipeline.ExecuteAsync."
+    }
+   ]
+  },
+  {
+   "name": "YamlPipelineFactory",
+   "kind": "class",
+   "path": "YAML/Execution/YamlPipelineFactory.cs",
+   "startLine": 52,
+   "endLine": 232,
+   "purpose": "Factoría que convierte YAML en un YamlPipeline validado y ordenado topológicamente.",
+   "collaborators": [
+    "IServiceProvider: fábrica de objetos de YamlDotNet",
+    "SchemaCompiler: tipos de entrada/salida",
+    "IPipeline: motor de ejecución",
+    "LlmEnvironment: roles LLM",
+    "YamlLlmStep: asigna rol"
+   ],
+   "members": [
+    {
+     "name": "YamlPipelineFactory(IServiceProvider, SchemaCompiler, IPipeline, IOptions<LlmEnvironment>?=null) [constructor primario]",
+     "startLine": 52,
+     "endLine": 57,
+     "does": "Captura dependencias.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "CreateFromFolderAsync(string)",
+     "startLine": 59,
+     "endLine": 68,
+     "does": "Lee *.yaml recursivamente, los concatena con separador '---' y llama a CreateFromYaml.",
+     "inputs": "Carpeta existente.",
+     "outputs": "YamlPipeline.",
+     "sideEffects": "Lectura de ficheros.",
+     "throws": "DirectoryNotFoundException y las de CreateFromYaml."
+    },
+    {
+     "name": "CreateFromYaml(string)",
+     "startLine": 71,
+     "endLine": 98,
+     "does": "Deserializa, aplica roles a YamlLlmStep, inyecta InputType/OutputType a pasos StepBase, valida y ordena, construye YamlPipeline.",
+     "inputs": "YAML fusionado.",
+     "outputs": "YamlPipeline.",
+     "sideEffects": "Muta los pasos (rol, tipos).",
+     "throws": "InvalidOperationException (esquema ausente, rol, DAG), KeyNotFoundException (esquema no compilado), NullReferenceException si el documento es nulo, errores de YamlDotNet."
+    },
+    {
+     "name": "BuildDeserializer()",
+     "startLine": 102,
+     "endLine": 127,
+     "does": "Crea el deserializador con convención camelCase, fábrica de objetos vía DI con respaldo a Activator y mapea tags de todos los tipos [YamlStepTag] cargados.",
+     "inputs": "Estado de AppDomain.",
+     "outputs": "IDeserializer.",
+     "sideEffects": "Recorre todos los ensamblados cargados.",
+     "throws": "ninguno por la fábrica; errores de tags duplicados no cubiertos aquí."
+    },
+    {
+     "name": "SafeGetTypes(Assembly)",
+     "startLine": 129,
+     "endLine": 133,
+     "does": "Devuelve GetTypes() o vacío si falla.",
+     "inputs": "Ensamblado.",
+     "outputs": "IEnumerable<Type>.",
+     "sideEffects": "ninguno (traga todas las excepciones)",
+     "throws": "ninguno"
+    },
+    {
+     "name": "RequireSchema(string?, string, string)",
+     "startLine": 143,
+     "endLine": 148,
+     "does": "Exige esquema no vacío.",
+     "inputs": "Valor, id de paso y clave YAML.",
+     "outputs": "El esquema.",
+     "sideEffects": "ninguno",
+     "throws": "InvalidOperationException."
+    },
+    {
+     "name": "ResolveRole(string?, string)",
+     "startLine": 157,
+     "endLine": 177,
+     "does": "Obtiene el LlmRole por perfil o por DefaultRole del entorno; error si no hay entorno o rol.",
+     "inputs": "Perfil opcional e id de paso.",
+     "outputs": "LlmRole.",
+     "sideEffects": "ninguno",
+     "throws": "InvalidOperationException."
+    },
+    {
+     "name": "ValidateAndOrder(List<IYamlStep>)",
+     "startLine": 179,
+     "endLine": 230,
+     "does": "Comprueba dependencias, compatibilidad OutputSchema/InputSchema por arista y ordena con Kahn; detecta ciclos.",
+     "inputs": "Pasos con StepId únicos.",
+     "outputs": "Lista ordenada de IStep.",
+     "sideEffects": "ninguno",
+     "throws": "InvalidOperationException (dependencia inexistente, mismatch, ciclo), ArgumentException por StepId duplicado."
+    }
+   ]
+  },
+  {
+   "name": "YamlLlmStep",
+   "kind": "class",
+   "path": "YAML/Steps/YamlLlmStep.cs",
+   "startLine": 29,
+   "endLine": 96,
+   "purpose": "Paso LLM configurable desde YAML sobre BaseLlmStep, con prompts, perfil de rol, dependencias y política de historial.",
+   "collaborators": [
+    "BaseLlmStep: herencia",
+    "LlmRole/NullLlmService: rol marcador",
+    "PromptTemplateResolver: resuelve plantillas",
+    "ITemplateProvider: opcional",
+    "ConversationContext: contexto aislado opcional",
+    "YamlPipelineFactory: llama a ApplyRole"
+   ],
+   "members": [
+    {
+     "name": "YamlLlmStep(ITemplateProvider?=null) [constructor primario]",
+     "startLine": 30,
+     "endLine": 38,
+     "does": "Construye la base con nombre GUID, rol marcador, tipos IStepResult/LlmStringStepResult y prompt vacío.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "UnresolvedRole",
+     "startLine": 44,
+     "endLine": 48,
+     "does": "Rol marcador nuevo con NullLlmService y modelo vacío.",
+     "inputs": "ninguno",
+     "outputs": "LlmRole nuevo por acceso.",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "StepId {get;init;} (required)",
+     "startLine": 51,
+     "endLine": 51,
+     "does": "Alias de Name.",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "DependsOn / ProfileName / UserPrompt / UseConversationHistory",
+     "startLine": 57,
+     "endLine": 70,
+     "does": "Propiedades de configuración YAML (UseConversationHistory=true por defecto).",
+     "inputs": "ninguno",
+     "outputs": "ninguno",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "ApplyRole(LlmRole)",
+     "startLine": 76,
+     "endLine": 76,
+     "does": "Sustituye el rol llamando a SetRole.",
+     "inputs": "Rol resuelto.",
+     "outputs": "void",
+     "sideEffects": "Cambia el rol de la base.",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BuildUserMessageAsync(IStepResult, PipelineContext)",
+     "startLine": 80,
+     "endLine": 84,
+     "does": "Resuelve UserPrompt como plantilla o serializa input.Value (o el input entero) a JSON.",
+     "inputs": "Entrada y contexto.",
+     "outputs": "Mensaje de usuario.",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "BuildSystemMessageAsync(IStepResult, PipelineContext)",
+     "startLine": 86,
+     "endLine": 90,
+     "does": "Resuelve SystemPrompt como plantilla o null.",
+     "inputs": "Entrada y contexto.",
+     "outputs": "Mensaje de sistema o null.",
+     "sideEffects": "ninguno",
+     "throws": "ninguno"
+    },
+    {
+     "name": "GetConversationContext(PipelineContext)",
+     "startLine": 92,
+     "endLine": 95,
+     "does": "Devuelve el historial compartido o un ConversationContext nuevo con los mismos límites de tokens.",
+     "inputs": "Contexto.",
+     "outputs": "ConversationContext.",
+     "sideEffects": "Crea un contexto nuevo en cada llamada si UseConversationHistory es false.",
+     "throws": "ninguno"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "localId": "F1",
+   "kind": "bug",
+   "category": "cancellation-swallowed",
+   "title": "Timeout y cancelación se convierten en ErrorStepResult: el manejo de timeout de TimeoutMiddleware es inalcanzable",
+   "rationale": "RetryMiddleware es el eslabón terminal y captura cualquier Exception de step.ExecuteAsync, incluida OperationCanceledException. La devuelve como ErrorStepResult (con OriginalException) y no relanza, de modo que el catch de OperationCanceledException de TimeoutMiddleware nunca ve la cancelación: no se emite StepTimeoutEvent y el mensaje 'timed out' no se genera. Además la cancelación externa se registra como LogError y, si el paso es IFallbackable, puede disparar SwitchToNextFallback con el token ya cancelado. Pipeline.ExecuteStepAsync repite el patrón con un catch general que no distingue cancelación.",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+    "startLine": 50,
+    "endLine": 66,
+    "quote": "catch (Exception ex)"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Middlewares/TimeoutMiddleware.cs",
+     "startLine": 45,
+     "endLine": 63,
+     "quote": "catch (OperationCanceledException) when (cts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)"
+    },
+    {
+     "path": "Core/Execution/Pipeline.cs",
+     "startLine": 406,
+     "endLine": 410,
+     "quote": "catch (Exception ex)"
+    }
+   ],
+   "symbol": "RetryMiddleware.InvokeAsync",
+   "seedRef": null,
+   "activationPath": "Un paso supera su timeout (o el llamador cancela) mientras el paso está ejecutando una llamada que respeta el token.",
+   "impact": 3,
+   "likelihood": 4,
+   "confidence": 0.8
+  },
+  {
+   "localId": "F2",
+   "kind": "bug",
+   "category": "resource-leak",
+   "title": "CancellationTokenSource de timeout del pipeline sin Dispose",
+   "rationale": "Se crea timeoutCts para el timeout efectivo y se enlaza en linkedCts. En el finally solo se libera linkedCts; timeoutCts queda sin Dispose, con su temporizador vivo hasta que expire o lo recoja el GC. Con el valor por defecto de 60 minutos cada ejecución deja un temporizador pendiente.",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 134,
+    "endLine": 134,
+    "quote": "CancellationTokenSource timeoutCts = new(effectiveTimeout.Value);"
+   },
+   "instances": [],
+   "symbol": "Pipeline.ExecuteAsync",
+   "seedRef": "ISSUE[undisposed-resource: CancellationTokenSource] Pipeline.ExecuteAsync",
+   "activationPath": "Toda ejecución con timeout efectivo, que es siempre (ver F3).",
+   "impact": 2,
+   "likelihood": 5,
+   "confidence": 0.9
+  },
+  {
+   "localId": "F3",
+   "kind": "debt",
+   "category": "config",
+   "title": "Los timeouts por defecto no son nunca nulos: no hay forma de desactivarlos, y el comentario promete IOptions/Pipeline.Configure que no existen",
+   "rationale": "El constructor asigna 'defaultPipelineTimeout ?? _options.DefaultPipelineTimeout' sobre un PipelineOptions creado con new, con valores 60 y 30 minutos. Pasar null nunca desactiva el timeout, y ExecuteAsync siempre calcula un effectiveTimeout con valor. Una ejecución legítima de más de 60 minutos se corta por cancelación (convertida en error, ver F1). PipelineOptions documenta que se inyecta por IOptions y se aplica con Pipeline.Configure, pero ese método no existe en Pipeline.",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 52,
+    "endLine": 52,
+    "quote": "DefaultPipelineTimeout = defaultPipelineTimeout ?? _options.DefaultPipelineTimeout;"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/PipelineOptions.cs",
+     "startLine": 4,
+     "endLine": 5,
+     "quote": "Apply via Pipeline.Configure(options) from DI startup."
+    }
+   ],
+   "symbol": "Pipeline.Pipeline",
+   "seedRef": null,
+   "activationPath": "Cualquier pipeline largo (análisis con LLM) sin timeout explícito mayor.",
+   "impact": 3,
+   "likelihood": 2,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F4",
+   "kind": "bug",
+   "category": "api-contract",
+   "title": "Los suscriptores de eventos se ignoran silenciosamente cuando se pasa un contexto",
+   "rationale": "Los 'subscribers' solo se usan en PipelineContextFactory.Create, que se invoca únicamente cuando context es null. Si el llamador aporta contexto (p. ej. en reanudación) los suscriptores se descartan sin aviso, aunque IPipeline documenta que cada ejecución crea un EventChannel local con ellos.",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 109,
+    "endLine": 109,
+    "quote": "context ??= PipelineContextFactory.Create(subscribers: subscribers);"
+   },
+   "instances": [],
+   "symbol": "Pipeline.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Llamar con context y subscribers a la vez.",
+   "impact": 2,
+   "likelihood": 3,
+   "confidence": 0.8
+  },
+  {
+   "localId": "F5",
+   "kind": "bug",
+   "category": "resource-lifecycle",
+   "title": "El finally puede liberar el EventChannel de un contexto aportado por el llamador, rompiendo reanudaciones con el mismo contexto",
+   "rationale": "Al terminar, si context.EventChannel es IAsyncDisposable y distinto del IEventChannel del contenedor, se hace DisposeAsync, sea el canal creado aquí o aportado. En un flujo de suspensión HITL el llamador reutiliza el contexto para reanudar; si su canal difiere del singleton, ya habrá sido liberado tras la primera ejecución. Depende de la semántica de EventChannel tras DisposeAsync (externa).",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 216,
+    "endLine": 216,
+    "quote": "if (context.EventChannel != globalChannel)"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Pipeline.cs",
+     "startLine": 215,
+     "endLine": 215,
+     "quote": "var globalChannel = (IEventChannel?)context.ServiceProvider.GetService(typeof(IEventChannel));"
+    }
+   ],
+   "symbol": "Pipeline.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Reanudar con el mismo PipelineContext tras una suspensión cuando el canal no es el del contenedor.",
+   "impact": 3,
+   "likelihood": 2,
+   "confidence": 0.45
+  },
+  {
+   "localId": "F6",
+   "kind": "bug",
+   "category": "resume-semantics",
+   "title": "Una suspensión en un paso hijo no cachea al padre: en la reanudación el padre se vuelve a ejecutar",
+   "rationale": "Cuando los NextSteps de un paso devuelven error o suspensión, se retorna en la línea 336 antes de la línea 346 que cachea el resultado del padre en StepResults. En la reanudación ExecuteStepAsync no encuentra al padre en StepResults y lo ejecuta de nuevo por la cadena de middleware, repitiendo sus efectos (llamadas LLM, coste) y regenerando sus NextSteps antes de llegar al hijo suspendido. El comentario del código solo justifica no cachear errores.",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 334,
+    "endLine": 337,
+    "quote": "if (childrenResult.HasError || childrenResult.SuspendInfo != null)"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Pipeline.cs",
+     "startLine": 346,
+     "endLine": 346,
+     "quote": "context.StepResults[stepKey] = currentResult;"
+    }
+   ],
+   "symbol": "Pipeline.ExecuteStepsWithNextStepsAsync",
+   "seedRef": null,
+   "activationPath": "Paso que inyecta NextSteps y uno de ellos pide intervención humana.",
+   "impact": 3,
+   "likelihood": 3,
+   "confidence": 0.55
+  },
+  {
+   "localId": "F7",
+   "kind": "bug",
+   "category": "state-restoration",
+   "title": "La ruta de contexto (AddPathPart/RemovePathPart) no se restaura si el procesamiento de hijos lanza excepción",
+   "rationale": "context.AddPathPart se llama antes de la recursión y RemovePathPart después, sin try/finally. La recursión puede lanzar (InvalidOperationException si un hijo devuelve SuspendInfo sin IResume, o fallos de SendEventAsync), dejando CurrentStepPath con el nombre del padre en el contexto compartido, lo que desplaza las claves de caché de ejecuciones posteriores con ese contexto.",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 315,
+    "endLine": 315,
+    "quote": "context.AddPathPart(step.Name);"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Pipeline.cs",
+     "startLine": 332,
+     "endLine": 332,
+     "quote": "context.RemovePathPart();"
+    }
+   ],
+   "symbol": "Pipeline.ExecuteStepsWithNextStepsAsync",
+   "seedRef": null,
+   "activationPath": "Excepción al ejecutar pasos hijo y posterior reutilización del contexto.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F8",
+   "kind": "bug",
+   "category": "event-delivery",
+   "title": "PipelineCompletedEvent se envía con el token de pipeline ya cancelado tras un timeout",
+   "rationale": "El evento final usa pipelineCancellationToken; si el pipeline terminó por timeout o cancelación el token está cancelado y SendEventAsync puede lanzar OperationCanceledException o no entregar el evento, perdiendo precisamente la notificación de fin con error. La ejecución completa saldría por excepción en vez de IStepResult de error. El comportamiento exacto depende de PipelineContext.SendEventAsync (externo).",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 191,
+    "endLine": 204,
+    "quote": "await context.SendEventAsync(new PipelineCompletedEvent"
+   },
+   "instances": [],
+   "symbol": "Pipeline.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Timeout de pipeline o cancelación del llamador.",
+   "impact": 3,
+   "likelihood": 3,
+   "confidence": 0.45
+  },
+  {
+   "localId": "F9",
+   "kind": "debt",
+   "category": "perf",
+   "title": "La cadena de middleware se reconstruye en cada sub-pipeline, y el delegado terminal es inalcanzable",
+   "rationale": "Cada ExecuteStepsWithNextStepsAsync público (invocado por cada paso compuesto o iteración de bucle) crea una lista nueva, tres middlewares y tres loggers y compone la cadena. Además BuildMiddlewareChain define un delegado terminal que llama a step.ExecuteAsync, pero RetryMiddleware nunca invoca next, de modo que ese delegado no se ejecuta salvo que se retire RetryMiddleware.",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 238,
+    "endLine": 238,
+    "quote": "List<IPipelineMiddleware> middlewares = new([.. PipelineMiddlewareRegistry.GetMiddlewares(), .. CreateInternalMiddlewares()]);"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Pipeline.cs",
+     "startLine": 122,
+     "endLine": 122,
+     "quote": "List<IPipelineMiddleware> middlewares = new([.. PipelineMiddlewareRegistry.GetMiddlewares(), .. CreateInternalMiddlewares()]);"
+    },
+    {
+     "path": "Core/Execution/Pipeline.cs",
+     "startLine": 419,
+     "endLine": 419,
+     "quote": "StepExecutor chain = (step, input, ctx, ct) => step.ExecuteAsync(input, ctx, 1, null, ct);"
+    }
+   ],
+   "symbol": "Pipeline.ExecuteStepsWithNextStepsAsync",
+   "seedRef": null,
+   "activationPath": "Cada Parallel/Loop/router durante la ejecución.",
+   "impact": 1,
+   "likelihood": 5,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F10",
+   "kind": "bug",
+   "category": "metrics",
+   "title": "Metrics.StepRetries cuenta un reintento que no llega a producirse en el último intento",
+   "rationale": "Cada fallo recuperable o de validación incrementa StepRetries y luego attempt++. En el último intento (attempt == MaxRetries) el bucle termina y no hay otra ejecución, pero el contador ya subió: la métrica supera en uno a los reintentos reales por cada paso agotado.",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+    "startLine": 88,
+    "endLine": 90,
+    "quote": "Base.Metrics.StepRetries.Add(1,"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+     "startLine": 116,
+     "endLine": 117,
+     "quote": "Base.Metrics.StepRetries.Add(1,"
+    },
+    {
+     "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+     "startLine": 144,
+     "endLine": 145,
+     "quote": "Base.Metrics.StepRetries.Add(1,"
+    }
+   ],
+   "symbol": "RetryMiddleware.InvokeAsync",
+   "seedRef": null,
+   "activationPath": "Paso que agota sus reintentos.",
+   "impact": 1,
+   "likelihood": 4,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F11",
+   "kind": "debt",
+   "category": "duplication",
+   "title": "Bloques casi idénticos de validación estructural y semántica en RetryMiddleware",
+   "rationale": "Los casos 2 y 3 repiten la emisión de StepValidationEvent, la asignación de result.Error, el incremento de métrica y attempt++, difiriendo solo en el origen y en ValidationType. La complejidad de InvokeAsync es 18 (grafo). Cualquier cambio (por ejemplo el de F10) debe replicarse en tres sitios.",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+    "startLine": 94,
+    "endLine": 120,
+    "quote": "// CASE 2: Structural validation (IStepResult.ValidateAsync)"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+     "startLine": 122,
+     "endLine": 148,
+     "quote": "// CASE 3: Semantic validation (IStep.ValidateAsync)"
+    }
+   ],
+   "symbol": "RetryMiddleware.InvokeAsync",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 2,
+   "likelihood": 5,
+   "confidence": 0.8
+  },
+  {
+   "localId": "F12",
+   "kind": "bug",
+   "category": "boundary",
+   "title": "Con step.MaxRetries <= 0 el paso no se ejecuta nunca y se devuelve un error de validación",
+   "rationale": "El bucle 'while (attempt <= step.MaxRetries)' no itera si MaxRetries es 0 o negativo; result queda null y se devuelve ErrorStepResult 'Validation failed after N attempts' sin haber ejecutado el paso ni llamado a ExecuteAsync. El mensaje no menciona la causa real.",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+    "startLine": 27,
+    "endLine": 27,
+    "quote": "while (attempt <= step.MaxRetries)"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+     "startLine": 160,
+     "endLine": 162,
+     "quote": "var finalError = result ?? ErrorStepResult.FromMessage("
+    }
+   ],
+   "symbol": "RetryMiddleware.InvokeAsync",
+   "seedRef": null,
+   "activationPath": "Paso configurado con MaxRetries 0.",
+   "impact": 2,
+   "likelihood": 1,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F13",
+   "kind": "debt",
+   "category": "doc-contradiction",
+   "title": "Comentarios que contradicen el código: Observability 'siempre primero' y ConfigurationException",
+   "rationale": "ObservabilityMiddleware declara que siempre va primero en la cadena, pero Pipeline pone antes los middlewares del registro de usuario (orden 'User -> Observability -> Timeout -> Retry', líneas 17 y 122). El comentario de ValidateAndOrder dice que lanza ConfigurationException, y el código lanza InvalidOperationException en las tres salidas; además su bloque summary queda huérfano sobre RequireSchema.",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/ObservabilityMiddleware.cs",
+    "startLine": 13,
+    "endLine": 13,
+    "quote": "/// Always runs first in the middleware chain."
+   },
+   "instances": [
+    {
+     "path": "YAML/Execution/YamlPipelineFactory.cs",
+     "startLine": 137,
+     "endLine": 137,
+     "quote": "/// Throws ConfigurationException on cycle or schema mismatch."
+    },
+    {
+     "path": "Core/Execution/Pipeline.cs",
+     "startLine": 17,
+     "endLine": 17,
+     "quote": "/// Execution order: User middlewares → Observability → Timeout → Retry → Step."
+    }
+   ],
+   "symbol": "ObservabilityMiddleware",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 1,
+   "likelihood": 5,
+   "confidence": 0.8
+  },
+  {
+   "localId": "F14",
+   "kind": "bug",
+   "category": "error-handling",
+   "title": "Una excepción al emitir el evento de fin dentro del try se trata como fallo del paso: métricas duplicadas y segundo evento",
+   "rationale": "El SendEventAsync del StepCompletedEvent está dentro del try que envuelve a next. Si lanza, el catch registra otra vez StepExecutions, StepDuration y StepErrors, marca la actividad como error y emite otro StepCompletedEvent Success=false, aunque el paso terminó bien. Además el envío del catch usa el mismo cancellationToken, que si está cancelado puede lanzar y ocultar la excepción original.",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/ObservabilityMiddleware.cs",
+    "startLine": 98,
+    "endLine": 98,
+    "quote": "await context.SendEventAsync(enrichedCompletedEvent, cancellationToken);"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Middlewares/ObservabilityMiddleware.cs",
+     "startLine": 123,
+     "endLine": 123,
+     "quote": "await context.SendEventAsync(new StepCompletedEvent"
+    }
+   ],
+   "symbol": "ObservabilityMiddleware.InvokeAsync",
+   "seedRef": null,
+   "activationPath": "Fallo del canal de eventos o cancelación durante el envío.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F15",
+   "kind": "security",
+   "category": "code-injection",
+   "title": "Escapado incompleto de la función JS embebida en código C# compilado en proceso",
+   "rationale": "BuildValidationMethod escapa comillas dobles y saltos de línea pero no las barras invertidas ni '\\r' aislado, y pega el texto en un literal de cadena C# que luego Roslyn compila y carga. Una barra invertida en el JS (regex como \\d) rompe la compilación; una secuencia '\\\"' en el JS se transforma en '\\\\\"', que cierra el literal e inyecta código C# arbitrario en el ensamblado que se carga en el proceso. La exposición depende de que jsValidateFunction proceda de fuente no confiable; CompileFromFolderAsync no lo pasa (línea 34).",
+   "anchor": {
+    "path": "YAML/Compilation/SchemaCompiler.cs",
+    "startLine": 87,
+    "endLine": 87,
+    "quote": "var escapedJs = jsFunction.Replace(\"\\\"\", \"\\\\\\\"\").Replace(\"\\r\\n\", \"\\\\n\").Replace(\"\\n\", \"\\\\n\");"
+   },
+   "instances": [],
+   "symbol": "SchemaCompiler.BuildValidationMethod",
+   "seedRef": null,
+   "activationPath": "Llamada a CompileAsync con jsValidateFunction no controlada por el desarrollador.",
+   "impact": 4,
+   "likelihood": 1,
+   "confidence": 0.65
+  },
+  {
+   "localId": "F16",
+   "kind": "bug",
+   "category": "validation-semantics",
+   "title": "La validación JS ignora todo valor de retorno que no sea bool y nunca devuelve mensaje de error",
+   "rationale": "El código generado hace 'jsResult is bool b ? b : true': undefined, null, 0, cadenas (p. ej. un mensaje de error) u objetos cuentan como válidos, y el segundo elemento de la tupla es siempre null, por lo que RetryMiddleware solo puede reportar 'Structural validation failed' sin motivo. Una excepción de V8 sale de ValidateAsync, que RetryMiddleware llama fuera de un try (línea 95), y acaba convertida en error por Pipeline.ExecuteStepAsync.",
+   "anchor": {
+    "path": "YAML/Compilation/SchemaCompiler.cs",
+    "startLine": 94,
+    "endLine": 94,
+    "quote": "bool isValid = jsResult is bool b ? b : true;"
+   },
+   "instances": [
+    {
+     "path": "YAML/Compilation/SchemaCompiler.cs",
+     "startLine": 95,
+     "endLine": 95,
+     "quote": "return Task.FromResult((isValid, (string?)null));"
+    }
+   ],
+   "symbol": "SchemaCompiler.BuildValidationMethod",
+   "seedRef": null,
+   "activationPath": "Esquema compilado con función JS validate.",
+   "impact": 3,
+   "likelihood": 3,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F17",
+   "kind": "security",
+   "category": "sandbox",
+   "title": "El script JS recibe objetos del host (PipelineContext y el resultado) con superficie .NET completa",
+   "rationale": "AddHostObject expone el contexto y el resultado al motor V8 sin restricciones de tipo ni ámbito, de modo que el script puede navegar por sus miembros públicos (por ejemplo ServiceProvider, Metadata) y llamar a métodos .NET. Es un riesgo si el JS proviene de entrada no confiable.",
+   "anchor": {
+    "path": "YAML/Compilation/SchemaCompiler.cs",
+    "startLine": 90,
+    "endLine": 91,
+    "quote": "engine.AddHostObject(\"context\", context);"
+   },
+   "instances": [],
+   "symbol": "SchemaCompiler.BuildValidationMethod",
+   "seedRef": null,
+   "activationPath": "Esquema con validación JS no controlada por el desarrollador.",
+   "impact": 3,
+   "likelihood": 1,
+   "confidence": 0.4
+  },
+  {
+   "localId": "F18",
+   "kind": "bug",
+   "category": "concurrency",
+   "title": "Compilación concurrente o repetida del mismo nombre sin exclusión: segundo ensamblado con el mismo nombre en el contexto por defecto",
+   "rationale": "CompileAsync consulta el caché y compila sin bloqueo ni caché de tareas. CompileFromFolderAsync lanza todas las compilaciones en paralelo y usa el nombre de fichero sin extensión como clave, de modo que dos esquemas con el mismo nombre en subcarpetas distintas, o dos llamadas simultáneas, compilan dos ensamblados 'AITaskAgent.YAML.Generated.{nombre}' que se cargan en AssemblyLoadContext.Default: la carga puede fallar por identidad duplicada o el último gana en _compiled. Los ensamblados además no pueden descargarse nunca.",
+   "anchor": {
+    "path": "YAML/Compilation/SchemaCompiler.cs",
+    "startLine": 45,
+    "endLine": 46,
+    "quote": "if (_compiled.TryGetValue(name, out var cached))"
+   },
+   "instances": [
+    {
+     "path": "YAML/Compilation/SchemaCompiler.cs",
+     "startLine": 30,
+     "endLine": 30,
+     "quote": "var tasks = files.Select(async file =>"
+    },
+    {
+     "path": "YAML/Compilation/SchemaCompiler.cs",
+     "startLine": 185,
+     "endLine": 185,
+     "quote": "var assembly = AssemblyLoadContext.Default.LoadFromStream(ms);"
+    }
+   ],
+   "symbol": "SchemaCompiler.CompileAsync",
+   "seedRef": null,
+   "activationPath": "Carpeta de esquemas con nombres repetidos en subdirectorios o compilaciones simultáneas.",
+   "impact": 3,
+   "likelihood": 2,
+   "confidence": 0.55
+  },
+  {
+   "localId": "F19",
+   "kind": "security",
+   "category": "input-validation",
+   "title": "El nombre del esquema (nombre de fichero) se usa sin sanear como identificador C# y nombre de ensamblado",
+   "rationale": "El nombre de fichero sin extensión pasa a CompileAsync y se interpola en el código del wrapper como nombre de clase, y en el nombre del ensamblado. Un nombre con guiones, espacios o caracteres como llaves o paréntesis produce código no compilable o, en un directorio no confiable, código C# inyectado (los nombres de fichero pueden contener esos caracteres). Mensaje de error genérico de compilación.",
+   "anchor": {
+    "path": "YAML/Compilation/SchemaCompiler.cs",
+    "startLine": 32,
+    "endLine": 32,
+    "quote": "var name = Path.GetFileNameWithoutExtension(file);"
+   },
+   "instances": [
+    {
+     "path": "YAML/Compilation/SchemaCompiler.cs",
+     "startLine": 124,
+     "endLine": 124,
+     "quote": "public class {{className}} : AITaskAgent.LLM.Results.LlmStepResult<{{dataClassName}}>"
+    }
+   ],
+   "symbol": "SchemaCompiler.CompileFromFolderAsync",
+   "seedRef": null,
+   "activationPath": "Carpeta de esquemas con nombres no válidos como identificador.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.5
+  },
+  {
+   "localId": "F20",
+   "kind": "debt",
+   "category": "error-handling",
+   "title": "catch vacío al añadir la referencia de V8 y referencias sin proteger por Location vacío",
+   "rationale": "El único try/catch cubre solo la referencia a V8ScriptEngine y descarta cualquier excepción sin registro, mientras que el resto de MetadataReference.CreateFromFile(Assembly.Location) no tiene protección: en publicaciones de fichero único Location es vacío y lanzaría. Si falta V8, el fallo aparece más tarde como error de compilación de Roslyn sin pista de la causa.",
+   "anchor": {
+    "path": "YAML/Compilation/SchemaCompiler.cs",
+    "startLine": 215,
+    "endLine": 215,
+    "quote": "catch { /* optional */ }"
+   },
+   "instances": [],
+   "symbol": "SchemaCompiler.GetRequiredReferences",
+   "seedRef": "ISSUE[empty-catch] SchemaCompiler.GetRequiredReferences L215",
+   "activationPath": "Compilación de un esquema con función JS en un entorno sin V8 o publicación de fichero único.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.55
+  },
+  {
+   "localId": "F21",
+   "kind": "bug",
+   "category": "yaml-merge",
+   "title": "Fusión multi-fichero con separador '---' probablemente solo procesa el primer documento YAML",
+   "rationale": "CreateFromFolderAsync concatena los ficheros con '---' y llama a Deserialize<YamlPipelineDocument>(string), que solo materializa un documento; el resto se ignoraría en silencio. Además Directory.GetFiles no garantiza orden. El resumen de la clase promete 'multi-file pipelines'. Debe comprobarse con YamlDotNet; sin tests en el lote.",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 66,
+    "endLine": 66,
+    "quote": "var merged = string.Join($\"{Environment.NewLine}---{Environment.NewLine}\", parts);"
+   },
+   "instances": [
+    {
+     "path": "YAML/Execution/YamlPipelineFactory.cs",
+     "startLine": 74,
+     "endLine": 74,
+     "quote": "var doc = deserializer.Deserialize<YamlPipelineDocument>(mergedYaml);"
+    }
+   ],
+   "symbol": "YamlPipelineFactory.CreateFromFolderAsync",
+   "seedRef": null,
+   "activationPath": "Carpeta de pipeline con más de un fichero YAML.",
+   "impact": 4,
+   "likelihood": 3,
+   "confidence": 0.45
+  },
+  {
+   "localId": "F22",
+   "kind": "bug",
+   "category": "null-handling",
+   "title": "Un YAML vacío produce NullReferenceException sin mensaje útil",
+   "rationale": "Deserialize devuelve null para un documento vacío (carpeta sin *.yaml o fichero vacío) y la siguiente línea desreferencia doc.Steps sin comprobación.",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 78,
+    "endLine": 78,
+    "quote": "foreach (var step in doc.Steps.OfType<YamlLlmStep>())"
+   },
+   "instances": [],
+   "symbol": "YamlPipelineFactory.CreateFromYaml",
+   "seedRef": null,
+   "activationPath": "Carpeta sin ficheros YAML o fichero vacío.",
+   "impact": 2,
+   "likelihood": 3,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F23",
+   "kind": "bug",
+   "category": "dag-execution",
+   "title": "El DAG se valida por aristas pero se ejecuta como cadena lineal: cada paso recibe el resultado del anterior en el orden topológico, no el de sus dependencias",
+   "rationale": "ValidateAndOrder solo comprueba que OutputSchema de cada dependencia iguale InputSchema del paso. El motor, sin embargo, pasa currentResult de un paso al siguiente de la lista. Con ramas (A->B, A->C) C recibe el resultado de B y no el de A, con un tipo que la validación no comprobó; con varias raíces la segunda recibe el resultado de la primera. El comportamiento posterior depende de cómo StepBase convierta la entrada (externo).",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 200,
+    "endLine": 200,
+    "quote": "if (byId[dep].OutputSchema != step.InputSchema)"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/Pipeline.cs",
+     "startLine": 262,
+     "endLine": 262,
+     "quote": "currentResult = await ExecuteStepAsync("
+    }
+   ],
+   "symbol": "YamlPipelineFactory.ValidateAndOrder",
+   "seedRef": null,
+   "activationPath": "Pipeline YAML con dependencias que no forman una cadena.",
+   "impact": 4,
+   "likelihood": 3,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F24",
+   "kind": "debt",
+   "category": "error-handling",
+   "title": "StepId duplicado produce ArgumentException genérica y no se validan antes de ordenar",
+   "rationale": "ToDictionary lanza ArgumentException 'An item with the same key' sin indicar el id duplicado; el resto de errores del factory son mensajes descriptivos. Dos pasos con el mismo StepId solo se detectarían así.",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 181,
+    "endLine": 181,
+    "quote": "var byId = steps.ToDictionary(s => s.StepId);"
+   },
+   "instances": [],
+   "symbol": "YamlPipelineFactory.ValidateAndOrder",
+   "seedRef": null,
+   "activationPath": "YAML con StepId repetido.",
+   "impact": 1,
+   "likelihood": 3,
+   "confidence": 0.7
+  },
+  {
+   "localId": "F25",
+   "kind": "bug",
+   "category": "error-handling",
+   "title": "Excepciones tragadas en la fábrica de objetos de YamlDotNet y en el descubrimiento de tipos",
+   "rationale": "La fábrica intenta ActivatorUtilities y, ante cualquier excepción, cae a Activator.CreateInstance, ocultando fallos reales de DI (dependencia no registrada) tras un MissingMethodException o un objeto sin dependencias. SafeGetTypes descarta todos los tipos de un ensamblado ante un ReflectionTypeLoadException aunque algunos sean cargables, con lo que un paso con [YamlStepTag] podría no mapearse sin aviso.",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 109,
+    "endLine": 109,
+    "quote": "catch { return Activator.CreateInstance(type)!; }"
+   },
+   "instances": [
+    {
+     "path": "YAML/Execution/YamlPipelineFactory.cs",
+     "startLine": 132,
+     "endLine": 132,
+     "quote": "catch { return []; }"
+    }
+   ],
+   "symbol": "YamlPipelineFactory.BuildDeserializer",
+   "seedRef": null,
+   "activationPath": "Paso YAML cuyas dependencias de constructor no se resuelven, o ensamblados con tipos no cargables.",
+   "impact": 3,
+   "likelihood": 2,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F26",
+   "kind": "debt",
+   "category": "perf",
+   "title": "Se recorren todos los tipos de todos los ensamblados cargados en cada CreateFromYaml",
+   "rationale": "BuildDeserializer enumera AppDomain.GetAssemblies() y GetTypes() en cada construcción de pipeline, sin caché de los tipos con [YamlStepTag]; dos tipos con el mismo tag son indistinguibles por el orden de ensamblados.",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 113,
+    "endLine": 113,
+    "quote": "var stepTypes = AppDomain.CurrentDomain.GetAssemblies()"
+   },
+   "instances": [],
+   "symbol": "YamlPipelineFactory.BuildDeserializer",
+   "seedRef": null,
+   "activationPath": "Cada creación de pipeline YAML.",
+   "impact": 1,
+   "likelihood": 4,
+   "confidence": 0.6
+  },
+  {
+   "localId": "F27",
+   "kind": "debt",
+   "category": "doc-contradiction",
+   "title": "El comentario de YamlLlmStep dice que InputType y OutputType están fijos, pero la factoría los sobrescribe",
+   "rationale": "El resumen indica 'InputType and OutputType are fixed to IStepResult / LlmStringStepResult', mientras CreateFromYaml asigna ambos con los tipos compilados del esquema para todo StepBase, YamlLlmStep incluido.",
+   "anchor": {
+    "path": "YAML/Steps/YamlLlmStep.cs",
+    "startLine": 20,
+    "endLine": 20,
+    "quote": "/// InputType and OutputType are fixed to IStepResult / LlmStringStepResult;"
+   },
+   "instances": [
+    {
+     "path": "YAML/Execution/YamlPipelineFactory.cs",
+     "startLine": 88,
+     "endLine": 88,
+     "quote": "stepBase.InputType = schemaCompiler.GetCompiledType(RequireSchema(step.InputSchema, step.StepId, \"inputSchema\"));"
+    }
+   ],
+   "symbol": "YamlLlmStep",
+   "seedRef": null,
+   "activationPath": "no evidente",
+   "impact": 1,
+   "likelihood": 5,
+   "confidence": 0.75
+  },
+  {
+   "localId": "F28",
+   "kind": "bug",
+   "category": "serialization",
+   "title": "Si input.Value es null se serializa el IStepResult completo como mensaje de usuario",
+   "rationale": "BuildUserMessageAsync usa 'input.Value ?? input' con JsonConvert: cuando Value es null se vuelca el resultado entero (paso, error, metadatos) al LLM, con posible referencia circular o exposición de datos internos. No se evalúa nada sobre el tipo de input.",
+   "anchor": {
+    "path": "YAML/Steps/YamlLlmStep.cs",
+    "startLine": 84,
+    "endLine": 84,
+    "quote": ": JsonConvert.SerializeObject(input.Value ?? input));"
+   },
+   "instances": [],
+   "symbol": "YamlLlmStep.BuildUserMessageAsync",
+   "seedRef": null,
+   "activationPath": "Paso YAML sin UserPrompt cuyo resultado previo no tiene Value.",
+   "impact": 2,
+   "likelihood": 2,
+   "confidence": 0.4
+  },
+  {
+   "localId": "F29",
+   "kind": "debt",
+   "category": "global-state",
+   "title": "El registro de middlewares es estático y los registros repetidos pueden duplicar middlewares",
+   "rationale": "Ambas extensiones guardan en PipelineMiddlewareRegistry (estático), pese a que IPipeline documenta 'remove static state'. Llamar dos veces con el mismo tipo, por ejemplo en tests o varios contenedores, puede registrar el middleware dos veces o mezclar middlewares entre pipelines concurrentes; que el registro deduplique depende de código externo.",
+   "anchor": {
+    "path": "Core/Execution/ServiceProviderPipelineMiddlewareExtensions.cs",
+    "startLine": 27,
+    "endLine": 27,
+    "quote": "PipelineMiddlewareRegistry.Register(middleware);"
+   },
+   "instances": [
+    {
+     "path": "Core/Execution/ServiceProviderPipelineMiddlewareExtensions.cs",
+     "startLine": 59,
+     "endLine": 59,
+     "quote": "PipelineMiddlewareRegistry.Register(middleware);"
+    }
+   ],
+   "symbol": "ServiceProviderPipelineMiddlewareExtensions.RegisterPipelineMiddleware",
+   "seedRef": null,
+   "activationPath": "Registro de middlewares desde varios contenedores o repetido.",
+   "impact": 2,
+   "likelihood": 3,
+   "confidence": 0.4
+  },
+  {
+   "localId": "F30",
+   "kind": "debt",
+   "category": "api-contract",
+   "title": "YamlPipeline.ExecuteAsync no permite timeout de pipeline ni suscriptores",
+   "rationale": "La envoltura llama a IPipeline.ExecuteAsync solo con nombre, pasos, entrada, contexto y token; no hay vía para pipelineTimeout ni subscribers, por lo que siempre se aplican los 60 minutos por defecto y no se pueden registrar suscriptores por ejecución (F3, F4).",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 38,
+    "endLine": 38,
+    "quote": "=> pipeline.ExecuteAsync(Name, Steps, input, context, cancellationToken: cancellationToken);"
+   },
+   "instances": [],
+   "symbol": "YamlPipeline.ExecuteAsync",
+   "seedRef": null,
+   "activationPath": "Ejecución de pipelines YAML.",
+   "impact": 2,
+   "likelihood": 3,
+   "confidence": 0.6
+  }
+ ],
+ "seedVerdicts": [
+  {
+   "seed": "ISSUE undisposed-resource CancellationTokenSource Pipeline.ExecuteAsync L134",
+   "verdict": "confirmed",
+   "reason": "timeoutCts (línea 134) no se libera; solo se libera linkedCts en el finally (línea 210)."
+  },
+  {
+   "seed": "ISSUE empty-catch SchemaCompiler.GetRequiredReferences L215",
+   "verdict": "confirmed",
+   "reason": "El catch vacío de la línea 215 descarta cualquier excepción sin registro; ver F20."
+  },
+  {
+   "seed": "DEAD? Class EventTypes (AITaskAgentConstants.EventTypes.cs)",
+   "verdict": "false_positive",
+   "reason": "El grafo registra uso entrante desde Core.Base.Metrics y Core.Base.Telemetry; es una clase de constantes."
+  },
+  {
+   "seed": "DEAD? Class AITaskAgentConstants (TelemetryTags.cs)",
+   "verdict": "false_positive",
+   "reason": "Contenedor de TelemetryTags, usado en ObservabilityMiddleware (línea 32) y Pipeline (línea 151)."
+  },
+  {
+   "seed": "DEAD? Class TelemetryTags",
+   "verdict": "false_positive",
+   "reason": "Usada en ObservabilityMiddleware, Pipeline y RetryMiddleware (p. ej. línea 89)."
+  },
+  {
+   "seed": "DEAD? Class AITaskAgentConstants (ValidationTypes.cs)",
+   "verdict": "false_positive",
+   "reason": "Contenedor de ValidationTypes, usado en RetryMiddleware (líneas 109 y 137)."
+  },
+  {
+   "seed": "DEAD? Class ValidationTypes",
+   "verdict": "false_positive",
+   "reason": "Usada en RetryMiddleware líneas 109 y 137."
+  },
+  {
+   "seed": "DEAD? Class ServiceProviderPipelineMiddlewareExtensions",
+   "verdict": "needs_context",
+   "reason": "Extensión pública sin llamadores en el lote; podría ser API para aplicaciones externas."
+  },
+  {
+   "seed": "DEAD? Method ServiceProviderPipelineMiddlewareExtensions.RegisterPipelineMiddleware",
+   "verdict": "needs_context",
+   "reason": "API pública sin llamadores dentro del lote."
+  },
+  {
+   "seed": "DEAD? Method ServiceProviderPipelineMiddlewareExtensions.RegisterPipelineMiddlewares",
+   "verdict": "needs_context",
+   "reason": "API pública sin llamadores dentro del lote."
+  },
+  {
+   "seed": "DEAD? Class SchemaCompiler",
+   "verdict": "false_positive",
+   "reason": "Recibido por el constructor de YamlPipelineFactory (línea 54) y usado en CreateFromYaml."
+  },
+  {
+   "seed": "DEAD? Method SchemaCompiler.CompileFromFolderAsync",
+   "verdict": "needs_context",
+   "reason": "Entrada pública sin llamadores en el lote."
+  },
+  {
+   "seed": "DEAD? Method SchemaCompiler.CompileAsync",
+   "verdict": "false_positive",
+   "reason": "Llamado desde CompileFromFolderAsync (línea 34); además es API pública."
+  },
+  {
+   "seed": "DEAD? Method SchemaCompiler.GetCompiledType",
+   "verdict": "false_positive",
+   "reason": "Llamado en YamlPipelineFactory líneas 88 y 89."
+  },
+  {
+   "seed": "DEAD? Method SchemaCompiler.BuildValidationMethod",
+   "verdict": "false_positive",
+   "reason": "Llamado en CompileAsync línea 61."
+  },
+  {
+   "seed": "DEAD? Method SchemaCompiler.EnrichGeneratedCode",
+   "verdict": "false_positive",
+   "reason": "Llamado en CompileAsync línea 62."
+  },
+  {
+   "seed": "DEAD? Method SchemaCompiler.RenameGeneratedClass",
+   "verdict": "false_positive",
+   "reason": "Llamado en EnrichGeneratedCode línea 105."
+  },
+  {
+   "seed": "DEAD? Method SchemaCompiler.CompileAndLoadAsync",
+   "verdict": "false_positive",
+   "reason": "Llamado en CompileAsync línea 64."
+  },
+  {
+   "seed": "DEAD? Method SchemaCompiler.GetRequiredReferences",
+   "verdict": "false_positive",
+   "reason": "Llamado en CompileAndLoadAsync línea 164."
+  },
+  {
+   "seed": "DEAD? Class YamlPipelineDocument",
+   "verdict": "false_positive",
+   "reason": "Tipo destino de Deserialize en CreateFromYaml (línea 74)."
+  },
+  {
+   "seed": "DEAD? Class YamlPipeline",
+   "verdict": "false_positive",
+   "reason": "Tipo de retorno de la factoría (líneas 59, 71, 97)."
+  },
+  {
+   "seed": "DEAD? Method YamlPipeline.ExecuteAsync",
+   "verdict": "needs_context",
+   "reason": "API pública del resultado de la factoría; sin llamadores en el lote."
+  },
+  {
+   "seed": "DEAD? Class YamlPipelineFactory",
+   "verdict": "needs_context",
+   "reason": "Punto de entrada público, presumiblemente registrado en DI fuera del lote."
+  },
+  {
+   "seed": "DEAD? Method YamlPipelineFactory.CreateFromFolderAsync",
+   "verdict": "needs_context",
+   "reason": "API pública sin llamadores en el lote."
+  },
+  {
+   "seed": "DEAD? Method YamlPipelineFactory.CreateFromYaml",
+   "verdict": "false_positive",
+   "reason": "Llamado en CreateFromFolderAsync línea 67."
+  },
+  {
+   "seed": "DEAD? Method YamlPipelineFactory.BuildDeserializer",
+   "verdict": "false_positive",
+   "reason": "Llamado en CreateFromYaml línea 73."
+  },
+  {
+   "seed": "DEAD? Method YamlPipelineFactory.SafeGetTypes",
+   "verdict": "false_positive",
+   "reason": "Usado como selector en BuildDeserializer línea 114."
+  },
+  {
+   "seed": "DEAD? Method YamlPipelineFactory.RequireSchema",
+   "verdict": "false_positive",
+   "reason": "Llamado en CreateFromYaml líneas 88 y 89."
+  },
+  {
+   "seed": "DEAD? Method YamlPipelineFactory.ResolveRole",
+   "verdict": "false_positive",
+   "reason": "Llamado en CreateFromYaml línea 80."
+  },
+  {
+   "seed": "DEAD? Method YamlPipelineFactory.ValidateAndOrder",
+   "verdict": "false_positive",
+   "reason": "Llamado en CreateFromYaml línea 95."
+  }
+ ],
+ "relations": [
+  {
+   "from": "Pipeline.ExecuteAsync",
+   "to": "StepValidation.ValidateUniqueStepNames",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 99,
+    "endLine": 99,
+    "quote": "StepValidation.ValidateUniqueStepNames(steps, name);"
+   }
+  },
+  {
+   "from": "Pipeline.ExecuteAsync",
+   "to": "PipelineMiddlewareRegistry.GetMiddlewares",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 122,
+    "endLine": 122,
+    "quote": "PipelineMiddlewareRegistry.GetMiddlewares()"
+   }
+  },
+  {
+   "from": "Pipeline.ExecuteAsync",
+   "to": "PipelineContext.Runtime",
+   "type": "WRITES",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 113,
+    "endLine": 113,
+    "quote": "context.Runtime = this;"
+   }
+  },
+  {
+   "from": "Pipeline.ExecuteAsync",
+   "to": "StepResultFactory.CreateStepResult",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 107,
+    "endLine": 107,
+    "quote": "StepResultFactory.CreateStepResult(steps[0].InputType, new EmptyStep(), input);"
+   }
+  },
+  {
+   "from": "Pipeline.ExecuteStepsWithNextStepsAsync",
+   "to": "IResume.SaveStateAsync",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 292,
+    "endLine": 292,
+    "quote": "var state = await step.Resume.SaveStateAsync(step);"
+   }
+  },
+  {
+   "from": "Pipeline.ExecuteStepAsync",
+   "to": "IResume.RestoreStateAsync",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 383,
+    "endLine": 383,
+    "quote": "await step.Resume.RestoreStateAsync(step, state, pendingResume.Value);"
+   }
+  },
+  {
+   "from": "Pipeline.CreateInternalMiddlewares",
+   "to": "RetryMiddleware",
+   "type": "REGISTERS",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 444,
+    "endLine": 444,
+    "quote": "new RetryMiddleware(_loggerFactory.CreateLogger<RetryMiddleware>())"
+   }
+  },
+  {
+   "from": "Pipeline.BuildMiddlewareChain",
+   "to": "IPipelineMiddleware.InvokeAsync",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Pipeline.cs",
+    "startLine": 423,
+    "endLine": 423,
+    "quote": "chain = (step, input, ctx, ct) => middleware.InvokeAsync("
+   }
+  },
+  {
+   "from": "RetryMiddleware.InvokeAsync",
+   "to": "IFallbackable.SwitchToNextFallback",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+    "startLine": 57,
+    "endLine": 57,
+    "quote": "if (step is IFallbackable fallbackable && fallbackable.SwitchToNextFallback(errResult, context, attempt))"
+   }
+  },
+  {
+   "from": "RetryMiddleware.InvokeAsync",
+   "to": "IStep.ExecuteAsync",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/RetryMiddleware.cs",
+    "startLine": 48,
+    "endLine": 48,
+    "quote": "result = await step.ExecuteAsync(input, context, attempt, result, cancellationToken);"
+   }
+  },
+  {
+   "from": "ObservabilityMiddleware.InvokeAsync",
+   "to": "Metrics.StepExecutions",
+   "type": "WRITES",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/ObservabilityMiddleware.cs",
+    "startLine": 71,
+    "endLine": 71,
+    "quote": "Metrics.StepExecutions.Add(1,"
+   }
+  },
+  {
+   "from": "TimeoutMiddleware.InvokeAsync",
+   "to": "StepTimeoutEvent",
+   "type": "CALLS",
+   "anchor": {
+    "path": "Core/Execution/Middlewares/TimeoutMiddleware.cs",
+    "startLine": 51,
+    "endLine": 51,
+    "quote": "await context.SendEventAsync(new StepTimeoutEvent"
+   }
+  },
+  {
+   "from": "ServiceProviderPipelineMiddlewareExtensions.RegisterPipelineMiddleware",
+   "to": "PipelineMiddlewareRegistry.Register",
+   "type": "REGISTERS",
+   "anchor": {
+    "path": "Core/Execution/ServiceProviderPipelineMiddlewareExtensions.cs",
+    "startLine": 27,
+    "endLine": 27,
+    "quote": "PipelineMiddlewareRegistry.Register(middleware);"
+   }
+  },
+  {
+   "from": "YamlPipeline.ExecuteAsync",
+   "to": "IPipeline.ExecuteAsync",
+   "type": "CALLS",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 38,
+    "endLine": 38,
+    "quote": "=> pipeline.ExecuteAsync(Name, Steps, input, context, cancellationToken: cancellationToken);"
+   }
+  },
+  {
+   "from": "YamlPipelineFactory.CreateFromYaml",
+   "to": "YamlLlmStep.ApplyRole",
+   "type": "CALLS",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 80,
+    "endLine": 80,
+    "quote": "step.ApplyRole(ResolveRole(step.ProfileName, step.StepId));"
+   }
+  },
+  {
+   "from": "YamlPipelineFactory.CreateFromYaml",
+   "to": "SchemaCompiler.GetCompiledType",
+   "type": "CALLS",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 88,
+    "endLine": 88,
+    "quote": "stepBase.InputType = schemaCompiler.GetCompiledType(RequireSchema(step.InputSchema, step.StepId, \"inputSchema\"));"
+   }
+  },
+  {
+   "from": "YamlPipelineFactory.ResolveRole",
+   "to": "LlmEnvironment.Roles",
+   "type": "READS",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 166,
+    "endLine": 166,
+    "quote": "if (!env.Roles.TryGetValue(roleName, out var role))"
+   }
+  },
+  {
+   "from": "YamlPipelineFactory.BuildDeserializer",
+   "to": "YamlStepTagAttribute",
+   "type": "READS",
+   "anchor": {
+    "path": "YAML/Execution/YamlPipelineFactory.cs",
+    "startLine": 122,
+    "endLine": 122,
+    "quote": "var tag = type.GetCustomAttribute<YamlStepTagAttribute>()!.TagName;"
+   }
+  },
+  {
+   "from": "SchemaCompiler.CompileAndLoadAsync",
+   "to": "AssemblyLoadContext.Default",
+   "type": "WRITES",
+   "anchor": {
+    "path": "YAML/Compilation/SchemaCompiler.cs",
+    "startLine": 185,
+    "endLine": 185,
+    "quote": "var assembly = AssemblyLoadContext.Default.LoadFromStream(ms);"
+   }
+  },
+  {
+   "from": "SchemaCompiler.CompileAsync",
+   "to": "CSharpGenerator.GenerateFile",
+   "type": "CALLS",
+   "anchor": {
+    "path": "YAML/Compilation/SchemaCompiler.cs",
+    "startLine": 59,
+    "endLine": 59,
+    "quote": "var rawCode = generator.GenerateFile(name);"
+   }
+  },
+  {
+   "from": "YamlLlmStep",
+   "to": "BaseLlmStep",
+   "type": "INHERITS",
+   "anchor": {
+    "path": "YAML/Steps/YamlLlmStep.cs",
+    "startLine": 31,
+    "endLine": 31,
+    "quote": ": BaseLlmStep("
+   }
+  },
+  {
+   "from": "YamlLlmStep.BuildUserMessageAsync",
+   "to": "PromptTemplateResolver.Resolve",
+   "type": "CALLS",
+   "anchor": {
+    "path": "YAML/Steps/YamlLlmStep.cs",
+    "startLine": 83,
+    "endLine": 83,
+    "quote": "? PromptTemplateResolver.Resolve(UserPrompt, input, context, templateProvider)"
+   }
+  },
+  {
+   "from": "YamlLlmStep.ApplyRole",
+   "to": "BaseLlmStep.SetRole",
+   "type": "CALLS",
+   "anchor": {
+    "path": "YAML/Steps/YamlLlmStep.cs",
+    "startLine": 76,
+    "endLine": 76,
+    "quote": "public void ApplyRole(LlmRole role) => SetRole(role);"
+   }
+  }
+ ],
+ "openQuestions": [
+  {
+   "symbol": "RetryMiddleware.InvokeAsync",
+   "question": "¿Puede IFallbackable.SwitchToNextFallback devolver true indefinidamente (por ejemplo ante cancelación) y provocar un bucle infinito al reiniciar attempt = 1?",
+   "needs": [
+    "Core.Abstractions.IFallbackable",
+    "LLM.Steps.BaseLlmStep"
+   ]
+  },
+  {
+   "symbol": "Pipeline.ExecuteAsync",
+   "question": "¿Qué hace PipelineContext.SendEventAsync con un token cancelado y qué ocurre con EventChannel tras DisposeAsync si el contexto se reutiliza en la reanudación?",
+   "needs": [
+    "Core.Models.PipelineContext",
+    "Observability.EventChannel"
+   ]
+  },
+  {
+   "symbol": "ServiceProviderPipelineMiddlewareExtensions.RegisterPipelineMiddleware",
+   "question": "¿PipelineMiddlewareRegistry.Register deduplica por tipo y es seguro entre hilos?",
+   "needs": [
+    "Core.Execution.PipelineMiddlewareRegistry"
+   ]
+  },
+  {
+   "symbol": "YamlPipelineFactory.CreateFromYaml",
+   "question": "¿Deserialize<T>(string) de YamlDotNet procesa solo el primer documento cuando hay separadores '---'?",
+   "needs": [
+    "YamlDotNet.Serialization.Deserializer"
+   ]
+  },
+  {
+   "symbol": "YamlPipelineFactory.ValidateAndOrder",
+   "question": "¿Cómo convierte StepBase/StepResultFactory la entrada cuando el IStepResult previo no es del tipo InputType del paso en un DAG con ramas?",
+   "needs": [
+    "Core.Steps.StepBase",
+    "Core.Execution.StepResultFactory"
+   ]
+  },
+  {
+   "symbol": "YamlPipelineFactory.ResolveRole",
+   "question": "¿Puede LlmEnvironment.DefaultRole ser null o vacío? Con profileName null provocaría ArgumentNullException en TryGetValue.",
+   "needs": [
+    "LLM.Configuration.LlmEnvironment"
+   ]
+  },
+  {
+   "symbol": "YamlLlmStep.GetConversationContext",
+   "question": "Con UseConversationHistory=false se crea un contexto nuevo en cada llamada; ¿llama BaseLlmStep varias veces por ejecución o reintento, perdiendo historial y retroalimentación del error entre intentos?",
+   "needs": [
+    "LLM.Steps.BaseLlmStep",
+    "LLM.Conversation.Context.ConversationContext"
+   ]
+  },
+  {
+   "symbol": "SchemaCompiler.RenameGeneratedClass",
+   "question": "¿Genera NJsonSchema siempre una clase con el nombre exacto del typeNameHint, y qué pasa con esquemas recursivos que referencian el tipo raíz renombrado?",
+   "needs": [
+    "NJsonSchema.CodeGeneration.CSharp.CSharpGenerator"
+   ]
+  },
+  {
+   "symbol": "SchemaCompiler.GetRequiredReferences",
+   "question": "¿Incluye typeof(V8ScriptEngine).Assembly todos los tipos base necesarios (ScriptEngine, AddHostObject) para compilar el código con validación JS, o hace falta Microsoft.ClearScript.Core?",
+   "needs": [
+    "Microsoft.ClearScript.V8",
+    "Microsoft.ClearScript.Core"
+   ]
+  },
+  {
+   "symbol": "YamlLlmStep.StepId",
+   "question": "¿Aplica YamlDotNet el modificador required de C#? Si no, un paso sin stepId conserva el nombre GUID sin error.",
+   "needs": [
+    "YamlDotNet.Serialization"
+   ]
+  }
+ ]
+}

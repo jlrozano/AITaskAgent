@@ -14,6 +14,14 @@ public class LlmStepResult(IStep step) : StepResult(step), ILlmStepResult
     public int? TokensUsed { get; internal set; }
     public string AssistantMessage { get => GetAssistantMessageOrDefault(); set => _assistantMessage = value; }
     public string? Reasoning { get; internal set; }
+
+    /// <summary>
+    /// Not null when the tool loop was cut by the step rather than ended by the model (see
+    /// <see cref="AITaskAgent.LLM.Models.LlmResponse.ToolLoopStopMessage"/>): the result is the cut-off turn, not an answer
+    /// the model chose to give.
+    /// </summary>
+    public string? ToolLoopStopMessage { get; internal set; }
+
     public string GetAssistantMessageOrDefault(string? defaultMessage = null)
     {
         string? stringValue = _assistantMessage ?? ((IStepResult)this).Value?.ToString();

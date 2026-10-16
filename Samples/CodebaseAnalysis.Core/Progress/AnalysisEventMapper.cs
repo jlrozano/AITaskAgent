@@ -26,8 +26,9 @@ public sealed class AnalysisEventMapper(string runId)
     private string? _currentPhase;
 
     /// <summary>
-    /// Fase de un nombre de step conocido (los seis de primer nivel, el primero de la regeneración, los auditores y los
-    /// sub-steps LLM del enriquecimiento y la síntesis); null si no es ninguno.
+    /// Fase de un nombre de step conocido (los de primer nivel, incluidos los cuatro de preparación, el primero de la
+    /// regeneración, los auditores y sus investigaciones, y los sub-steps LLM del enriquecimiento, el nombrado de dominios y la
+    /// síntesis); null si no es ninguno.
     /// </summary>
     public static string? PhaseOfStep(string? stepName)
     {
@@ -38,14 +39,23 @@ public sealed class AnalysisEventMapper(string runId)
         {
             DetectAndIndexGraphStep.StepName => AnalysisPhases.Detect,
             LanguageEnricherStep.StepName => AnalysisPhases.Enrich,
-            BdpEnricherStep.StepName => AnalysisPhases.Enrich,
+            DotNetEnricherStep.StepName => AnalysisPhases.Enrich,
             AnalysisPipelineFactory.SemanticEnricherStepName => AnalysisPhases.Enrich,
             PrepareRegenerationStep.StepName => AnalysisPhases.Facets,
             SqlFacetExtractorStep.StepName => AnalysisPhases.Facets,
+            RepositoryInventoryStep.StepName => AnalysisPhases.Facets,
+            DomainDiscoveryStep.StepName => AnalysisPhases.Facets,
+            DomainDiscoveryStep.NamingStepName => AnalysisPhases.Facets,
+            CoveragePlanningStep.StepName => AnalysisPhases.Facets,
+            TimeBudgetStep.StepName => AnalysisPhases.Facets,
+            SharedPassStep.StepName => AnalysisPhases.Facets,
+            SharedPass.BatchReader.StepName => AnalysisPhases.Facets,
+            SharedPass.FindingJudge.StepName => AnalysisPhases.Facets,
             AnalysisPipelineFactory.ParallelReportsStepName=> AnalysisPhases.Reports,
             ExecutiveSynthesizerStep.StepName => AnalysisPhases.Synthesis,
             AnalysisPipelineFactory.SynthesizerStepName => AnalysisPhases.Synthesis,
             _ when AnalysisPipelineFactory.TryParseAuditorStepName(stepName, out _) => AnalysisPhases.Reports,
+            _ when AnalysisPipelineFactory.TryParseInvestigationStepName(stepName, out _, out _) => AnalysisPhases.Reports,
             _ => null
         };
     }
@@ -53,14 +63,30 @@ public sealed class AnalysisEventMapper(string runId)
     private static bool IsTopLevelStep(string stepName) =>
         stepName is DetectAndIndexGraphStep.StepName
             or LanguageEnricherStep.StepName
-            or BdpEnricherStep.StepName
+            or DotNetEnricherStep.StepName
             or PrepareRegenerationStep.StepName
             or SqlFacetExtractorStep.StepName
+            or RepositoryInventoryStep.StepName
+            or DomainDiscoveryStep.StepName
+            or CoveragePlanningStep.StepName
+            or TimeBudgetStep.StepName
+            or SharedPassStep.StepName
             or AnalysisPipelineFactory.ParallelReportsStepName
             or ExecutiveSynthesizerStep.StepName;
 
-    private static string? ReportOf(string? stepName) =>
-        stepName != null && AnalysisPipelineFactory.TryParseAuditorStepName(stepName, out var type) ? type.ToString() : null;
+    private static string? ReportOf(string? stepName)
+    {
+        if (stepName == null)
+            return null;
+
+        // El auditor de un informe, su verificador (el paso y su sub-step LLM) o una de sus investigaciones por subsistema: el carril es el mismo.
+        if (AnalysisPipelineFactory.TryParseAuditorStepName(stepName, out var type)
+            || AnalysisPipelineFactory.TryParseVerificationStepName(stepName, out type)
+            || AnalysisPipelineFactory.TryParseInvestigationStepName(stepName, out type, out _))
+            return type.ToString();
+
+        return null;
+    }
 
     /// <summary>
     /// El DTO del evento, o null si no se registra: los <see cref="LlmResponseEvent"/> de streaming (un
@@ -147,20 +173,39 @@ public sealed class AnalysisEventMapper(string runId)
                 return MapLlmResponse(lr, Dto);
 
             case ToolStartedEvent ts:
-                return Dto(AnalysisEventDtoTypes.ToolStarted, AnalysisEventLevels.Info,
-                    $"{ts.StepName} → {ts.ToolName}",
-                    new() { ["tool"] = ts.ToolName });
+            {
+                var data = new Dictionary<string, object?> { ["tool"] = ts.ToolName };
+                ToolEventPayload.AddTo(data, ts.AdditionalData, includeOutput: false);
+                return Dto(AnalysisEventDtoTypes.ToolStarted, AnalysisEventLevels.Info, $"{ts.StepName} → {ts.ToolName}", data);
+            }
 
             case ToolCompletedEvent tc:
+            {
+                // Los argumentos van también aquí para que el detalle de la llamada salga de un solo evento; la salida, truncada.
+                var data = new Dictionary<string, object?>
+                {
+                    ["tool"] = tc.ToolName, ["success"] = tc.Success, ["durationMs"] = Ms(tc.Duration), ["error"] = tc.ErrorMessage
+                };
+                ToolEventPayload.AddTo(data, tc.AdditionalData, includeOutput: true);
                 return Dto(AnalysisEventDtoTypes.ToolCompleted,
                     tc.Success ? AnalysisEventLevels.Info : AnalysisEventLevels.Warning,
                     tc.Success
                         ? $"{tc.ToolName} ({Ms(tc.Duration)} ms)"
                         : $"{tc.ToolName} falló ({Ms(tc.Duration)} ms): {tc.ErrorMessage}",
-                    new() { ["tool"] = tc.ToolName, ["success"] = tc.Success, ["durationMs"] = Ms(tc.Duration), ["error"] = tc.ErrorMessage });
+                    data);
+            }
+
+            case StepProgressEvent sp when sp.EventType == AnalysisEventTypes.SharedPassProgress:
+                return Dto(AnalysisEventDtoTypes.SharedPassProgress,
+                    MetaString(sp.Metadata, Key.Level) ?? AnalysisEventLevels.Info,
+                    sp.Message,
+                    sp.Metadata?.Where(kv => kv.Key != Key.Level).ToDictionary(kv => kv.Key, kv => kv.Value));
 
             case StepProgressEvent sp when sp.EventType == AnalysisEventTypes.ReportWritten:
                 return MapReportWritten(sp, Dto);
+
+            case StepProgressEvent sp when sp.EventType == AnalysisEventTypes.ReportVerified:
+                return MapReportVerified(sp, Dto);
 
             case StepProgressEvent sp:
                 return Dto(AnalysisEventDtoTypes.Log,
@@ -228,6 +273,8 @@ public sealed class AnalysisEventMapper(string runId)
                 // Los de esta llamada, solo en la opción principal: la SPA los suma para el consumo en vivo (LlmUsageTracker).
                 ["promptTokens"] = lr.PromptTokens,
                 ["completionTokens"] = lr.CompletionTokens,
+                // Parte de promptTokens servida desde la caché de prefijo del proveedor (null si no lo informa).
+                ["cachedPromptTokens"] = lr.CachedPromptTokens,
                 ["costUsd"] = lr.CostUsd,
                 ["model"] = lr.Model,
                 ["contentLength"] = lr.Content?.Length ?? 0,
@@ -255,6 +302,32 @@ public sealed class AnalysisEventMapper(string runId)
                 ["truncated"] = truncated
             },
             reportType);
+    }
+
+    private static AnalysisEventDto MapReportVerified(
+        StepProgressEvent sp,
+        Func<string, string, string, Dictionary<string, object?>?, string?, AnalysisEventDto> dto)
+    {
+        var outcome = MetaString(sp.Metadata, Key.Outcome);
+        return dto(AnalysisEventDtoTypes.ReportVerified,
+            outcome switch
+            {
+                "verified" or "corrected" => AnalysisEventLevels.Success,
+                "warnings" => AnalysisEventLevels.Warning,
+                _ => AnalysisEventLevels.Error
+            },
+            sp.Message,
+            new()
+            {
+                ["fileName"] = MetaString(sp.Metadata, Key.FileName),
+                ["reportType"] = MetaString(sp.Metadata, Key.ReportType),
+                ["outcome"] = outcome,
+                ["changes"] = sp.Metadata?.GetValueOrDefault(Key.Changes) as int? ?? 0,
+                ["previousVersionId"] = MetaString(sp.Metadata, Key.PreviousVersionId),
+                ["versionId"] = MetaString(sp.Metadata, Key.VersionId),
+                ["error"] = MetaString(sp.Metadata, Key.Error)
+            },
+            MetaString(sp.Metadata, Key.ReportType));
     }
 
     private static string? MetaString(Dictionary<string, object?>? metadata, string key) =>

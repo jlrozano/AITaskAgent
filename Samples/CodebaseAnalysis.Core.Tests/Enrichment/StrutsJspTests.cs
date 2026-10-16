@@ -80,6 +80,39 @@ public class StrutsJspTests
     private static int[] Ints(JsonNode? node) => node!.AsArray().Select(v => v!.GetValue<int>()).ToArray();
 
     [Fact]
+    public async Task The_action_class_is_found_by_the_fqn_javac_wrote_before_falling_back_to_the_simple_name_and_path_suffix()
+    {
+        using var temp = new TempDirectory();
+        var repo = JavaTestRepo.WriteTo(Path.Combine(temp.Path, "repo"));
+        var scan = RepositoryScan.Scan(repo, TestRoots.Resolve(repo));
+        using var graph = await JavaGraphFixture.CreateGraphAsync(Path.Combine(temp.Path, "codebase.db"));
+
+        // El nodo cuya ruta termina en com/acme/web/ConsultarAction.java lo declara javac en otro paquete (la ruta no fue prueba de nada)…
+        var byPath = JavaGraphFixture.Qn(JavaTestRepo.ConsultarActionPath, "ConsultarAction");
+        await graph.Connection.ExecuteAsync("UPDATE nodes SET properties = '{\"fqn\":\"com.otro.web.ConsultarAction\"}' WHERE qualified_name = @qn", ("@qn", byPath));
+        // …y la clase de la acción vive en una carpeta que no sigue el paquete, pero su fqn es el de struts-config.
+        var moved = JavaGraphFixture.Qn("legacy/ConsultarAction.java", "ConsultarAction");
+        await graph.NodeAsync("Class", "ConsultarAction", moved, "legacy/ConsultarAction.java", 3, 7, "{\"fqn\":\"com.acme.web.ConsultarAction\"}");
+
+        await StrutsJspWriter.ApplyAsync(graph.DatabasePath, scan, new StrutsJspOptions(), Encoding.Latin1, "cfg", StartedAt, CancellationToken.None);
+
+        Assert.Equal(moved, Assert.Single(await EdgesAsync(graph, "HANDLES")).Source);
+    }
+
+    [Fact]
+    public async Task Without_an_fqn_the_action_class_is_still_found_by_simple_name_and_package_path()
+    {
+        using var temp = new TempDirectory();
+        var repo = JavaTestRepo.WriteTo(Path.Combine(temp.Path, "repo"));
+        var scan = RepositoryScan.Scan(repo, TestRoots.Resolve(repo));
+        using var graph = await JavaGraphFixture.CreateGraphAsync(Path.Combine(temp.Path, "codebase.db"));
+
+        await StrutsJspWriter.ApplyAsync(graph.DatabasePath, scan, new StrutsJspOptions(), Encoding.Latin1, "cfg", StartedAt, CancellationToken.None);
+
+        Assert.Equal(JavaGraphFixture.Qn(JavaTestRepo.ConsultarActionPath, "ConsultarAction"), Assert.Single(await EdgesAsync(graph, "HANDLES")).Source);
+    }
+
+    [Fact]
     public async Task Each_action_is_a_route_handled_by_its_class_found_by_package_path()
     {
         using var run = await ApplyAsync();

@@ -11,6 +11,15 @@ public sealed class ChatSession
     public string Id { get; set; } = string.Empty;
     public string? Title { get; set; }
     public string RepositoryPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Id (<see cref="ChatModelOption.Id"/>) del modelo que responde los turnos siguientes; se puede cambiar a mitad de
+    /// conversación. Null en las sesiones anteriores al selector: usan el modelo por defecto. Aditivo:
+    /// <see cref="SchemaVersion"/> sigue en 1.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ModelId { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public List<ChatTurn> Turns { get; set; } = [];
@@ -29,6 +38,14 @@ public sealed class ChatTurn
 
     public string? Error { get; set; }
     public string? Model { get; set; }
+
+    /// <summary>
+    /// Id del modelo del catálogo con que se ejecutó el turno (<see cref="ChatModelOption.Id"/>); la UI lo traduce a su
+    /// etiqueta. Null en los turnos anteriores al selector.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ModelId { get; set; }
+
     public int? Tokens { get; set; }
     public decimal? CostUsd { get; set; }
     public long? DurationMs { get; set; }

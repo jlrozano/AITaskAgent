@@ -39,6 +39,9 @@ public sealed record KnowledgePaths
     /// <summary><c>&lt;repo&gt;/.codebase/documents</c>: una carpeta por documento (V2-C).</summary>
     public string DocumentsPath => Path.Combine(CodebaseRoot, "documents");
 
+    /// <summary>Rutas de lectura adicionales del chat (<c>&lt;repo&gt;/.codebase/chat-read-roots.json</c>). Fuera de <c>chat/</c>, donde cada JSON es una sesión.</summary>
+    public string ChatReadRootsFile => Path.Combine(CodebaseRoot, "chat-read-roots.json");
+
     /// <summary><c>documents/.incoming</c>: temporales de subida, antes de validar y extraer (§7.1).</summary>
     public string IncomingDocumentsPath => Path.Combine(DocumentsPath, ".incoming");
 

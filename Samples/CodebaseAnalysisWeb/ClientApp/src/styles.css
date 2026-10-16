@@ -1032,10 +1032,27 @@ a.btn--primary {
 .lane__note--error {
   color: var(--bad);
 }
+.lane__note--verify {
+  color: var(--ink-3);
+}
+.lane__note--verify-corrected,
+.lane__note--verify-verified {
+  color: var(--ok);
+}
+.lane__note--verify-failed {
+  color: var(--bad);
+}
 .lanes__regenerate {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 4px 18px;
   margin-bottom: 6px;
+}
+.lanes__stale {
+  margin: 0 0 8px;
+  font-size: var(--fs-xs);
+  color: var(--warn);
 }
 .lane__actions {
   grid-column: 2 / -1;
@@ -1945,6 +1962,74 @@ a.btn--primary {
   gap: 12px;
   padding: 6px 8px 8px 12px;
 }
+.readroots {
+  display: grid;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-xs);
+}
+.readroots__title {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.readroots__list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.readroots__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.readroots__path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.readroots__form {
+  display: flex;
+  gap: 6px;
+}
+.readroots__form input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: var(--fs-xs);
+}
+.readroots__error {
+  margin: 0;
+}
+.model-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.model-select__label {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.model-select select {
+  max-width: 220px;
+  padding: 3px 6px;
+  font-size: var(--fs-xs);
+}
+.model-select select:disabled {
+  cursor: not-allowed;
+}
+.composer__bar .composer__hint {
+  flex: 1;
+  min-width: 0;
+}
 .composer__hint {
   font-size: var(--fs-xs);
   color: var(--ink-3);
@@ -2814,4 +2899,330 @@ a.btn--primary {
 }
 .source__text {
   white-space: pre;
+}
+
+/* ── Detalle de una tool call (carriles del análisis y chips del chat) ─────────────────────────────── */
+.lane__tick--button {
+  width: 7px;
+  margin-left: -3.5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.lane__tick--button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent-strong);
+  border-radius: 1px;
+}
+.lane__tick--button:hover::before,
+.lane__tick--button:focus-visible::before {
+  width: 4px;
+  margin-left: -2px;
+}
+.lane__tick--error::before {
+  background: var(--bad);
+}
+.lane__calls {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.lane__calls:focus-visible,
+.tool-chip--button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.tool-chip--button {
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+.tool-chip--button:hover {
+  border-color: var(--accent);
+}
+
+.tool-detail {
+  width: min(860px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 48px));
+  padding: 0;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 22%);
+}
+.tool-detail::backdrop {
+  background: rgb(14 17 23 / 45%);
+}
+.tool-detail__body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  max-height: inherit;
+  padding: 14px 16px 12px;
+}
+.tool-detail__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tool-detail__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font: 600 var(--fs-l) var(--font-mono);
+}
+.tool-detail__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+.tool-detail__dot--ok {
+  background: var(--ok);
+}
+.tool-detail__dot--error {
+  background: var(--bad);
+}
+.tool-detail__dot--running {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.tool-detail__status {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.tool-detail__status--error {
+  color: var(--bad);
+}
+.tool-detail__close {
+  margin-left: auto;
+}
+.tool-detail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0;
+  font-size: var(--fs-s);
+}
+.tool-detail__meta dt {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.tool-detail__meta dd {
+  margin: 0;
+}
+.tool-detail__mono {
+  font-family: var(--font-mono);
+}
+.tool-detail__error {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: var(--fs-s);
+  color: var(--bad);
+  background: var(--bad-soft);
+  border-radius: var(--radius-s);
+}
+.tool-detail__block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tool-detail__block-title {
+  margin: 0;
+  font-size: var(--fs-s);
+  font-weight: 600;
+}
+.tool-detail__notice {
+  margin: 4px 0;
+  font-size: var(--fs-xs);
+  color: var(--warn);
+}
+.tool-detail__pre {
+  position: relative;
+  margin: 4px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  font: var(--fs-xs) / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-s);
+}
+.tool-detail__nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--rule);
+}
+.tool-detail__pos {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+/* ── Pasada compartida (sharedpass.progress) ─────────────────────────────────────────────────────── */
+.sharedpass {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.sharedpass__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sharedpass__phase {
+  font-size: var(--fs-s);
+  color: var(--accent);
+}
+.sharedpass--done .sharedpass__phase {
+  color: var(--ok);
+}
+.sharedpass--cut .sharedpass__phase {
+  color: var(--warn);
+}
+.sharedpass--failed .sharedpass__phase {
+  color: var(--bad);
+}
+.sharedpass__meters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px 18px;
+}
+.sharedpass__meter .num {
+  font-size: var(--fs-m);
+}
+.progress--thin {
+  height: 4px;
+  margin: 4px 0 0;
+}
+.sharedpass__note {
+  margin: 0;
+  font-size: var(--fs-s);
+}
+.sharedpass__note--warning {
+  color: var(--warn);
+}
+.sharedpass__note--error {
+  color: var(--bad);
+}
+.sharedpass__severities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+}
+.sharedpass__sev {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.sharedpass__sev dt {
+  font: 600 var(--fs-xs) var(--font-mono);
+  color: var(--ink-3);
+}
+.sharedpass__sev dd {
+  margin: 0;
+  font-size: var(--fs-m);
+}
+.sharedpass__sev--p0 dt,
+.sharedpass__sev--p1 dt {
+  color: var(--bad);
+}
+.sharedpass__batches {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow: auto;
+}
+.sharedpass__batch {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+  border-top: 1px solid var(--rule);
+  font-size: var(--fs-xs);
+}
+.sharedpass__batch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rule-strong);
+  grid-row: span 2;
+}
+.sharedpass__batch-id {
+  font: 600 var(--fs-xs) var(--font-mono);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sharedpass__batch-status {
+  color: var(--ink-3);
+}
+.sharedpass__batch-meta {
+  grid-column: 2 / span 2;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+}
+.sharedpass__batch--reading .sharedpass__batch-dot,
+.sharedpass__batch--retrying .sharedpass__batch-dot {
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.sharedpass__batch--reading .sharedpass__batch-status {
+  color: var(--accent);
+}
+.sharedpass__batch--retrying .sharedpass__batch-status,
+.sharedpass__batch--partial .sharedpass__batch-status {
+  color: var(--warn);
+}
+.sharedpass__batch--complete .sharedpass__batch-dot {
+  background: var(--ok);
+}
+.sharedpass__batch--partial .sharedpass__batch-dot {
+  background: var(--warn);
+}
+.sharedpass__batch--failed .sharedpass__batch-dot,
+.sharedpass__batch--notRead .sharedpass__batch-dot {
+  background: var(--bad);
+}
+.sharedpass__batch--failed .sharedpass__batch-status,
+.sharedpass__batch--notRead .sharedpass__batch-status {
+  color: var(--bad);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sharedpass__batch-dot,
+  .tool-detail__dot--running {
+    animation: none;
+  }
 }

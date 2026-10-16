@@ -8,6 +8,7 @@ using CodebaseAnalysis.Core.Enrichment;
 using CodebaseAnalysis.Core.Enrichment.Web;
 using CodebaseAnalysis.Core.Hosting;
 using CodebaseAnalysis.Core.Models;
+using CodebaseAnalysis.Core.Preparation;
 using CodebaseAnalysis.Core.Progress;
 using CodebaseAnalysis.Core.Steps;
 using CodebaseAnalysis.Core.Support;
@@ -492,6 +493,24 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
         Assert.Contains(steps, s => s.Contains("USING INDEX idx_graph_nodes_label", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// El enriquecedor Roslyn escribe el punto de entrada de un flujo como <c>entry_method_qn</c> y el analizador Java como
+    /// <c>entry_method</c>: la faceta lee los dos, y no deja el campo vacío en los flujos de C#.
+    /// </summary>
+    [Fact]
+    public async Task Flow_entry_point_is_read_from_either_property_name()
+    {
+        var (graph, repo) = await StrutsGraphAsync();
+        using var g = graph;
+        await g.NodeAsync("Flow", "Roslyn", "demo.Flow.Roslyn", "src/Svc.cs", 1, 1, "{\"step_count\":2,\"entry_method_qn\":\"demo.Svc.Run\"}");
+        await g.NodeAsync("Flow", "Java", "demo.Flow.Java", "src/Svc.java", 1, 1, "{\"step_count\":3,\"entry_method\":\"demo.Svc.alta\"}");
+
+        var facets = await FacetsAsync(g.DatabasePath, repo);
+
+        Assert.Contains("\"entry_point\":\"demo.Svc.Run\"", facets.FlowsSummary);
+        Assert.Contains("\"entry_point\":\"demo.Svc.alta\"", facets.FlowsSummary);
+    }
+
     /// <summary>El índice por label solo cambia el plan: las facetas salen idénticas con él y sin él.</summary>
     [Fact]
     public async Task The_facets_are_the_same_with_and_without_the_label_index()
@@ -592,9 +611,10 @@ public sealed class FacetExtractionTests(ITestOutputHelper output) : IDisposable
         const string fromCalls = "calculado: aristas CALLS resueltas por JavaAnalyzer";
 
         var coupling = Rows(facets.CouplingMetrics, "coupling_metrics");
-        // Base.log lo llama Servicio.ejecutar: fan_in 1 de las CALLS del analizador, no de cbm.
+        // Base.log lo llama Servicio.ejecutar: fan_in 1, y desde el schema 3 lo escribe el propio analizador en el nodo (exacto, de las
+        // CALLS de javac), así que la faceta lo lee del grafo en lugar de calcularlo.
         var log = Row(coupling, JavaGraphFixture.Qn(JavaTestRepo.BasePath, "Base.log"));
-        Assert.Equal(("1", fromCalls), (Text(log, "fan_in"), Text(log, "fan_in_source")));
+        Assert.Equal(("1", "grafo"), (Text(log, "fan_in"), Text(log, "fan_in_source")));
         var servicio = Row(coupling, JavaGraphFixture.Qn(JavaTestRepo.ServicioPath, "Servicio"));
         Assert.Equal(fromCalls, Text(servicio, "fan_out_source"));
         Assert.True(int.Parse(Text(servicio, "fan_out")!) >= 3);
@@ -687,19 +707,16 @@ public sealed class AuditorToolsTests
     public async Task Every_auditor_step_gets_graph_neighbors_and_graph_domain()
     {
         using var repo = new TempDirectory();
-        var configuration = TestConfig.FromPairs(
-            ("LlmConfiguration:DefaultProvider", "Fake"),
-            ("LlmConfiguration:Providers:Fake:ServiceType", "fake"),
-            ("LlmConfiguration:Providers:Fake:BaseUrl", "http://fake.invalid/"),
-            ("LlmConfiguration:Providers:Fake:Model", "fake-model"));
+        // Con la preparación apagada los nueve informes son un auditor; los de modo B, envueltos, se comprueban en el test siguiente.
+        var configuration = TestConfig.FromPairs([.. FakeLlmConfig.Pairs("canned"), ("CodebaseAnalysis:Preparation:Mode", "Off")]);
         var services = new ServiceCollection();
         services.AddSingleton(configuration);
         services.AddLogging();
-        services.AddKeyedSingleton<ILlmService>("fake", new CannedLlmService("{}"));
+        services.AddSingleton<ILlmService>(new CannedLlmService("{}"));
         services.AddAITaskAgent();
         await using var provider = services.BuildServiceProvider();
         provider.UseAITaskAgent();
-        var roles = LlmRoleFactory.BuildRoles(configuration, provider, _ => null, _ => { });
+        var roles = LlmRoleFactory.BuildRoles(provider, _ => null, _ => { });
         var input = AnalysisRunOptions.BuildInput(configuration, repo.Path, _ => { });
         AnalysisToolRegistration.Register(input);
 
@@ -715,5 +732,35 @@ public sealed class AuditorToolsTests
             Assert.Equal(AnalysisPipelineFactory.AuditorToolNames.Order(), tools.Select(t => t.Name).Order());
             Assert.Contains(tools, t => t.Name == "grep_search");
         });
+    }
+
+    [Fact]
+    public async Task The_mode_b_wrappers_and_their_investigations_get_the_same_tools_as_the_auditors()
+    {
+        using var repo = new TempDirectory();
+        var configuration = TestConfig.FromPairs(FakeLlmConfig.Pairs("canned"));
+        var services = new ServiceCollection();
+        services.AddSingleton(configuration);
+        services.AddLogging();
+        services.AddSingleton<ILlmService>(new CannedLlmService("{}"));
+        services.AddAITaskAgent();
+        await using var provider = services.BuildServiceProvider();
+        provider.UseAITaskAgent();
+        var roles = LlmRoleFactory.BuildRoles(provider, _ => null, _ => { });
+        var input = AnalysisRunOptions.BuildInput(configuration, repo.Path, _ => { });
+        AnalysisToolRegistration.Register(input);
+        var templates = AnalysisPipelineFactory.CreateDefaultTemplateProvider();
+
+        var pipeline = AnalysisPipelineFactory.CreatePipeline(templates, roles, input, provider);
+
+        var wrappers = pipeline.Steps.OfType<ParallelStep>().SelectMany(p => p.Branches).OfType<SubsystemInvestigationReportStep>().ToList();
+        Assert.Equal(CoveragePlanner.ModeBReports.Count, wrappers.Count);
+        foreach (var type in CoveragePlanner.ModeBReports)
+        {
+            var role = roles[AnalysisPipelineInput.GetRoleName(type)];
+            var investigation = SubsystemInvestigationReportStep.CreateInvestigationStep(
+                templates, role, AnalysisPipelineInput.GetTemplatePrefix(type), type, "alpha", 5, TimeSpan.FromMinutes(1));
+            Assert.Equal(AnalysisPipelineFactory.AuditorToolNames.Order(), investigation.Tools!.Select(t => t.Name).Order());
+        }
     }
 }

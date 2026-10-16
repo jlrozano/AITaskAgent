@@ -66,6 +66,12 @@ public sealed class FakeAnalysisWorkflow : IAnalysisWorkflow
     /// <summary>Las llamadas a <see cref="RegenerateAsync"/>, en orden.</summary>
     public List<(IReadOnlyList<ReportType> Reports, bool Synthesis)> Regenerations { get; } = [];
 
+    /// <summary>Las llamadas a <see cref="VerifyAsync"/>, en orden.</summary>
+    public List<(IReadOnlyList<ReportType> Reports, bool Synthesis)> Verifications { get; } = [];
+
+    /// <summary>Informes cuya verificación falla (el verificador no responde): el informe queda como estaba.</summary>
+    public HashSet<ReportType> FailingVerifications { get; } = [];
+
     /// <summary>Se completa con el token de la ejecución cuando este se cancela.</summary>
     public TaskCompletionSource CancellationObserved { get; } = NewTcs();
 
@@ -160,14 +166,14 @@ public sealed class FakeAnalysisWorkflow : IAnalysisWorkflow
         await Log(DetectAndIndexGraphStep.StepName, "   [indexador] done", AnalysisEventTypes.Channels.Indexer);
         await Completed(DetectAndIndexGraphStep.StepName);
 
-        // La fase enrich tiene dos pasos: el enriquecimiento nativo por lenguaje y BdpEnricherStep.
+        // La fase enrich tiene dos pasos: el enriquecimiento nativo por lenguaje y DotNetEnricherStep.
         await Started(LanguageEnricherStep.StepName);
         await Log(LanguageEnricherStep.StepName, "🔎 Lenguajes detectados en disco: C# (12 ficheros .cs).");
         await Completed(LanguageEnricherStep.StepName);
 
-        await Started(BdpEnricherStep.StepName);
-        await Log(BdpEnricherStep.StepName, "ℹ️ El grafo ya contiene enriquecimiento estructural y semántico previo.");
-        await Completed(BdpEnricherStep.StepName);
+        await Started(DotNetEnricherStep.StepName);
+        await Log(DotNetEnricherStep.StepName, "ℹ️ El grafo ya contiene enriquecimiento estructural y semántico previo.");
+        await Completed(DotNetEnricherStep.StepName);
 
         await Started(SqlFacetExtractorStep.StepName);
         await Completed(SqlFacetExtractorStep.StepName);
@@ -258,6 +264,93 @@ public sealed class FakeAnalysisWorkflow : IAnalysisWorkflow
             ExecutiveReportPath = Path.Combine(input.OutputReportsPath, ReportCatalog.ExecutiveReportFileName),
             FailedReports = FailedFiles([ReportType.CodeSmells, ReportType.InyeccionDependenciasExtensiones])
         };
+    }
+
+    /// <summary>
+    /// Verificación falsa con el orden de pasos del pipeline de verificación: preparación, un <c>Verify_*</c> por informe y, si
+    /// se pide, la síntesis. Cada informe emite su <c>report.verified</c> (<c>corrected</c> con 2 cambios y versiones
+    /// <c>v0001</c>/<c>v0002</c>, o <c>failed</c> si está en <see cref="FailingVerifications"/>) y no toca el fichero. Con
+    /// <see cref="HoldMidway"/> se detiene tras arrancar los verificadores.
+    /// </summary>
+    public async Task<IStepResult> VerifyAsync(
+        AnalysisPipelineInput input,
+        IReadOnlyList<ReportType> reports,
+        bool synthesis,
+        IEventChannel channel,
+        IAnalysisReporter reporter,
+        CancellationToken cancellationToken)
+    {
+        Verifications.Add((reports, synthesis));
+        var parallel = AnalysisPipelineFactory.ParallelVerificationStepName;
+        Task Send(IProgressEvent e) => channel.SendAsync(e, cancellationToken);
+
+        await Send(new PipelineStartedEvent
+        {
+            StepName = AnalysisPipelineFactory.VerificationPipelineName,
+            PipelineName = AnalysisPipelineFactory.VerificationPipelineName,
+            TotalSteps = synthesis ? 3 : 2
+        });
+        await Send(Started(PrepareRegenerationStep.StepName));
+        await Send(Completed(PrepareRegenerationStep.StepName));
+
+        await Send(Started(parallel));
+        foreach (var report in reports)
+        {
+            var step = AnalysisPipelineFactory.VerifyStepName(report);
+            await Send(new BranchStartedEvent { StepName = parallel, BranchName = step });
+            await Send(Started(step));
+        }
+
+        cancellationToken.Register(() => CancellationObserved.TrySetResult());
+        if (HoldMidway)
+        {
+            _held.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken);
+        }
+
+        foreach (var report in reports)
+        {
+            var step = AnalysisPipelineFactory.VerifyStepName(report);
+            var failed = FailingVerifications.Contains(report);
+            await Send(new StepProgressEvent
+            {
+                StepName = step,
+                EventType = AnalysisEventTypes.ReportVerified,
+                Message = failed ? $"{AnalysisPipelineInput.GetReportFileName(report)}: no se pudo verificar." : $"{AnalysisPipelineInput.GetReportFileName(report)} verificado: 2 corrección(es).",
+                Metadata = new()
+                {
+                    [Key.FileName] = AnalysisPipelineInput.GetReportFileName(report),
+                    [Key.ReportType] = report.ToString(),
+                    [Key.Outcome] = failed ? "failed" : "corrected",
+                    [Key.Changes] = failed ? 0 : 2,
+                    [Key.PreviousVersionId] = failed ? null : "v0001",
+                    [Key.VersionId] = failed ? null : "v0002",
+                    [Key.Error] = failed ? "El verificador falló: HTTP 500" : null
+                }
+            });
+            await Send(Completed(step));
+            await Send(new BranchCompletedEvent { StepName = parallel, BranchName = step, Success = true });
+        }
+
+        await Send(Completed(parallel));
+        if (synthesis)
+        {
+            await Send(Started(ExecutiveSynthesizerStep.StepName));
+            await WrittenAsync(channel, input, ExecutiveSynthesizerStep.StepName, null, ReportCatalog.ExecutiveReportFileName, "Green", 0, cancellationToken);
+            await Send(Completed(ExecutiveSynthesizerStep.StepName));
+        }
+
+        await Send(new PipelineCompletedEvent
+        {
+            StepName = AnalysisPipelineFactory.VerificationPipelineName,
+            PipelineName = AnalysisPipelineFactory.VerificationPipelineName,
+            Success = true,
+            Duration = TimeSpan.FromSeconds(1)
+        });
+
+        return synthesis
+            ? new AnalysisPipelineFinalResult { ExecutiveReportPath = Path.Combine(input.OutputReportsPath, ReportCatalog.ExecutiveReportFileName) }
+            : new ParallelResult(new EmptyStep(parallel));
     }
 
     /// <summary>

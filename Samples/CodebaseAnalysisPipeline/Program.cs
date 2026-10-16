@@ -34,9 +34,10 @@ internal static class Program
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ");
 
-        // 1. Cargar la configuración del proyecto (solo desde el directorio del ejecutable). --validate-reports se quita antes,
-        //    porque sin valor se comería el argumento siguiente.
+        // 1. Cargar la configuración del proyecto (solo desde el directorio del ejecutable). --validate-reports y --verify-synthesis se
+        //    quitan antes, porque sin valor se comerían el argumento siguiente.
         args = AnalysisRunOptions.ExtractSwitch(args, AnalysisRunOptions.ValidateReportsSwitch, out var validateOnly);
+        args = AnalysisRunOptions.ExtractSwitch(args, VerificationCommand.SynthesisSwitch, out var verifySynthesis);
         IConfiguration configuration = AnalysisConfiguration.Build(
             AnalysisConfiguration.DefaultConfigFilePath, args, AnalysisConfiguration.GetEnvVar, Console.WriteLine);
 
@@ -47,6 +48,16 @@ internal static class Program
         if (validateOnly)
         {
             Environment.ExitCode = ReportValidationCommand.Run(configuration, repoPath, ConsoleAnalysisReporter.Instance);
+            return;
+        }
+
+        // --verify <informes>: verificación independiente a demanda de informes ya escritos (la «Verificar» de la web), sin analizar de nuevo.
+        var verifyReports = VerificationCommand.ResolveReports(
+            configuration, AnalysisRunOptions.ResolveReportsPath(configuration, repoPath), Console.WriteLine);
+        if (verifyReports is { Count: 0 })
+        {
+            Console.WriteLine($"❌ --{VerificationCommand.VerifyKey}: no hay informes que verificar en '{AnalysisRunOptions.ResolveReportsPath(configuration, repoPath)}'.");
+            Environment.ExitCode = 1;
             return;
         }
 
@@ -134,8 +145,8 @@ internal static class Program
             }
         }
 
-        // 5. Configurar proveedores y roles LLM. Cada rol usa el proveedor que nombra en `Provider`.
-        var roles = LlmRoleFactory.BuildRoles(configuration, serviceProvider, AnalysisConfiguration.GetEnvVar, Console.WriteLine);
+        // 5. Proveedores y roles LLM de AITaskAgent:LlmProviders, que enlaza el framework. Cada rol usa el proveedor que nombra en `Provider`.
+        var roles = LlmRoleFactory.BuildRoles(serviceProvider, AnalysisConfiguration.GetEnvVar, Console.WriteLine);
 
         // 6. Configurar Parámetros de Entrada del Análisis
         var input = AnalysisRunOptions.BuildInput(configuration, repoPath, Console.WriteLine);
@@ -143,12 +154,20 @@ internal static class Program
         Console.WriteLine($"📁 Repositorio Target: {input.RepositoryPath}");
         Console.WriteLine($"🗄️ Base de Datos SQLite: {input.DatabasePath}");
         Console.WriteLine($"📊 Carpeta de Informes: {input.OutputReportsPath}");
-        Console.WriteLine($"📋 Informes Solicitados: {input.RequestedReports.Count} tipos seleccionados.");
+        Console.WriteLine(verifyReports != null
+            ? $"🔎 Informes a verificar: {string.Join(", ", verifyReports)}."
+            : $"📋 Informes Solicitados: {input.RequestedReports.Count} tipos seleccionados.");
         Console.WriteLine();
 
         // 7. Registrar tools nativas del grafo, Office y FileTools, antes de construir el pipeline.
         AnalysisToolRegistration.Register(input);
         Console.WriteLine("🛠️ Herramientas nativas del grafo, FileTools (view_file, view_code_item) y Office registradas.");
+
+        if (verifyReports != null)
+        {
+            await RunVerificationAsync(input, verifyReports, verifySynthesis, roles, serviceProvider);
+            return;
+        }
 
         // 8. Construir y ejecutar el pipeline. Sin canal de eventos: los mensajes van a la consola.
         //    El primer Ctrl+C cancela el pipeline (que mata el árbol del indexador, ProcessCancellation) y deja
@@ -276,6 +295,67 @@ internal static class Program
             Console.WriteLine("❌ Proceso terminado con errores.");
             Environment.ExitCode = 1;
         }
+    }
+
+    /// <summary>
+    /// <c>--verify</c>: verifica los informes pedidos (<see cref="VerificationCommand"/>) y termina. Como el análisis, el primer Ctrl+C
+    /// cancela ordenadamente y el segundo termina el proceso. El código de salida es 0 si se verificó todo, 1 si el pipeline falló o
+    /// algún informe no se pudo verificar (su informe sigue siendo el de antes) y 130 si se canceló.
+    /// </summary>
+    private static async Task RunVerificationAsync(
+        AnalysisPipelineInput input,
+        IReadOnlyList<ReportType> reports,
+        bool synthesis,
+        Dictionary<string, AITaskAgent.LLM.Configuration.LlmRole> roles,
+        IServiceProvider serviceProvider)
+    {
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler onCancelKey = (_, e) =>
+        {
+            if (cancellation.IsCancellationRequested)
+                return;
+
+            e.Cancel = true;
+            Console.WriteLine();
+            Console.WriteLine("⏹️ Cancelando la verificación (Ctrl+C otra vez para salir sin esperar)...");
+            cancellation.Cancel();
+        };
+        Console.CancelKeyPress += onCancelKey;
+
+        VerificationCommandResult outcome;
+        try
+        {
+            outcome = await VerificationCommand.RunAsync(
+                input, reports, synthesis, roles, serviceProvider, ConsoleAnalysisReporter.Instance, cancellation.Token);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= onCancelKey;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("══════════════════════════════════════════════════════════════════════════════");
+        Console.WriteLine("                      RESUMEN DE LA VERIFICACIÓN                               ");
+        Console.WriteLine("══════════════════════════════════════════════════════════════════════════════");
+        PrintUsage(outcome.Usage);
+        if (outcome.Cancelled)
+        {
+            Console.WriteLine("⚠️ Verificación cancelada por el usuario. Los informes ya verificados se conservan.");
+        }
+        else if (outcome.Unverified > 0)
+        {
+            Console.WriteLine($"⚠️ {outcome.Unverified} informe(s) no se pudieron verificar: siguen siendo los de antes.");
+        }
+        else if (outcome.ExitCode == 0)
+        {
+            Console.WriteLine("✅ Verificación completada.");
+        }
+        else
+        {
+            Console.WriteLine($"❌ La verificación terminó con errores: {outcome.Result?.Error?.Message ?? outcome.Result?.GetType().Name ?? "sin resultado"}");
+        }
+        Console.WriteLine("══════════════════════════════════════════════════════════════════════════════");
+        Environment.ExitCode = outcome.ExitCode;
     }
 
     /// <summary>Consumo LLM de la ejecución: el total y una línea por paso que llamó al modelo (auditores, síntesis, fallback).</summary>

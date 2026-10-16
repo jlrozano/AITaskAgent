@@ -15,7 +15,9 @@ namespace CodebaseAnalysis.Core.Tests;
 /// <summary>
 /// El pipeline completo sin red ni procesos externos. El grafo ya tiene un tipo (cuenta como
 /// estructural, así que no se indexa) con <c>cyclomatic</c> (cuenta como enriquecido, así que no se
-/// enriquece), el repositorio no tiene Office ni Markdown, y el LLM es un servicio falso.
+/// enriquece), el repositorio no tiene Office ni Markdown, y el LLM es un servicio falso. Se ejecuta con la preparación por
+/// subsistema apagada (<c>Mode = Off</c>: el pipeline de siempre, 9 auditores y la síntesis) y encendida (<c>Subsystems</c>, el
+/// valor por defecto: el grafo de un solo fichero da un solo subsistema, que se nombra y que investigan los cuatro informes en modo B).
 /// </summary>
 [Collection(ConsoleCollection.Name)]
 public sealed class OfflinePipelineTests
@@ -45,29 +47,27 @@ public sealed class OfflinePipelineTests
         await cmd.ExecuteNonQueryAsync();
     }
 
-    [Fact]
-    public async Task Runs_all_auditors_and_the_synthesis_and_reports_progress()
+    [Theory]
+    [InlineData("Off", 10, 0)]
+    [InlineData("Subsystems", 10 + 1 + 4, 4)]
+    public async Task Runs_all_auditors_and_the_synthesis_and_reports_progress(string preparationMode, int expectedCalls, int expectedInvestigations)
     {
         using var repo = new TempDirectory();
         Directory.CreateDirectory(Path.Combine(repo.Path, "src"));
         await File.WriteAllTextAsync(Path.Combine(repo.Path, "src", "Sample.cs"), "namespace Demo; public class Sample { }");
 
-        IConfiguration configuration = TestConfig.FromPairs(
-            ("LlmConfiguration:DefaultProvider", "Fake"),
-            ("LlmConfiguration:Providers:Fake:ServiceType", "fake"),
-            ("LlmConfiguration:Providers:Fake:BaseUrl", "http://fake.invalid/"),
-            ("LlmConfiguration:Providers:Fake:Model", "fake-model"));
+        IConfiguration configuration = TestConfig.FromPairs([.. FakeLlmConfig.Pairs("canned"), ("CodebaseAnalysis:Preparation:Mode", preparationMode)]);
 
         var llm = new CannedLlmService(CannedReport);
         var services = new ServiceCollection();
         services.AddSingleton(configuration);
         services.AddLogging();
-        services.AddKeyedSingleton<ILlmService>("fake", llm);
+        services.AddSingleton<ILlmService>(llm);
         services.AddAITaskAgent();
         await using var serviceProvider = services.BuildServiceProvider();
         serviceProvider.UseAITaskAgent();
 
-        var roles = LlmRoleFactory.BuildRoles(configuration, serviceProvider, _ => null, _ => { });
+        var roles = LlmRoleFactory.BuildRoles(serviceProvider, _ => null, _ => { });
         var input = AnalysisRunOptions.BuildInput(configuration, repo.Path, _ => { });
         await CreateEnrichedGraphAsync(input.DatabasePath);
         AnalysisToolRegistration.Register(input);
@@ -123,7 +123,7 @@ public sealed class OfflinePipelineTests
         Assert.Contains(reporter.Entries, e =>
             e.Source == Steps.DetectAndIndexGraphStep.StepName && e.Message.StartsWith("ℹ️ Grafo estructural detectado", StringComparison.Ordinal));
         Assert.Contains(reporter.Entries, e =>
-            e.Source == Steps.BdpEnricherStep.StepName && e.Message == "ℹ️ El grafo ya contiene enriquecimiento estructural y semántico previo.");
+            e.Source == Steps.DotNetEnricherStep.StepName && e.Message == "ℹ️ El grafo ya contiene enriquecimiento estructural y semántico previo.");
         Assert.DoesNotContain(reporter.Entries, e => e.Level == AnalysisLogLevel.Error);
         // Los límites efectivos, una línea por grupo, justo después del arranque.
         var start = reporter.Entries.ToList().FindIndex(e => e.Message.StartsWith("🚀 Ejecutando AnalysisPipeline", StringComparison.Ordinal));
@@ -133,8 +133,10 @@ public sealed class OfflinePipelineTests
         Assert.All(prefixes.Zip(limits), p => Assert.StartsWith(p.First, p.Second.Message, StringComparison.Ordinal));
         Assert.All(limits, e => Assert.Equal(AnalysisRunner.SourceName, e.Source));
 
-        // 9 auditores y la síntesis; el enriquecedor no se invoca porque el grafo ya está enriquecido.
-        Assert.Equal(10, llm.Calls);
+        // 9 auditores y la síntesis (y, con la preparación, el nombrado del único subsistema y su investigación en cada informe en
+        // modo B); el enriquecedor no se invoca porque el grafo ya está enriquecido.
+        Assert.Equal(expectedCalls, llm.Calls);
+        Assert.Equal(expectedInvestigations, reporter.Entries.Count(e => e.Message.StartsWith("✅ Investigado ", StringComparison.Ordinal)));
 
         // Procedencia (recomendación 12): el pipeline completa la línea del modelo en cada informe y en el resumen.
         foreach (var file in reportFiles)
@@ -153,8 +155,10 @@ public sealed class OfflinePipelineTests
         var tracker = new LlmUsageTracker();
         events.ForEach(tracker.Observe);
         var usage = tracker.Snapshot();
-        Assert.Equal((10, 50L, 50L), (usage.Total.Calls, usage.Total.PromptTokens, usage.Total.CompletionTokens));
-        Assert.Equal(9, usage.BySource.Count(s => s.Report != null));
+        Assert.Equal((expectedCalls, 5L * expectedCalls, 5L * expectedCalls), (usage.Total.Calls, usage.Total.PromptTokens, usage.Total.CompletionTokens));
+        // Una fuente por auditor y, con la preparación, una por investigación: todas se atribuyen a uno de los 9 informes.
+        Assert.Equal(9 + expectedInvestigations, usage.BySource.Count(s => s.Report != null));
+        Assert.Equal(9, usage.BySource.Where(s => s.Report != null).Select(s => s.Report).Distinct().Count());
         Assert.Null(usage.Total.CostUsd);
     }
 }

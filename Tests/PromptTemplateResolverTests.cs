@@ -103,4 +103,27 @@ public sealed class PromptTemplateResolverTests
 
         Assert.Equal("outliner_prompt", result);
     }
+
+    [Fact]
+    public void Resolve_without_provider_resolves_a_relative_include_against_the_working_directory_not_the_step_path()
+    {
+        // CurrentStepPath es una ruta de pasos ("Pipeline/Step"), no un directorio: usarla como base
+        // hacía que ningún @[ruta] relativo resolviera nunca.
+        var fileName = $"_resolver-include-{Guid.NewGuid():N}.md";
+        var fullPath = Path.Combine(Directory.GetCurrentDirectory(), fileName);
+        File.WriteAllText(fullPath, "incluido");
+        try
+        {
+            var context = new PipelineContext();
+            context.AddPathPart("Parent");
+
+            var result = PromptTemplateResolver.Resolve($"[@[{fileName}]]", Input("x"), context);
+
+            Assert.Equal("[incluido]", result);
+        }
+        finally
+        {
+            File.Delete(fullPath);
+        }
+    }
 }

@@ -1,12 +1,121 @@
-# App de análisis de código: estado y retomada (actualizado el 2026-09-30, cierre de sesión)
+# App de análisis de código: estado y retomada (actualizado el 2026-10-05)
 
-Rama `consolidation`, **todo commiteado y sin push**. Fuera quedan `.claude/settings.local.json` y el `AITaskAgent.sln`
+Rama `consolidation`, **con todo lo del 2026-09-30/10-01 sin commitear**. Fuera quedan `.claude/settings.local.json` y el `AITaskAgent.sln`
 antiguo sin versionar. La sección «Para retomar» es lo único que hace falta leer para seguir; el resto es historial.
 
-## Para retomar (2026-09-30)
+> **Lo más reciente (2026-10-16):** ver `docs/project_notes/2026-10-16-bucles-de-herramientas-y-calidad-informes-retomar.md` (bucle de herramientas en el framework, cambios de calidad sin commitear y su prompt de arranque). Lo de abajo es anterior.
+
+## Para retomar (2026-10-05): preparación e investigación por subsistema, implementada y sin medir con LLM real
+
+**Léelo primero.** Los informes del repo Java real eran muy básicos (el 01 no reconocía la capacidad de Notificaciones). Se diseñó y se implementó,
+**sin commitear**, una preparación determinista antes de los auditores y una investigación por subsistema. Todo lo siguiente está probado con LLM falsos
+(Core 1343, Web 146, Vitest 258, OpenAILLmService 116 en verde); con LLM real solo hay una prueba controlada pequeña.
+
+**2026-10-06 (lo más reciente):** análisis de coste y sondas con LLM real (3,84 USD). Plan final pendiente del «adelante» en
+`docs/plans/2026-10-06-flujo-analisis-plan-final.md`: contabilidad de caché, protocolo `<nota>` con sustitución de cada resultado
+ya anotado (subclase de las tools, sin hooks nuevos), respuesta final con caché, subsistemas/tablas/notas en el grafo para el
+chat, y una medida real con tope. Debate y sondas en `docs/plans/2026-10-06-compactacion-historial-investigaciones-design.md`.
+
+**Lo último (cierre del 2026-10-05; léelo antes que el resto de esta sección):**
+- **Qué backend usar.** Hay dos: **5180 = build nueva** (preparación, modo B, limitador; roles de análisis en `gpt-5.4`, `Temperature=1`, `reasoning_effort=high`,
+  `RequestTimeoutSeconds=900`), arrancada con `docs/project_notes/scripts/start-web-gpt54.ps1` (lee la build de un directorio scratch de la sesión,
+  `$S\out-web`; si desaparece, reconstruir con el comando de la sección y ajustar `$S`). **5181 = build antigua** (PID 44860, 2/10): lo lanzado ahí usa el pipeline
+  de 6 pasos y `gpt-6-sol`. Comprobación en `<repo>/logs/analysis-pipeline-<fecha>.log`: la nueva dice «starting execution with 10 steps» y «Invoking gpt-5.4»;
+  la vieja, «6 steps» y `gpt-6-sol`. Los análisis de las 12:00 y 12:20 del 2026-10-05 salieron de la vieja (por eso eran pobres: 13,28 USD, 17,5 KB el 01).
+- **Primera ejecución con la build nueva** (solo informe funcional, `gpt-5.4`, `reasoning low`, 11:26-11:42 UTC): **16,14 USD**, 80 llamadas, 5,87 M de tokens de
+  entrada, 98 k de salida; el 01 mide 52 KB. Las 8 investigaciones son el 96 % del coste (≈76 k tokens de entrada por llamada: es el historial reenviado en 6-13
+  iteraciones de herramientas). **Notificaciones no se investigó**: el análisis se hizo sobre `…\Online\src`, que deja fuera `struts-config.xml` y las JSP, así que el
+  inventario tiene solo 12 entradas (todas `main`) y `notificacion` (173 ficheros, 64 subsistemas en total) no entra en los K=8. Hay que analizar con la raíz que
+  contiene `WebContent` o poder elegir subsistemas (`Preparation:IncludeSubsystems`, sin implementar).
+- **Hallazgo clave: la pérdida está en la consolidación, no en las notas.** Cada investigación escribe sus notas (a nivel `VRB` del log:
+  `LLM step Investigation_<informe>_<subsistema> response content:`). Las 8 notas suman 214 KB, 834 citas únicas, 113 viñetas de reglas de negocio, 57 de estados y
+  transiciones, 77 de caminos alternativos: es el nivel de las secciones de reglas y estados de `docs/notificaciones/notificaciones/funcional-notificaciones.md`
+  (repo CLAN). La consolidación las recibe **completas** (200/200 líneas muestreadas están en su prompt) y escribe 52 KB: conserva el 19 % de las citas, el 11 % de
+  los códigos de error y constantes. Causa: el prompt (reglas comunes de brevedad, «No las copies», presupuesto de herramientas) y una estructura de 13 secciones de toda
+  la aplicación. **Decisión del usuario: no anexar las notas; deben integrarse en el documento final.**
+- **Corrección ya aplicada (solo probada con tests de plantillas, 96/96; efecto sin medir):** en `report_{funcional,flujos,errores,arquitectura}_prompt.md` una
+  instrucción de «integración completa, sin límite de extensión» (todo lo de las notas, por capacidad, con el esqueleto qué hace / actores / reglas / estados y
+  transiciones / datos / flujos alternativos / fronteras), «No las copies» pasa a «Intégralas… sin perder su contenido», el presupuesto de herramientas se suaviza,
+  y `_common_rules.md` tiene excepciones a «extensión proporcional» y «cada cosa en un solo sitio» cuando hay notas. Copiadas a `out-web/templates` y backend reiniciado.
+- **Pendiente inmediato:** el usuario relanza el informe funcional desde la 5180 (razonamiento alto, plantillas nuevas). Coste esperado mayor que los 16 USD (el
+  razonamiento se factura como salida a 15 USD/M). Evaluar con los scripts de `docs/project_notes/scripts/`: `extract_notes.py` (saca las notas del log y compara con el
+  informe: tamaño, citas, códigos, constantes), `check_consolidation.py` (comprueba que las notas están en el prompt de la consolidación); ajustar rutas y la hora
+  de inicio de la ejecución. Tamaño del 01, conservación de reglas/códigos/citas, si aparece algún dominio nuevo, tiempo y coste por fuente (`reports/_run_meta.json`).
+- **Evidencia guardada:** `C:\Users\juan.rozano\eval-repos\results\2026-10-05-online-funcional\{notes,reports}` (8 notas extraídas del log, 01 de esa ejecución,
+  `_run_meta.json`, plan, mapa y presupuesto).
+- **Ideas pendientes de decisión del usuario** (todas con `/brainstorm`): (1) **catálogo de dominios barato** (una pasada de LLM por subsistema solo con facetas, sin
+  leer código: descripción funcional, papel de negocio, confianza; ≈0,3 USD con 64 subsistemas) y elección de qué dominios profundizar (config o casillas en la web);
+  (2) **documento funcional por dominio** con el esqueleto de `funcional-notificaciones.md` (conceptos, reglas por área, estados y transiciones, flujos, catálogo de
+  eventos), generado por secciones, con el 01 como índice; las partes del estado actual de ese documento sirven de vara de medir; (3) **proveedor sobre la Responses API**
+  para razonar con `gpt-6-sol` y herramientas (en chat completions `gpt-6-sol` y `gpt-5.6-terra` rechazan `reasoning_effort` ≠ `none` con tools; `gpt-5.4` lo acepta con
+  `Temperature=1`); (4) reducir coste: menos iteraciones, caché de prompt, notas más cortas; (5) selección de subsistemas por el usuario y raíz web.
+- **Gasto de LLM del día (aprox.): ≈ 55 USD** (prueba de `a7` 11,74; ejecuciones accidentales del CLI ≈ 13-14; análisis viejo 13,28; funcional nuevo 16,14; sondas 0,27;
+  más una ejecución de las 12:00 sin contabilizar). Pedir siempre OK y tope antes de lanzar nada con LLM real.
+
+- **Documentos:** spec `docs/plans/2026-10-04-preparacion-informes-por-subsistema-design.md`; plan T0-T28 + W1-W4 `…-plan.md`; README del CLI
+  (`Samples/CodebaseAnalysisPipeline/README.md`, apartado 3.3.1) y de la web; guía `docs/guides/codebase-analysis-flujo-y-politica-de-informes.md` (1.6.1).
+- **Qué hace:** tras las facetas, `RepositoryInventoryStep → DomainDiscoveryStep → CoveragePlanningStep → TimeBudgetStep`. Informes 01, 04, 05, 06 en modo B
+  (una investigación por subsistema + consolidación con el auditor de siempre, apartado «Cobertura»); 02, 03, 07, 08, 09 en modo A (briefing + protocolo).
+  Artefactos `reports/_repository_inventory.json`, `_domain_map.json`, `_coverage_plan.json`, `_time_budget.json`. Interruptor
+  `CodebaseAnalysis:Preparation:Mode` (`Subsystems` por defecto | `Off` = comportamiento anterior).
+- **Mapa de dominios:** estructura + comunidades de grafo propias (Louvain) + vocabulario de nombres y de carpetas (E1, peso 1,25) + subsistema `shared` para
+  infraestructura compartida (E2, `SharedMinConsumers`=3); el LLM solo nombra (rol `FunctionalAuditor`). cbm no trae `community_id` (0 nodos en Online).
+  Perfiles de puntuación por informe (`ReportProfiles`). Escáner de tablas SQL en literales (`SqlTableScanner`). Tiempos por LOC (`TimeBudget`).
+- **Limitador LLM:** `AITaskAgent:LlmProviders:Providers:<p>:Inference:Options:MaxConcurrentRequests` (defecto 9, 0 = sin límite) con pausa compartida tras 429
+  (`OpenAILLmService/LlmCallGate.cs`). `ConsolidationMaxToolIterations` = 0 por defecto (sin tope extra). CLI nuevo: `--verify <informes>` (verificación a demanda).
+- **Backend arrancado el 2026-10-05** con esta build en `http://127.0.0.1:5180` (PID 4840 en ese momento; build en el scratch de la sesión,
+  `…\scratchpad\out-web\`, que puede desaparecer); el backend antiguo sigue en 5181 (PID 44860, build vieja). La SPA ya está compilada en `wwwroot` (ignorado por
+  git). Para repetirlo: `dotnet build Samples/CodebaseAnalysisWeb --no-restore -c Release -p:OutDir=<scratch>/out-web/` y arrancar el `.dll` con
+  `ASPNETCORE_ENVIRONMENT=Development`, `--urls http://127.0.0.1:5180` y `--contentRoot <repo>\Samples\CodebaseAnalysisWeb`.
+- **Compilar en esta máquina:** `NuGet.config` apunta a `C:\Asisa\NuGetLocal`, que no existe. Restaurar con una config de solo nuget.org
+  (`dotnet restore <proyecto> --configfile <config con solo nuget.org>`), luego `dotnet build/test --no-restore -p:OutDir=<scratch>`. No tocar `NuGet.config`.
+
+**Medido con GPT SOL real (`subsystems-java`, repo de prueba de 34 ficheros, 2026-10-04):** `Subsystems` 8,09 USD frente a `Off` 3,05 (2,65×); 15/15 hechos
+verificables frente a 14/15; 05: 13 hallazgos frente a 6, todos verificados; citas válidas 99,8 % frente a 99,1 %; 0 referencias inventadas y 0 afirmaciones
+contradichas. En ese repo `Off` ya cubría las tres capacidades: la mejora es de profundidad, no de cobertura. Repos de prueba y resultados:
+`C:\Users\juan.rozano\eval-repos\{subsystems-java,subsystems-csharp}`, `answers\subsystems-*.subsystems.json`, `results\2026-10-04-subsystems\` (con `eval.py`).
+**No medido:** el repo grande, la verificación independiente con otro modelo (`gpt-5.4` responde; `--verify` ya existe) y la consolidación sin tope.
+
+**Datos del repo Java grande enriquecido (sin LLM):** reindexado en la caché de cbm (`C-Users-juan.rozano-m-Online.db`, raíz `C:\Users\juan.rozano\m\Online` entera,
+no `\src`); la BD enriquecida estaba en el scratch de la sesión (se pierde; hay que repetir el enriquecimiento, unos 15 min sin LLM). 49 subsistemas; la sonda
+`notific` (338 ficheros) queda 79 % en un subsistema y 15 más se llevan trozos; entra en los K=8 del funcional (puesto 8, margen 0,007) y de flujos (puesto 6).
+84 tablas distintas por SQL en literales (suelo).
+
+**Razonamiento (`reasoning_effort`), sondas del 2026-10-05 (0,27 USD en total, repo de un fichero, `--reports deadcode`):** `gpt-6-sol` y `gpt-5.6-terra` rechazan funciones con `reasoning_effort` distinto de `none` por `/v1/chat/completions` (HTTP 400: «use /v1/responses or set reasoning_effort to 'none'»). `gpt-5.4` rechaza `temperature` 0.1 (solo admite el defecto 1) y **sí acepta `reasoning_effort=low` con herramientas** si se fija `Inference:Temperature=1` (7 llamadas, 68 k tokens de entrada, 0,267 USD). Para razonar con `gpt-6-sol` y tools haría falta un proveedor sobre la Responses API (contrato nuevo, pasa por `/brainstorm`); sin tools (nombrado, consolidación sin herramientas) sí podría razonar. **Sin comparar aún** informes con y sin razonamiento: no se sabe si es una causa de los informes pobres.
+
+**Incidentes y lecciones (2026-10-05):**
+- **Gasto accidental de ~13-14 USD** por ejecutar el CLI con `--help`, que no existe: arranca un análisis real sobre el cwd (aquí, este repo).
+  `[LEARN] Tooling:` nunca ejecutar el CLI propio con flags no comprobados; probar siempre con LLM falso o sobre un directorio de prueba. Quedó `reports/` untracked
+  en el repo (artefactos de esa ejecución; `rm -rf reports` si sigue ahí) y la caché ignorada `.codebase/` modificada. Gasto total aproximado del día: ~26 USD.
+- **263 respuestas HTTP 429** en esa ejecución: el modo nuevo lanzaba 16 llamadas concurrentes sin freno global. Resuelto con el limitador anterior (probado solo
+  con HTTP simulado, no con Azure real).
+- Disco C: casi lleno al enriquecer `Online` (BD de 1,5 GB + WAL); se hizo `wal_checkpoint(TRUNCATE)` y se borraron salidas de build antiguas.
+
+**Siguiente (en este orden, pidiendo OK y tope de gasto antes de cada ejecución con LLM real):**
+1. Revisar a mano los informes de la web con la build nueva, sobre un repo pequeño y luego sobre el grande. El usuario vio los de la ejecución accidental y los encontró
+   peores: esa ejecución no es una medida válida (429 constantes, 5 de 9 informes fallidos, tope de consolidación sin probar), pero hay que descartar que la
+   consolidación o los perfiles hayan adelgazado los informes.
+2. Prueba real controlada: Java de prueba con los arreglos + verificación con `gpt-5.4` (`--verify`, rol `ReportVerifier` sobrescrito por línea de comandos) y
+   `Online` solo con el informe funcional (`--reports funcional`), `Mode=Off` frente a `Subsystems`; contrastar con las notas de funcional de Notificaciones del
+   usuario (`~/.claude/projects/C--BBVA-Fuentes-cli-bbva-clan/memory/funcional-notificaciones-*.md`). Estimación: 5-6 y 4-6 USD.
+3. Decidir con datos: K=8 con 49 subsistemas (cubre ~38 % de las líneas), pesos, `VocabularyMergeThreshold`/`MinSubsystemFiles` (sin calibrar; 81 ficheros del
+   término de la sonda siguen repartidos en 15 subsistemas), tiempos de `TimeBudget`, y si 2,65× de coste vale la profundidad.
+4. Lo que los agentes dejaron sin hacer: `DynamicUseSites` siempre 0 en el mapa; señal de acoplamiento propia; el escáner SQL no resuelve constantes de otra clase ni
+   `StringBuilder`; la rejilla de la SPA no muestra progreso por subsistema; un plan viejo reutilizado en regeneración no trae `Scores` por informe; tests con temporización
+   real y de SQLite pueden ser flaky en máquina cargada.
+5. Nada está commiteado. Hay mucho trabajo previo sin commitear (enriquecimiento nativo, verificador a demanda, etc.) mezclado en el mismo árbol: no commitear sin que el usuario lo pida.
+
+## Historial: Para retomar (2026-09-30)
 
 **Dónde estamos.** El pipeline completo funciona de extremo a extremo con Azure `gpt-5.4`, que volvió a responder el
-2026-09-30 a las 13:49 tras el `404 DeploymentNotFound` del 29/09.
+2026-09-30 a las 13:49 tras el `404 DeploymentNotFound` del 29/09. **Desde el 2026-09-30 por la tarde, los roles
+(salvo `ChatAssistant`, que sigue en `gpt-5.4`) usan el deployment `gpt-6-sol`** del mismo recurso; la prueba de abajo
+es con `gpt-5.4` y no es comparable. `gpt-6-sol` exige `reasoning_effort: "none"` con herramientas, y la app no podía
+pasarlo porque `LlmRoleFactory` reimplementa la carga de config y descarta `Inference:Options`. Decidido (2026-09-30):
+pasar la app al binder del framework (`AITaskAgent:LlmProviders` + `IOptions<LlmEnvironment>`). Hecho el 2026-09-30,
+sin commitear, tests verdes. Tres bugs del framework que salieron, arreglados el mismo día con tests (1050/1050, sin
+commitear): `Inference:Options` pisaba las claves de fachada (ahora fusiona); precios `null` en `Models` (ahora
+`decimal?` y coste null); `ParsePrimitiveOrString` convertía un `ApiVersion` con forma de fecha en `DateTimeOffset`.
 - **Primera prueba real:** dos repos pequeños con fallos sembrados.
   - Repos: `C:\Users\juan.rozano\eval-repos\java-simple` (Struts, 25 `.java`) y `…\csharp-simple` (ASP.NET, 24 `.cs`).
   - Listas de respuestas: `…\eval-repos\answers\*.expected-findings.json`.
@@ -21,6 +130,19 @@ antiguo sin versionar. La sección «Para retomar» es lo único que hace falta 
   | Citas válidas | 98 % | 99 % |
   | Sembrados encontrados | 16/18 a mano (10/18 según el comparador) | 18/22 |
 
+  **Repetida con `gpt-6-sol` (2026-09-30, `…\results\2026-09-30-gpt-6-sol\`):**
+
+  | | Java | C# |
+  |---|---|---|
+  | Tiempo | 75 s | 116 s |
+  | Tokens | 1.105.000 | 1.119.000 |
+  | Citas válidas | 97,7 % (las rotas son `/listOrders.do`, que existe) | 100 % |
+  | Sembrados encontrados | 17/18 a mano (13/18 comparador) | 19/22 a mano (14/22 comparador) |
+
+  Desaparecen las tres afirmaciones falsas de `gpt-5.4`. Quedan dos menores y nuevas: el 03 de C# niega un registro DI
+  sin consumidor (`IInvoiceService`, `Program.cs:19`), y el 06 de Java dice «cuatro acciones» cuando son tres. El
+  comparador no lee los hallazgos de `02` (IDs GOD/MNT/DUP/COH) ni del `08` de C#.
+
   Las trampas de reflexión no salen como código muerto. El analizador aportó hallazgos reales no sembrados: IDOR,
   `TrustServerCertificate` y falta de `AddAuthentication`.
 - **Fallos vistos en la prueba:**
@@ -31,31 +153,39 @@ antiguo sin versionar. La sección «Para retomar» es lo único que hace falta 
   - Los bugs de lógica de Java salen en el 02 y el 08, no en el 05.
   - Nadie detecta los métodos privados muertos, los campos solo escritos en C# ni los registros DI que nunca se resuelven.
 
-**Siguiente, en este orden** (propuesto al usuario el 2026-09-30; falta que elija por dónde empezar):
-1. **Bug de `BdpEnricherStep`.**
-   - Pasa como `--project` el nombre de la carpeta de la solución y no el proyecto de cbm (`BdpEnricherStep.cs:107-112`).
-     BdpGraphEnricher falla con FK y el pipeline aborta (`:221`) en vez de caer al fallback LLM.
-   - En la prueba se sorteó con `--BdpEnricher:ProjectName`.
-   - Arreglo: `GraphProject.ResolveAsync` y degradar al fallback si falla.
-2. **Ruido del validador y del comparador.**
-   - Citas a directorios y a URLs `.do` que se dan por rotas (`ReportValidator.cs:817-838`, solo mira `File.Exists`).
-   - Hallazgos de informes sin tabla ni IDs (el 06) que el comparador no lee.
-   - Opción de buscar un esperado en cualquier informe.
-   - Soporte de `notExpected` para medir falsos positivos.
-3. **Verificador de informes.** Plan cerrado con el usuario, pendiente de su «adelante»:
-   `docs/plans/2026-09-30-verificador-informes-plan.md`.
-   - Estructura: detección de lenguaje → `SwitchStep` a los enriquecedores → facetas.
-   - Cada rama de informe es un `GroupStep[Auditor*, Preparación, Verificador*]`. El verificador corrige contra el código
-     y cierra el informe con «Cambios de la verificación».
-   - Los IDs pasan a `NN-CAT-nnn` y todos los informes citan.
-   - Framework: F1 (warning por placeholder sin resolver) y F2 (`@[ruta]` relativa al directorio de trabajo).
-   - Los `@[` del borrador se neutralizan en la preparación.
-   - Estimación: 2-2,5 h de agentes, en versión comprimida.
-   - Las tres afirmaciones falsas de la prueba son su caso de prueba real.
-4. **Facetas que faltan:** métodos privados sin llamadas, campos solo escritos en C# (Roslyn) y registros DI nunca
-   resueltos.
-5. **Análisis completo del repo Java grande** sobre `C:\Users\juan.rozano\m\Online`. Hay que reindexar con cbm antes.
-   Estimación: ~20-25 min y 3-4 M tokens de entrada; subir `AuditorMinutes` a 25-30 para la primera vez.
+**Hecho el 2026-09-30/10-01, todo sin commitear** (detalle en `docs/auditoria/2026-09-30-uso-de-roslyn-y-javac.md`):
+- `DotNetEnricher`: CLI propio (copia genérica de BdpGraphEnricher) que sustituye a `BdpEnricherStep`; el porqué del
+  proceso aparte está en su `Program.cs` y su `README.md`.
+- Tanda 1, validador y comparador: lee 02 y 08, citas multi-rango, `.do` de Struts y directorios, `notExpected`.
+- Tandas 2-4 en C# y Java: referencias exactas (código muerto con privados, `unused_registration` con Roslyn,
+  `fan_in`, `OVERRIDES`), campos con READS/WRITES, `detected_issues` por reglas del compilador, `auth_required`
+  explícito, TODO y código comentado, docstrings con la codificación buena (Online: U+FFFD de 34.655 a 801, que son
+  literales del fuente).
+- Consumidores (`Support/CompilerFactsFacets.cs`) y plantillas conectados, con totales y top N para repos grandes;
+  arreglado que C# borrase las marcas de Java en repos mixtos (`LanguageScope.NotJava()`).
+- Tests: Core 623, DotNetEnricher 51, Web 116, `Tests/` 127.
+- Prueba real (`…\results\2026-10-01-compiler-facts\`): Java 16/18 (antes 17), C# 20/22 (igual); coste 2,96 $ y
+  2,38 $. Se recuperan S05 (NPE) y SEED-12a (DI); se pierden S08 y S15 en Java y SEED-08 en C#, todos del 02
+  (code smells), que el modelo menciona en prosa sin hallazgo con ID. Sin atribuir: la plantilla de code smells se
+  editó en la misma tanda.
+
+**Decidido por el usuario el 2026-10-01:** se hacen ya el 1 (regresión del 02) y el 5 (`dotnet restore` en el paso);
+el 2 (tanda 5) y el 3 (repo grande) esperan. El verificador pasa a ser **a demanda**: un botón al lado de cada informe
+generado, junto al de rehacer; el plan del 2026-09-30 se adapta y espera el «adelante».
+
+**Siguiente:**
+1. ~~Regresión del 02 (code smells)~~ Hecho el 2026-10-01 (sin commitear). Causa: no era el cambio de facetas (las del 02 no cambiaron
+   salvo los campos sin leer), sino que el prompt no obligaba a dar ID a los componentes «conservados» (complejidad esencial,
+   `computeDiscount`) y no había dato de duplicación (`formatAmount` solo salía si el modelo lo encontraba solo). Arreglo: facetas
+   `duplicate_candidates`/`duplicate_summary` (aristas `SIMILAR_TO` de cbm, ya calculadas) y reglas de ID y cobertura mínima en
+   `report_codesmells_prompt.md`. Medido en `eval-repos/results/2026-10-01-smells-fix/`: S08/S09/S15 y SEED-08/09/14 en 2/2 repeticiones.
+2. Tanda 5: constantes resueltas, nulabilidad más amplia, clones por hash del AST, analizadores estándar.
+3. Análisis completo del repo Java grande (`C:\Users\juan.rozano\m\Online`): reindexar con cbm; las facetas ya
+   agregan (6.024 candidatos de código muerto, 4.880 `detected_issues`).
+4. Verificador de informes: aparcado; con `gpt-6-sol` y los datos del compilador le queda poco que corregir.
+5. ~~`dotnet restore`~~ Hecho el 2026-10-01 (sin commitear): lo hace el CLI `DotNetEnricher` (`NuGetRestore.cs`), con `DotNetEnricher:Restore`
+   (auto/always/never) y `RestoreTimeoutSeconds`; la salida (assets, `obj/`, `bin/`) va a `.codebase/enrichment/dotnet-restore`, nunca al
+   repositorio. Detalle en `Samples/DotNetEnricher/README.md`.
 
 **Decisiones del usuario vigentes** (detalle en la memoria `project_report_catalog_decisions`):
 - no fusionar informes todavía;
@@ -73,14 +203,20 @@ antiguo sin versionar. La sección «Para retomar» es lo único que hace falta 
 - las columnas duplicadas del esquema;
 - (b) detectores tipo PMD;
 - versionar los repos de evaluación;
-- la tarifa de Azure en `LlmConfiguration:Providers:<p>:Models`, para que salga el coste.
 
 **Entorno.**
 - JDK 17 en `%LOCALAPPDATA%\Programs\jdk-17.0.20.1+1` y jars *provided* en `…\java-provided`. Los dos van en los user
   secrets (`JavaAnalyzer:JdkPath`, `ProvidedClasspath:0`), y los tests `[JdkFact]` ya lo encuentran solos.
-- BdpGraphEnricher.CLI está instalado y se usó en la prueba C#.
+- BdpGraphEnricher.CLI sigue instalado; solo lo usa el test de paridad de `DotNetEnricher.Tests`.
 - La SPA está compilada en `wwwroot`. Para ver la UI nueva hay que reiniciar el backend del 5180.
 - `Samples/TextToTemplateDemo` es la demo, sin LLM, de cómo llega el texto de un paso a la plantilla del siguiente.
+
+## Verificador a demanda (2026-10-01, sin commitear)
+
+Botón «Verificar» por informe, junto a «Regenerar» (que ahora también sale en carriles correctos, D1), y «Deshacer
+verificación». `POST /api/analysis/{runId}/verify`, rol `ReportVerifier` obligatorio, `VerifierMinutes` 10. Diseño,
+desviaciones y mediciones: `docs/plans/2026-10-01-verificador-a-demanda-plan.md` y guía 1.8.1. Falta el paso 7 (IDs
+`NN-CAT-nnn` y citas en todos los informes) y la decisión sobre cuánto vale la pena el coste (~0,2 USD por informe).
 
 ## Hecho y verificado (sesión del 2026-09-28)
 
@@ -357,8 +493,8 @@ Siguen fuera, pendientes de decisión del usuario:
 
 ## Prompt de arranque
 
-> Retomamos la app de análisis de código. Lee la sección «Para retomar» de
+> Retomamos la app de análisis de código. Lee la sección «Para retomar (2026-10-05)» de
 > `docs/project_notes/asistente-chat-y-enriquecimiento-estado.md` y la memoria `project_report_catalog_decisions`. Dime
-> en tres líneas dónde estamos y pregúntame por cuál de los cinco puntos de «Siguiente» empezamos. No toques código
-> hasta que te lo diga. Antes de ejecutar el plan del verificador, espera mi «adelante». Usa agentes para lo largo y lee
+> en tres líneas dónde estamos y pregúntame por cuál de los puntos de «Siguiente» empezamos. No toques código
+> ni ejecutes el CLI o la web contra el LLM real hasta que te dé el «adelante» y un tope de gasto; **nunca ejecutes el CLI con flags sin comprobar** (ver incidentes). Usa agentes para lo largo y lee
 > tú lo que esté en uno o dos ficheros. Pon la hora al principio de cada mensaje de avance.

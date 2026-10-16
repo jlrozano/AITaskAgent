@@ -27,6 +27,32 @@ internal static class TestConfig
             .Build();
 }
 
+/// <summary>Configuración LLM de los tests en el formato del framework.</summary>
+internal static class FakeLlmConfig
+{
+    /// <summary>
+    /// <c>AITaskAgent:LlmProviders</c> con un proveedor «Fake» y un rol con el modelo <c>fake-model</c> por cada nombre de
+    /// <paramref name="roles"/> (sin ellos, los del análisis). El framework elige el servicio del proveedor por su
+    /// <see cref="ILlmService.Name"/>: <paramref name="serviceType"/> es el del servicio falso registrado como <see cref="ILlmService"/>.
+    /// </summary>
+    public static (string, string?)[] Pairs(string serviceType, params string[] roles)
+    {
+        IReadOnlyList<string> names = roles.Length > 0 ? roles : CodebaseAnalysis.Core.Hosting.LlmRoleFactory.RequiredRoles;
+        const string root = CodebaseAnalysis.Core.Hosting.LlmRoleFactory.SectionName;
+        return
+        [
+            ($"{root}:DefaultRole", names[0]),
+            ($"{root}:Providers:Fake:ServiceType", serviceType),
+            ($"{root}:Providers:Fake:BaseUrl", "http://fake.invalid/"),
+            .. names.SelectMany(name => new (string, string?)[]
+            {
+                ($"{root}:Roles:{name}:Provider", "Fake"),
+                ($"{root}:Roles:{name}:Model", "fake-model")
+            })
+        ];
+    }
+}
+
 /// <summary>Carpeta temporal propia de cada test; se borra al terminar.</summary>
 internal sealed class TempDirectory : IDisposable
 {

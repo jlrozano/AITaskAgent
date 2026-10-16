@@ -13,10 +13,16 @@ public static class ReportValidationChecks
     /// <summary>Cada <c>ruta:línea</c> o <c>ruta:ini-fin</c> citada existe en el repositorio y la línea está en rango.</summary>
     public const string Citations = "citations";
 
+    /// <summary>
+    /// Todo informe de auditoría (no el resumen ejecutivo) cita código con <c>ruta:línea</c>, y cada uno de sus hallazgos al menos
+    /// una vez. Solo avisa: un informe sin citas no hace fallar el análisis.
+    /// </summary>
+    public const string CitationsRequired = "citations_required";
+
     /// <summary>Las citas a informes y documentos (<c>nombre › sección</c> o el fichero de un informe) apuntan a algo que existe.</summary>
     public const string SourceReferences = "source_references";
 
-    /// <summary>Los identificadores <c>PREFIJO-NNN</c> siguen el formato y no se repiten.</summary>
+    /// <summary>Los identificadores <c>NN-CAT-nnn</c> (o <c>CAT-nnn</c>, en informes anteriores) siguen el formato y no se repiten.</summary>
     public const string FindingIds = "finding_ids";
 
     /// <summary>Cada hallazgo P0 o P1 cita al menos una ubicación que existe.</summary>
@@ -30,6 +36,18 @@ public static class ReportValidationChecks
 
     /// <summary>Los bloques Mermaid usan solo los tipos de <c>_mermaid_guidelines.md</c>.</summary>
     public const string Mermaid = "mermaid";
+
+    /// <summary>
+    /// Un informe en modo B (que investiga por subsistema) lleva el apartado «Cobertura» y nombra cada subsistema que el plan de
+    /// cobertura del disco (<c>_coverage_plan.json</c>) eligió para él. Solo avisa, y no se comprueba sin plan en disco.
+    /// </summary>
+    public const string Coverage = "coverage";
+
+    /// <summary>
+    /// Una ruta de recurso (<c>/WEB-INF/jsp/x.jsp</c>) que un fichero de configuración del repositorio declara pero que no existe en él. No es una
+    /// cita de código rota (el informe cuenta bien lo que dice la configuración), así que no entra en <see cref="Citations"/>; solo avisa.
+    /// </summary>
+    public const string DeclaredPaths = "declared_paths";
 }
 
 /// <summary>Gravedad de un problema: <c>error</c> incumple una regla de las plantillas; <c>warning</c> es sospechoso.</summary>
@@ -90,12 +108,25 @@ public sealed record ReportCitation(
     int? FileLines,
     IReadOnlyList<string>? Candidates)
 {
+    /// <summary>Los rangos de una cita con varios (<c>F.cs:11,16-21</c>); null en las de un solo rango. <c>StartLine</c>/<c>EndLine</c> abarcan todos.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<CitationRange>? Ranges { get; init; }
+
     [JsonIgnore]
     public bool IsValid => Status == CitationStatuses.Ok;
 }
 
+/// <summary>Un rango de líneas (inclusive) de una cita.</summary>
+public sealed record CitationRange(int Start, int End);
+
 /// <summary>Una cita a un informe o documento: <c>nombre › sección</c> o el nombre de fichero de un informe.</summary>
 public sealed record ReportSourceReference(string Text, int Line, string Status, string? Target);
+
+/// <summary>
+/// Una ruta de recurso citada sin línea que no existe en el repositorio pero que <paramref name="DeclaredIn"/> (un fichero de configuración
+/// XML, ruta relativa al repositorio) declara: una «ruta declarada no existente», aparte de las citas de código rotas.
+/// </summary>
+public sealed record ReportDeclaredPath(string Text, int Line, string DeclaredIn);
 
 /// <summary>Un nombre del grafo citado y si existe.</summary>
 public sealed record ReportGraphName(string Text, int Line, bool Found);
@@ -129,7 +160,13 @@ public sealed class ReportScores
 
     public int SourceReferencesTotal { get; set; }
     public int SourceReferencesValid { get; set; }
+
+    /// <summary>Rutas de recurso citadas que una configuración declara y el repositorio no tiene (<see cref="ReportValidationChecks.DeclaredPaths"/>); no cuentan como citas.</summary>
+    public int DeclaredPathsMissing { get; set; }
     public int FindingsDefined { get; set; }
+
+    /// <summary>Hallazgos que no citan ninguna ubicación de código (<see cref="ReportValidationChecks.CitationsRequired"/>).</summary>
+    public int FindingsUncited { get; set; }
     public int DuplicateIds { get; set; }
     public int MalformedIds { get; set; }
     public int UndefinedIdReferences { get; set; }
@@ -160,6 +197,9 @@ public sealed class ReportFileValidation
     public List<ReportValidationIssue> Issues { get; } = [];
     public List<ReportCitation> Citations { get; } = [];
     public List<ReportSourceReference> SourceReferences { get; } = [];
+
+    /// <summary>Rutas declaradas en una configuración que no existen en el repositorio, aparte de <see cref="Citations"/>.</summary>
+    public List<ReportDeclaredPath> DeclaredPaths { get; } = [];
     public List<ReportGraphName> GraphNames { get; } = [];
     public List<ReportFinding> Findings { get; } = [];
 
@@ -180,10 +220,19 @@ public sealed class ReportValidationTotals
     public int BrokenCitations { get; set; }
     public int SourceReferencesTotal { get; set; }
     public int SourceReferencesBroken { get; set; }
+
+    /// <summary>Rutas declaradas en una configuración que no existen en el repositorio, de todos los informes: no son citas rotas.</summary>
+    public int DeclaredPathsMissing { get; set; }
     public int SevereFindings { get; set; }
     public int SevereFindingsWithoutLocation { get; set; }
     public int DuplicateIds { get; set; }
     public int MalformedIds { get; set; }
+
+    /// <summary>Informes de auditoría sin ninguna cita de código.</summary>
+    public int ReportsWithoutCitations { get; set; }
+
+    /// <summary>Hallazgos de todos los informes que no citan código.</summary>
+    public int FindingsUncited { get; set; }
     public int? GraphNamesChecked { get; set; }
     public int? GraphNamesNotFound { get; set; }
     public int MermaidInvalid { get; set; }
@@ -281,7 +330,11 @@ public static class ReportValidationSummary
             $"🧪 Validación de {t.Reports} informe(s): {t.CitationsValid} de {t.CitationsTotal} citas de código válidas ({Percent(t.CitationsValidPercent)}); "
             + $"hallazgos P0/P1 sin ubicación: {t.SevereFindingsWithoutLocation} de {t.SevereFindings}; identificadores duplicados: {t.DuplicateIds}, "
             + $"mal formados: {t.MalformedIds}; Mermaid no permitido: {t.MermaidInvalid}; sin procedencia completa: {t.ReportsWithoutProvenance}.{graph} "
-            + $"{t.Errors} error(es) y {t.Warnings} aviso(s)."));
+            + $"{t.Errors} error(es) y {t.Warnings} aviso(s)."
+            // V6: cada afirmación se cita con ruta:línea; solo avisa, en la misma línea para no añadir otra al log de la ejecución.
+            + (t.ReportsWithoutCitations > 0 || t.FindingsUncited > 0
+                ? $" Sin citas de código: {t.ReportsWithoutCitations} informe(s) sin ninguna y {t.FindingsUncited} hallazgo(s) sin cita."
+                : string.Empty)));
 
         foreach (var report in result.Reports)
         {
@@ -299,6 +352,23 @@ public static class ReportValidationSummary
             lines.Add((AnalysisLogLevel.Warning, $"⚠️ {t.BrokenCitations} cita(s) de código rota(s); por ejemplo: {string.Join("; ", examples)}."));
         }
 
+        if (t.DeclaredPathsMissing > 0)
+        {
+            var examples = result.Reports
+                .SelectMany(r => r.DeclaredPaths.Select(p => $"`{p.Text}` ({r.FileName}:{p.Line}, en `{p.DeclaredIn}`)"))
+                .Take(BrokenExamples);
+            lines.Add((AnalysisLogLevel.Info,
+                $"ℹ️ {t.DeclaredPathsMissing} ruta(s) declarada(s) en la configuración que no existen en el repositorio (no cuentan como citas rotas); por ejemplo: {string.Join("; ", examples)}."));
+        }
+
+        if (result.CrossReportIdCollisions.Count > 0)
+        {
+            var examples = result.CrossReportIdCollisions.Take(BrokenExamples).Select(c => $"`{c.Id}` ({string.Join(", ", c.Reports)})");
+            lines.Add((AnalysisLogLevel.Warning,
+                $"⚠️ {result.CrossReportIdCollisions.Count} identificador(es) de hallazgo repetidos entre informes; por ejemplo: {string.Join("; ", examples)}. "
+                + "El formato NN-CAT-nnn (`05-SEC-002`) los hace únicos."));
+        }
+
         foreach (var note in result.Notes)
             lines.Add((AnalysisLogLevel.Warning, $"⚠️ {note}"));
 
@@ -307,6 +377,14 @@ public static class ReportValidationSummary
             lines.Add((AnalysisLogLevel.Info,
                 $"🎯 Hallazgos esperados: {expected.Found} de {expected.ExpectedCount} encontrados ({Percent(expected.CoveragePercent)}); "
                 + $"{expected.UnexpectedCount} hallazgo(s) no esperado(s) en los informes cubiertos."));
+            if (expected.NotExpectedCount > 0)
+            {
+                var triggered = expected.NotExpected.Where(t => t.Triggered)
+                    .Select(t => $"{t.Id} ({string.Join(", ", t.MatchedFindings)})").ToList();
+                lines.Add((triggered.Count > 0 ? AnalysisLogLevel.Warning : AnalysisLogLevel.Info,
+                    $"🪤 Falsos positivos (notExpected): {expected.FalsePositiveCount} de {expected.NotExpectedCount} trampas activadas"
+                    + (triggered.Count > 0 ? $": {string.Join("; ", triggered)}." : ".")));
+            }
         }
 
         if (writtenTo != null)

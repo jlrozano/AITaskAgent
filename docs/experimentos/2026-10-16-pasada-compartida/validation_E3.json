@@ -1,0 +1,316 @@
+{
+ "conversation": {
+  "files": 14,
+  "files_expected": 14,
+  "files_missing": [],
+  "types": 20,
+  "members": 123,
+  "methods_expected": 86,
+  "methods_missing": 1,
+  "findings": 29,
+  "by_kind": {
+   "bug": 17,
+   "debt": 11,
+   "security": 1
+  },
+  "anchors": {
+   "ok": 29,
+   "inst_ok": 27
+  },
+  "relations": 14,
+  "rel_anchors": {
+   "ok": 14
+  },
+  "seedVerdicts": 28,
+  "verdicts": {
+   "confirmed": 1,
+   "needs_context": 12,
+   "false_positive": 15
+  },
+  "openQuestions": 11
+ },
+ "core-attributes": {
+  "files": 11,
+  "files_expected": 11,
+  "files_missing": [],
+  "types": 15,
+  "members": 52,
+  "methods_expected": 42,
+  "methods_missing": 6,
+  "findings": 27,
+  "by_kind": {
+   "bug": 15,
+   "debt": 11,
+   "security": 1
+  },
+  "anchors": {
+   "ok": 27,
+   "inst_ok": 11
+  },
+  "relations": 11,
+  "rel_anchors": {
+   "ok": 11
+  },
+  "seedVerdicts": 32,
+  "verdicts": {
+   "needs_context": 20,
+   "confirmed": 2,
+   "false_positive": 10
+  },
+  "openQuestions": 7
+ },
+ "core-steps": {
+  "files": 26,
+  "files_expected": 26,
+  "files_missing": [],
+  "types": 33,
+  "members": 120,
+  "methods_expected": 60,
+  "methods_missing": 2,
+  "findings": 20,
+  "by_kind": {
+   "bug": 12,
+   "debt": 8
+  },
+  "anchors": {
+   "ok": 20,
+   "inst_ok": 11
+  },
+  "relations": 13,
+  "rel_anchors": {
+   "ok": 13
+  },
+  "seedVerdicts": 5,
+  "verdicts": {
+   "needs_context": 1,
+   "false_positive": 3,
+   "confirmed": 1
+  },
+  "openQuestions": 5
+ },
+ "event": {
+  "files": 21,
+  "files_expected": 21,
+  "files_missing": [],
+  "types": 21,
+  "members": 112,
+  "methods_expected": 0,
+  "methods_missing": 0,
+  "findings": 8,
+  "by_kind": {
+   "debt": 8
+  },
+  "anchors": {
+   "ok": 8,
+   "inst_ok": 11
+  },
+  "relations": 5,
+  "rel_anchors": {
+   "ok": 5
+  },
+  "seedVerdicts": 0,
+  "verdicts": {},
+  "openQuestions": 3
+ },
+ "execution": {
+  "files": 18,
+  "files_expected": 18,
+  "files_missing": [],
+  "types": 23,
+  "members": 67,
+  "methods_expected": 38,
+  "methods_missing": 4,
+  "findings": 30,
+  "by_kind": {
+   "bug": 17,
+   "debt": 10,
+   "security": 3
+  },
+  "anchors": {
+   "ok": 30,
+   "inst_ok": 24
+  },
+  "relations": 23,
+  "rel_anchors": {
+   "ok": 23
+  },
+  "seedVerdicts": 30,
+  "verdicts": {
+   "confirmed": 2,
+   "false_positive": 21,
+   "needs_context": 7
+  },
+  "openQuestions": 10
+ },
+ "json": {
+  "files": 5,
+  "files_expected": 5,
+  "files_missing": [],
+  "types": 6,
+  "members": 19,
+  "methods_expected": 15,
+  "methods_missing": 6,
+  "findings": 13,
+  "by_kind": {
+   "bug": 5,
+   "debt": 8
+  },
+  "anchors": {
+   "ok": 13,
+   "inst_ok": 8
+  },
+  "relations": 7,
+  "rel_anchors": {
+   "ok": 7
+  },
+  "seedVerdicts": 19,
+  "verdicts": {
+   "false_positive": 11,
+   "needs_context": 6,
+   "confirmed": 2
+  },
+  "openQuestions": 4
+ },
+ "llm-configuration": {
+  "files": 27,
+  "files_expected": 27,
+  "files_missing": [],
+  "types": 37,
+  "members": 165,
+  "methods_expected": 102,
+  "methods_missing": 7,
+  "findings": 36,
+  "by_kind": {
+   "bug": 17,
+   "debt": 16,
+   "security": 3
+  },
+  "anchors": {
+   "ok": 36,
+   "inst_ok": 30
+  },
+  "relations": 20,
+  "rel_anchors": {
+   "ok": 20
+  },
+  "seedVerdicts": 20,
+  "verdicts": {
+   "false_positive": 12,
+   "confirmed": 2,
+   "needs_context": 6
+  },
+  "openQuestions": 9
+ },
+ "observability": {
+  "files": 10,
+  "files_expected": 10,
+  "files_missing": [],
+  "types": 11,
+  "members": 25,
+  "methods_expected": 14,
+  "methods_missing": 2,
+  "findings": 14,
+  "by_kind": {
+   "bug": 5,
+   "debt": 8,
+   "security": 1
+  },
+  "anchors": {
+   "ok": 14,
+   "inst_ok": 7
+  },
+  "relations": 11,
+  "rel_anchors": {
+   "ok": 11
+  },
+  "seedVerdicts": 5,
+  "verdicts": {
+   "needs_context": 5
+  },
+  "openQuestions": 5
+ },
+ "option": {
+  "files": 21,
+  "files_expected": 21,
+  "files_missing": [],
+  "types": 22,
+  "members": 84,
+  "methods_expected": 23,
+  "methods_missing": 2,
+  "findings": 24,
+  "by_kind": {
+   "bug": 15,
+   "debt": 9
+  },
+  "anchors": {
+   "ok": 24,
+   "inst_ok": 17
+  },
+  "relations": 8,
+  "rel_anchors": {
+   "ok": 8
+  },
+  "seedVerdicts": 19,
+  "verdicts": {
+   "confirmed": 1,
+   "needs_context": 11,
+   "false_positive": 7
+  },
+  "openQuestions": 8
+ },
+ "shared": {
+  "files": 16,
+  "files_expected": 16,
+  "files_missing": [],
+  "types": 20,
+  "members": 64,
+  "methods_expected": 21,
+  "methods_missing": 3,
+  "findings": 12,
+  "by_kind": {
+   "bug": 6,
+   "debt": 6
+  },
+  "anchors": {
+   "ok": 12,
+   "inst_ok": 2
+  },
+  "relations": 8,
+  "rel_anchors": {
+   "ok": 8
+  },
+  "seedVerdicts": 0,
+  "verdicts": {},
+  "openQuestions": 6
+ },
+ "tool": {
+  "files": 8,
+  "files_expected": 8,
+  "files_missing": [],
+  "types": 8,
+  "members": 53,
+  "methods_expected": 30,
+  "methods_missing": 0,
+  "findings": 17,
+  "by_kind": {
+   "bug": 4,
+   "security": 2,
+   "debt": 11
+  },
+  "anchors": {
+   "ok": 17,
+   "inst_ok": 13
+  },
+  "relations": 20,
+  "rel_anchors": {
+   "ok": 20
+  },
+  "seedVerdicts": 15,
+  "verdicts": {
+   "needs_context": 3,
+   "false_positive": 9,
+   "confirmed": 3
+  },
+  "openQuestions": 7
+ }
+}

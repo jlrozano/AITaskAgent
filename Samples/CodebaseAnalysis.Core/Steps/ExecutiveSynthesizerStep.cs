@@ -6,7 +6,9 @@ using AITaskAgent.LLM.Abstractions;
 using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Results;
 using CodebaseAnalysis.Core.Models;
+using CodebaseAnalysis.Core.Preparation;
 using CodebaseAnalysis.Core.Progress;
+using CodebaseAnalysis.Core.Reports;
 using CodebaseAnalysis.Core.Support;
 using System.Globalization;
 using System.Text;
@@ -30,6 +32,13 @@ public class SynthesisInput : StepResult
     /// resumen debe decir "no disponible" y no un 0 que parezca un dato.
     /// </summary>
     public string CriticalBugsCount { get; set; } = "no disponible";
+
+    /// <summary>
+    /// Qué parte del repositorio recorrió cada informe (subsistemas investigados, excluidos y no cubiertos), de
+    /// <see cref="Preparation.SynthesisCoverage"/>; vacío sin preparación por subsistemas. El motor de plantillas no tiene
+    /// condicionales: el prompt tiene que tolerarlo vacío.
+    /// </summary>
+    public string CoverageSummary { get; set; } = string.Empty;
 
     public SynthesisInput()
         : base(new EmptyStep(nameof(SynthesisInput)))
@@ -174,6 +183,10 @@ public class ExecutiveSynthesizerStep : IStep<ParallelResult, AnalysisPipelineFi
         }
         digestSb.Append(otherResultsSb);
 
+        // Hallazgos graves que otro informe califica menos grave sobre el mismo código: la síntesis los recibe como señal y no los recuerda ni los calla.
+        digestSb.Append(SeverityContrast.Format(SeverityContrast.Find(
+            individualReports.Select(r => (r.ReportFileName, ReportValidator.SummarizeFindings(r.ReportFileName, r.MarkdownContent))))));
+
         // 3. Métricas globales del contexto (ReportFacetInput previo)
         int totalNodes = 0, totalEdges = 0, totalLoc = 0, totalRoutes = 0, totalFlows = 0, deadCode = 0;
 
@@ -226,6 +239,14 @@ public class ExecutiveSynthesizerStep : IStep<ParallelResult, AnalysisPipelineFi
             _ => "no disponible (el informe de errores no lo declaró)"
         };
 
+        // 4b. Cobertura: lo que cada informe recorrió, del plan del disco y de sus apartados «Cobertura». Sin preparación por
+        //     subsistemas (o con el plan sin leer) queda vacía y la síntesis se escribe como siempre.
+        var coverageSummary = PreparationOptions.FromServices(context.ServiceProvider).Mode == PreparationMode.Off
+            ? string.Empty
+            : SynthesisCoverage.Build(
+                PreparationArtifacts.TryRead<CoveragePlan>(outputDir, out _),
+                individualReports.Select(r => (r.ReportType, r.ReportFileName, r.MarkdownContent)));
+
         var synthesisInput = new SynthesisInput
         {
             GeneratedReportsDigest = digestSb.ToString(),
@@ -236,7 +257,8 @@ public class ExecutiveSynthesizerStep : IStep<ParallelResult, AnalysisPipelineFi
             TotalRoutes = totalRoutes,
             TotalFlows = totalFlows,
             DeadCodeCount = deadCode,
-            CriticalBugsCount = criticalBugs
+            CriticalBugsCount = criticalBugs,
+            CoverageSummary = coverageSummary
         };
 
         // 5. Invocar LLM para generar el resumen ejecutivo
@@ -251,7 +273,7 @@ public class ExecutiveSynthesizerStep : IStep<ParallelResult, AnalysisPipelineFi
         {
             executiveMarkdown = GenerateFallbackExecutiveSummary(individualReports, failures, synthesisInput);
         }
-        executiveMarkdown = ReportMarkdown.RemoveFileNameHeading(executiveMarkdown);
+        executiveMarkdown = ReportMarkdown.RemoveFileNameHeading(ReportMarkdown.RemoveTextBeforeTitle(executiveMarkdown));
 
         // Procedencia (recomendación 12), como en los informes; sin respuesta del modelo el resumen lo escribe el código.
         var provenance = _llmStep.Provenance(context, llmResult).ToList();
@@ -335,6 +357,17 @@ public class ExecutiveSynthesizerStep : IStep<ParallelResult, AnalysisPipelineFi
             }
         }
 
+        // Los identificadores y severidades tal como los dejó el informe: la síntesis cita estos, no los de memoria.
+        var findings = ReportMarkdown.FindingIndex(report.MarkdownContent);
+        if (findings.Count > 0)
+        {
+            sb.AppendLine("- **Hallazgos del informe (identificador · severidad · tipo):**");
+            foreach (var finding in findings)
+            {
+                sb.AppendLine($"  - {finding}");
+            }
+        }
+
         sb.AppendLine();
     }
 
@@ -414,6 +447,16 @@ public class ExecutiveSynthesizerStep : IStep<ParallelResult, AnalysisPipelineFi
         sb.AppendLine($"- **Candidatos a Código Muerto:** `{metrics.DeadCodeCount}`");
         sb.AppendLine($"- **Defectos / Puntos Críticos (P0/P1):** `{metrics.CriticalBugsCount}`");
         sb.AppendLine();
+        if (!string.IsNullOrWhiteSpace(metrics.CoverageSummary))
+        {
+            sb.AppendLine("## Cobertura de los Informes");
+            sb.AppendLine("Los informes no recorren todo el repositorio: sus conclusiones valen para lo que cubrieron.");
+            sb.AppendLine();
+            sb.AppendLine("```text");
+            sb.AppendLine(metrics.CoverageSummary);
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
         sb.AppendLine("## 3. Top 5 Acciones Prioritarias Recomendadas");
         sb.AppendLine("1. Revisar y mitigar las rutas y puntos de falla críticos identificados.");
         sb.AppendLine("2. Depurar elementos de código muerto confirmados para reducir la superficie de mantenimiento.");

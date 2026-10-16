@@ -52,6 +52,12 @@ public static class AnalysisEventDtoTypes
     /// eventos. <c>data</c>: <c>reports</c> (tipos) y <c>synthesis</c>. Le sigue otro <c>run.completed</c>.
     /// </summary>
     public const string RunRegenerationStarted = "run.regeneration_started";
+
+    /// <summary>
+    /// La ejecución terminada vuelve a correr para verificar informes, con el mismo <c>runId</c> y el mismo registro de
+    /// eventos. <c>data</c>: <c>reports</c> (tipos) y <c>synthesis</c>. Le sigue otro <c>run.completed</c>.
+    /// </summary>
+    public const string RunVerificationStarted = "run.verification_started";
     public const string PipelineStarted = "pipeline.started";
     public const string PipelineCompleted = "pipeline.completed";
     public const string StepStarted = "step.started";
@@ -65,5 +71,19 @@ public static class AnalysisEventDtoTypes
     public const string ToolCompleted = "tool.completed";
     public const string Log = "log";
     public const string ReportWritten = "report.written";
+
+    /// <summary>
+    /// Un informe ha pasado por el verificador. <c>data</c>: <c>outcome</c> (<c>verified</c>, <c>corrected</c>,
+    /// <c>warnings</c> o <c>failed</c>), <c>changes</c>, <c>fileName</c> y, si el informe se reescribió, <c>previousVersionId</c>
+    /// y <c>versionId</c> (la primera es la que restaura «Deshacer»); con <c>failed</c>, <c>error</c>.
+    /// </summary>
+    public const string ReportVerified = "report.verified";
+
+    /// <summary>
+    /// Estado de la pasada compartida (<c>SharedPassStep</c>), entero en cada evento: se emite en cada cambio (fase, lote, llamada) y
+    /// el último manda. <c>data</c>: <c>phase</c>, <c>batches</c>, <c>totals</c>, <c>judge</c>, <c>stopReason</c> y, al terminar,
+    /// <c>severities</c> (ver <c>SharedPassProgress</c>).
+    /// </summary>
+    public const string SharedPassProgress = "sharedpass.progress";
     public const string LogTruncated = "log.truncated";
 }

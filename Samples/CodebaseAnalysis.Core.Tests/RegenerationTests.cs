@@ -38,13 +38,7 @@ public sealed class RegenerationTests
         <!-- analysis-meta: health=Green -->
         """;
 
-    private static readonly (string, string?)[] FakeProvider =
-    [
-        ("LlmConfiguration:DefaultProvider", "Fake"),
-        ("LlmConfiguration:Providers:Fake:ServiceType", "fake"),
-        ("LlmConfiguration:Providers:Fake:BaseUrl", "http://fake.invalid/"),
-        ("LlmConfiguration:Providers:Fake:Model", "fake-model")
-    ];
+    private static readonly (string, string?)[] FakeProvider = FakeLlmConfig.Pairs("canned");
 
     // ── AnalysisTimeouts ─────────────────────────────────────────────────
 
@@ -114,12 +108,13 @@ public sealed class RegenerationTests
 
         Assert.Equal(TimeSpan.FromMinutes(1), pipeline.PipelineTimeout);
         Assert.Equal(TimeSpan.FromMinutes(2), Assert.IsType<DetectAndIndexGraphStep>(pipeline.Steps[0]).Timeout);
-        Assert.Equal(TimeSpan.FromMinutes(3), Assert.IsType<BdpEnricherStep>(pipeline.Steps[2]).Timeout);
-        var reports = Assert.IsType<TolerantReportsParallelStep>(pipeline.Steps[4]);
+        Assert.Equal(TimeSpan.FromMinutes(3), Assert.IsType<DotNetEnricherStep>(pipeline.Steps[2]).Timeout);
+        var reports = Assert.IsType<TolerantReportsParallelStep>(pipeline.Steps.Single(s => s.Name == AnalysisPipelineFactory.ParallelReportsStepName));
         Assert.Equal(TimeSpan.FromMinutes(4), reports.Timeout);
         Assert.Equal(2, reports.Branches.Count);
+        // El envoltorio de modo B (ErroresYBugs) también queda sin límite si el del auditor lo está.
         Assert.All(reports.Branches, b => Assert.Equal(Timeout.InfiniteTimeSpan, b.Timeout));
-        Assert.Equal(TimeSpan.FromMinutes(6), Assert.IsType<ExecutiveSynthesizerStep>(pipeline.Steps[5]).Timeout);
+        Assert.Equal(TimeSpan.FromMinutes(6), Assert.IsType<ExecutiveSynthesizerStep>(pipeline.Steps.Single(s => s.Name == ExecutiveSynthesizerStep.StepName)).Timeout);
     }
 
     /// <summary>
@@ -137,9 +132,9 @@ public sealed class RegenerationTests
         var regeneration = AnalysisPipelineFactory.CreateRegenerationPipeline(host.Templates, host.Roles, limited, synthesis: false, host.Services);
         var byDefault = AnalysisPipelineFactory.CreatePipeline(host.Templates, host.Roles, unlimited, host.Services);
 
-        Assert.Equal(3, Assert.IsType<TolerantReportsParallelStep>(full.Steps[4]).MaxDegreeOfParallelism);
-        Assert.Equal(3, Assert.IsType<TolerantReportsParallelStep>(regeneration.Steps[2]).MaxDegreeOfParallelism);
-        Assert.Equal(0, Assert.IsType<TolerantReportsParallelStep>(byDefault.Steps[4]).MaxDegreeOfParallelism);
+        Assert.Equal(3, full.Steps.OfType<TolerantReportsParallelStep>().Single().MaxDegreeOfParallelism);
+        Assert.Equal(3, regeneration.Steps.OfType<TolerantReportsParallelStep>().Single().MaxDegreeOfParallelism);
+        Assert.Equal(0, byDefault.Steps.OfType<TolerantReportsParallelStep>().Single().MaxDegreeOfParallelism);
     }
 
     /// <summary>Los pasos y, de los paralelos, sus ramas, recursivamente.</summary>
@@ -271,20 +266,27 @@ public sealed class RegenerationTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task The_regeneration_pipeline_has_only_the_preparation_the_facets_the_requested_auditors_and_optionally_the_synthesis(bool synthesis)
+    public async Task The_regeneration_pipeline_has_only_the_preparation_the_facets_the_subsystem_preparation_the_requested_auditors_and_optionally_the_synthesis(bool synthesis)
     {
         await using var host = await TestHost.CreateAsync(("CodebaseAnalysis:Timeouts:AuditorMinutes", "9"));
         var input = new AnalysisPipelineInput { RequestedReports = [ReportType.CodeSmells, ReportType.ErroresYBugs] };
 
         var pipeline = AnalysisPipelineFactory.CreateRegenerationPipeline(host.Templates, host.Roles, input, synthesis, host.Services);
 
-        string[] expected = [PrepareRegenerationStep.StepName, SqlFacetExtractorStep.StepName, AnalysisPipelineFactory.ParallelReportsStepName];
+        string[] expected =
+        [
+            PrepareRegenerationStep.StepName, SqlFacetExtractorStep.StepName, RepositoryInventoryStep.StepName, DomainDiscoveryStep.StepName,
+            CoveragePlanningStep.StepName, TimeBudgetStep.StepName, AnalysisPipelineFactory.ParallelReportsStepName
+        ];
         if (synthesis)
             expected = [.. expected, ExecutiveSynthesizerStep.StepName];
         Assert.Equal(expected, pipeline.Steps.Select(s => s.Name));
-        var reports = Assert.IsType<TolerantReportsParallelStep>(pipeline.Steps[2]);
+        var reports = Assert.IsType<TolerantReportsParallelStep>(pipeline.Steps.Single(s => s.Name == AnalysisPipelineFactory.ParallelReportsStepName));
         Assert.Equal(["Auditor_CodeSmells", "Auditor_ErroresYBugs"], reports.Branches.Select(b => b.Name));
-        Assert.All(reports.Branches, b => Assert.Equal(TimeSpan.FromMinutes(9), b.Timeout));
+        Assert.Equal(TimeSpan.FromMinutes(9), reports.Branches[0].Timeout);
+        // El envoltorio de modo B arranca con tandas de investigaciones (8 subsistemas de 4 en 4: dos) y la consolidación, de 9 min cada una,
+        // hasta que el presupuesto de tiempo le escribe el suyo.
+        Assert.Equal(TimeSpan.FromMinutes(9 * 3), reports.Branches[1].Timeout);
         Assert.Equal(TimeSpan.FromMinutes(240), pipeline.PipelineTimeout);
     }
 
@@ -376,7 +378,8 @@ public sealed class RegenerationTests
 
         var full = await AnalysisRunner.RunAsync(input, host.Roles, host.Services, new EventChannel(), new CapturingReporter(), CancellationToken.None);
         Assert.False(full.HasError, full.Error?.Message);
-        Assert.Equal(10, host.Llm.Calls);
+        // 9 informes y la síntesis, más el nombrado del único subsistema y su investigación en cada uno de los 4 informes en modo B.
+        Assert.Equal(10 + 1 + 4, host.Llm.Calls);
 
         // El informe a regenerar queda con otro contenido y en el grafo; los demás, con su fecha anterior.
         const string target = "02_code_smells.md";
@@ -407,7 +410,10 @@ public sealed class RegenerationTests
             Assert.Empty(Assert.IsType<AnalysisPipelineFinalResult>(result).FailedReports);
         else
             Assert.IsType<ParallelResult>(result);
-        Assert.Equal(10 + (synthesis ? 2 : 1), host.Llm.Calls);
+        // Los 15 de antes, el informe regenerado y la síntesis, y el nombrado del mapa de dominios: este grafo sintético no tiene tabla
+        // projects, así que no hay huella con la que saber que el mapa guardado sigue valiendo y se calcula de nuevo (la reutilización con
+        // huella la prueba PreparationPipelineTests).
+        Assert.Equal(15 + 1 + (synthesis ? 2 : 1), host.Llm.Calls);
         // input no se toca: la regeneración trabaja sobre una copia.
         Assert.Equal(9, input.RequestedReports.Count);
 
@@ -416,7 +422,11 @@ public sealed class RegenerationTests
         {
             received = [.. events];
         }
-        string[] expectedSteps = [PrepareRegenerationStep.StepName, SqlFacetExtractorStep.StepName, AnalysisPipelineFactory.ParallelReportsStepName, "Auditor_CodeSmells"];
+        string[] expectedSteps =
+        [
+            PrepareRegenerationStep.StepName, SqlFacetExtractorStep.StepName, RepositoryInventoryStep.StepName, DomainDiscoveryStep.StepName,
+            CoveragePlanningStep.StepName, TimeBudgetStep.StepName, AnalysisPipelineFactory.ParallelReportsStepName, "Auditor_CodeSmells"
+        ];
         if (synthesis)
             expectedSteps = [.. expectedSteps, ExecutiveSynthesizerStep.StepName];
         Assert.Equal(expectedSteps, received.OfType<StepStartedEvent>().Select(e => e.StepName));
@@ -473,7 +483,7 @@ public sealed class RegenerationTests
             Configuration = configuration;
             Services = services;
             Llm = llm;
-            Roles = LlmRoleFactory.BuildRoles(configuration, services, _ => null, _ => { });
+            Roles = LlmRoleFactory.BuildRoles(services, _ => null, _ => { });
         }
 
         public IConfiguration Configuration { get; }
@@ -489,7 +499,7 @@ public sealed class RegenerationTests
             var services = new ServiceCollection();
             services.AddSingleton(configuration);
             services.AddLogging();
-            services.AddKeyedSingleton<ILlmService>("fake", llm);
+            services.AddSingleton<ILlmService>(llm);
             services.AddAITaskAgent();
             var provider = services.BuildServiceProvider();
             provider.UseAITaskAgent();

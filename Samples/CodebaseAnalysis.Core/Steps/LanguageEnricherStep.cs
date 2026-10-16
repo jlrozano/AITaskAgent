@@ -14,7 +14,7 @@ using Microsoft.Extensions.Configuration;
 namespace CodebaseAnalysis.Core.Steps;
 
 /// <summary>
-/// Enriquecimiento nativo por lenguaje (P1), entre la indexación y <see cref="BdpEnricherStep"/>, en la fase
+/// Enriquecimiento nativo por lenguaje (P1), entre la indexación y <see cref="DotNetEnricherStep"/>, en la fase
 /// <c>enrich</c>. Recorre el repositorio en disco, deja <see cref="AnalysisContextKeys.DetectedLanguages"/> en el contexto
 /// y ejecuta, por este orden, el analizador Java (si hay <c>.java</c> y está activado) y el plugin Struts/JSP (si hay
 /// algún <c>struts-config*.xml</c>). Cada enriquecedor se salta si ya hay una pasada correcta sobre la misma indexación y
@@ -92,10 +92,14 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
         if (java && StepTimeoutBelowProcess(javaOptions) is { } warning)
             context.Report(StepName, AnalysisLogLevel.Warning, warning);
 
+        var wrote = false;
         if (java)
-            await RunJavaAsync(context, scan, javaOptions, databasePath, cancellationToken);
+            wrote |= await RunJavaAsync(context, scan, javaOptions, databasePath, cancellationToken);
         if (struts)
-            await RunStrutsAsync(context, scan, strutsOptions, javaOptions, databasePath, cancellationToken);
+            wrote |= await RunStrutsAsync(context, scan, strutsOptions, javaOptions, databasePath, cancellationToken);
+        // La alcanzabilidad necesita las aristas de javac y las rutas y formularios de Struts: va al final y solo si alguna escribió.
+        if (java && wrote)
+            await RunReachabilityAsync(context, scan, databasePath, cancellationToken);
 
         var (nodes, edges) = await CountAsync(databasePath, cancellationToken);
         return new GraphStatusResult
@@ -111,7 +115,8 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
 
     // ---------------------------------------------------------------- analizador Java
 
-    private static async Task RunJavaAsync(
+    /// <summary>Devuelve si la pasada escribió en el grafo (false si se omitió o falló).</summary>
+    private static async Task<bool> RunJavaAsync(
         PipelineContext context, RepositoryScanResult scan, JavaAnalyzerOptions options, string databasePath, CancellationToken ct)
     {
         var enricher = JavaGraphWriter.EnricherName;
@@ -138,7 +143,7 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
                     context.Report(StepName, AnalysisLogLevel.Info,
                         "ℹ️ Analizador Java: el grafo ya está enriquecido para esta indexación y esta configuración; se omite. "
                         + "Se repite si cbm vuelve a indexar el repositorio (p. ej. con «Forzar reindexación») o si cambia la configuración.");
-                    return;
+                    return false;
                 }
             }
 
@@ -153,7 +158,7 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
                 var removed = await RemoveTestNodesAsync(context, scan, databasePath, ct);
                 await RecordAsync(databasePath, enricher, JavaGraphWriter.EnricherVersion, null, indexFingerprint, configFingerprint,
                     startedAt, stopwatch, EnrichmentRuns.StatusSkipped, ex.Message, ct, removed);
-                return;
+                return false;
             }
 
             toolVersion = jdk.Version;
@@ -191,6 +196,7 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
 
             ReportJavaResult(context, result, stopwatch.Elapsed);
             DeleteIntermediate(context, run.ResultPath, options.KeepIntermediate);
+            return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -203,6 +209,7 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
             var removed = await RemoveTestNodesAsync(context, scan, databasePath, ct);
             await RecordAsync(databasePath, enricher, JavaGraphWriter.EnricherVersion, toolVersion, indexFingerprint, configFingerprint,
                 startedAt, stopwatch, EnrichmentRuns.StatusFailed, ex.Message, ct, removed);
+            return false;
         }
     }
 
@@ -377,7 +384,7 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
 
     // ---------------------------------------------------------------- plugin Struts/JSP
 
-    private static async Task RunStrutsAsync(
+    private static async Task<bool> RunStrutsAsync(
         PipelineContext context, RepositoryScanResult scan, StrutsJspOptions options, JavaAnalyzerOptions javaOptions,
         string databasePath, CancellationToken ct)
     {
@@ -399,7 +406,7 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
                 {
                     context.Report(StepName, AnalysisLogLevel.Info,
                         "ℹ️ Struts/JSP: el grafo ya tiene las acciones y las JSP de esta indexación y esta configuración; se omite.");
-                    return;
+                    return false;
                 }
             }
 
@@ -408,6 +415,7 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
             context.Report(StepName, AnalysisLogLevel.Success,
                 $"✅ Struts/JSP: {P(stats.Actions, "acción", "acciones")}, {N(stats.Jsps)} JSP ({P(stats.Suspicious, "sospechosa", "sospechosas")}), "
                 + $"{P(stats.ForwardsUnresolved, "forward", "forwards")} sin resolver, en {Duration(stopwatch.Elapsed)}.");
+            return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -418,6 +426,36 @@ public sealed class LanguageEnricherStep : IStep<GraphStatusResult, GraphStatusR
             context.Report(StepName, AnalysisLogLevel.Warning, $"⚠️ Struts/JSP: falló: {ex.Message} Se continúa sin las acciones ni las JSP.");
             await RecordAsync(databasePath, enricher, StrutsJspWriter.EnricherVersion, null, indexFingerprint, configFingerprint,
                 startedAt, stopwatch, EnrichmentRuns.StatusFailed, ex.Message, ct);
+            return false;
+        }
+    }
+
+    // ---------------------------------------------------------------- alcanzabilidad y código muerto de Java
+
+    /// <summary>
+    /// <see cref="JavaReachabilityWriter"/> sobre el grafo ya escrito por el analizador Java y el plugin Struts/JSP. Un fallo se
+    /// queda en un aviso: el grafo conserva lo escrito y simplemente no lleva <c>is_reachable</c> ni <c>dead_code_candidate</c>.
+    /// </summary>
+    private static async Task RunReachabilityAsync(PipelineContext context, RepositoryScanResult scan, string databasePath, CancellationToken ct)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var reflection = DynamicInstantiationScanner.Scan(scan, ct);
+            var stats = await JavaReachabilityWriter.ApplyAsync(databasePath, scan, reflection, ct);
+            var roots = stats.Roots.Count == 0 ? "sin raíces" : "raíces: " + string.Join(", ", stats.Roots.Select(r => $"{r.Key} {N(r.Value)}"));
+            context.Report(StepName, AnalysisLogLevel.Success,
+                $"✅ Código muerto de Java: {P(stats.DeadTotal, "candidato", "candidatos")} (alta {N(stats.DeadHigh)}, media {N(stats.DeadMedium)}, "
+                + $"baja {N(stats.DeadLow)}; {P(stats.DeadPrivateMethods, "método privado sin uso", "métodos privados sin uso")}, "
+                + $"{N(stats.KeptForReflection)} conservados por posible reflexión) y {N(stats.Reachable)} alcanzables; {roots}; en {Duration(stopwatch.Elapsed)}.");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            context.Report(StepName, AnalysisLogLevel.Warning, $"⚠️ Código muerto de Java: falló: {ex.Message} Se continúa sin is_reachable ni dead_code_candidate en Java.");
         }
     }
 
