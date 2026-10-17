@@ -65,6 +65,12 @@ public abstract class StepResult : IStepResult
                 continue;
             }
 
+            // An indexer (ParallelResult's this[stepName]) has no value without an argument; templates reach it directly.
+            if (prop.GetIndexParameters().Length > 0)
+            {
+                continue;
+            }
+
             object? value = prop.GetValue(this);
 
             // Add PascalCase

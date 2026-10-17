@@ -1,5 +1,6 @@
 using AITaskAgent.LLM.Constants;
 using AITaskAgent.LLM.Models;
+using Microsoft.Extensions.Logging;
 
 namespace AITaskAgent.Observability.Events;
 
@@ -65,4 +66,11 @@ public sealed record LlmResponseEvent : ProgressEventBase
 
     /// <summary>Tool calls requested by the LLM (only set on final response or tool-call chunks).</summary>
     public List<ToolCall>? ToolCalls { get; init; }
+
+    /// <inheritdoc />
+    /// <remarks>Includes <see cref="Content"/>, as the channel did before this moved here: it is the only event that logs its payload.</remarks>
+    public override void WriteLog(ILogger logger, LogLevel level) =>
+        logger.Log(level,
+            "{EventType} from {StepName} | CorrelationId: {CorrelationId} | IsThinking: {IsThinking} | FinishReason: {FinishReason} | Content: {Content} | Tokens: {Tokens}",
+            EventType, StepName, CorrelationId, IsThinking, FinishReason, Content, TokensUsed);
 }

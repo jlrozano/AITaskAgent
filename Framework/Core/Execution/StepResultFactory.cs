@@ -257,8 +257,9 @@ internal static class StepResultFactory
                 .Contains(typeof(System.Runtime.CompilerServices.IsExternalInit)) ?? false;
             DefaultValueAttribute? defaultValueAttr = prop.GetCustomAttribute<DefaultValueAttribute>();
 
-            // Required si: no nullable + init setter + sin default value
-            if (!isNullable && hasInitSetter && defaultValueAttr == null)
+            // Required si: [Required] explícito, o no nullable + init setter + sin default value
+            if (Attribute.IsDefined(prop, typeof(RequiredAttribute), inherit: true)
+                || (!isNullable && hasInitSetter && defaultValueAttr == null))
             {
                 if (!requiredProperties.Contains(propertyName))
                 {
@@ -514,12 +515,15 @@ internal static class StepResultFactory
             switch (attribute)
             {
                 case RangeAttribute rangeAttr:
-                    if (rangeAttr.Minimum != null && schema.Type == JsonObjectType.Number)
+                    // int and long are emitted as Integer, so Range must apply to both numeric kinds.
+                    bool isNumeric = (schema.Type & (JsonObjectType.Number | JsonObjectType.Integer)) != 0;
+
+                    if (rangeAttr.Minimum != null && isNumeric)
                     {
                         schema.Minimum = Convert.ToDecimal(rangeAttr.Minimum);
                     }
 
-                    if (rangeAttr.Maximum != null && schema.Type == JsonObjectType.Number)
+                    if (rangeAttr.Maximum != null && isNumeric)
                     {
                         schema.Maximum = Convert.ToDecimal(rangeAttr.Maximum);
                     }

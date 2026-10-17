@@ -39,4 +39,43 @@ public class StepResultFactorySchemaTests
 
         Assert.IsType<SelfRefStepResult>(instance);
     }
+
+    private sealed class AnnotatedType
+    {
+        [System.ComponentModel.DataAnnotations.Range(1, 10)]
+        public int Count { get; set; }
+
+        [System.ComponentModel.DataAnnotations.Range(0.5, 2.5)]
+        public double Ratio { get; set; }
+
+        [System.ComponentModel.DataAnnotations.Required]
+        public string? Title { get; set; }
+
+        public string? Note { get; set; }
+    }
+
+    private sealed class AnnotatedStepResult(IStep step, AnnotatedType? value = default)
+        : StepResult<AnnotatedType>(step, value);
+
+    [Fact]
+    public void Range_applies_to_integer_and_number_and_Required_marks_the_property()
+    {
+        var schema = StepResultFactory.GetStepActivatorInfo(typeof(AnnotatedStepResult)).JsonSchema!;
+
+        Assert.Equal(1m, schema.Properties["count"].Minimum);
+        Assert.Equal(10m, schema.Properties["count"].Maximum);
+        Assert.Equal(0.5m, schema.Properties["ratio"].Minimum);
+        Assert.Contains("title", schema.RequiredProperties);
+        Assert.DoesNotContain("note", schema.RequiredProperties);
+    }
+
+    [Fact]
+    public void GetParameters_skips_the_indexer_of_ParallelResult()
+    {
+        var result = new ParallelResult(new EmptyStep("P"));
+
+        var parameters = result.GetParameters();
+
+        Assert.DoesNotContain("Item", parameters.Keys);
+    }
 }

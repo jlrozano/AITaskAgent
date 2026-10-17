@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace AITaskAgent.Observability.Events;
 
 /// <summary>
@@ -24,4 +26,9 @@ public abstract record ProgressEventBase : IProgressEvent
 
     /// <inheritdoc />
     public string SchemaVersion { get; init; } = "1.0";
+
+    /// <inheritdoc />
+    /// <remarks>Override to log the fields specific to an event type.</remarks>
+    public virtual void WriteLog(ILogger logger, LogLevel level) =>
+        logger.Log(level, IProgressEvent.CommonLogFormat, EventType, StepName, CorrelationId);
 }

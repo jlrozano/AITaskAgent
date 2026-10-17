@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace AITaskAgent.Observability;
 
 /// <summary>
@@ -6,6 +8,9 @@ namespace AITaskAgent.Observability;
 /// </summary>
 public interface IProgressEvent
 {
+    /// <summary>Message template of the common log line: the fields every event has.</summary>
+    const string CommonLogFormat = "{EventType} from {StepName} | CorrelationId: {CorrelationId}";
+
     /// <summary>Name of the step emitting this event.</summary>
     string StepName { get; }
 
@@ -23,5 +28,12 @@ public interface IProgressEvent
 
     /// <summary>Schema version for backward compatibility and evolution tracking.</summary>
     string SchemaVersion { get; }
+
+    /// <summary>
+    /// Writes this event to <paramref name="logger"/>. The channel decides whether and at which level events are
+    /// logged; each event decides which of its own fields appear. The default writes the common fields only.
+    /// </summary>
+    void WriteLog(ILogger logger, LogLevel level) =>
+        logger.Log(level, CommonLogFormat, EventType, StepName, CorrelationId);
 }
 
