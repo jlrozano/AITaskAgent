@@ -81,3 +81,6 @@ Samples/CodebaseAnalysisWeb/wwwroot/
 
 # Salida de analizar este repositorio con CodebaseAnalysis (grafo, conocimiento, backups)
 .codebase/
+
+# Local handover notes (not shared)
+docs/RETOMAR.md
