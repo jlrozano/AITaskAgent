@@ -493,11 +493,11 @@ public sealed class SharedPassReaderTests(ITestOutputHelper output) : IDisposabl
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
         {
-            var candidate = Path.Combine(dir.FullName, "docs", "experimentos", "2026-10-16-pasada-compartida");
+            var candidate = Path.Combine(dir.FullName, "Fixtures", "shared-pass-2026-10-16");
             if (Directory.Exists(candidate))
                 return candidate;
         }
-        throw new DirectoryNotFoundException("docs/experimentos/2026-10-16-pasada-compartida");
+        throw new DirectoryNotFoundException("Fixtures/shared-pass-2026-10-16");
     }
 
     /// <summary>

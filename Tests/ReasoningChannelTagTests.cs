@@ -23,7 +23,7 @@ namespace AITaskAgent.Tests;
 ///    tool calls, leaving Content empty. Tag processing only ever looked at Content, so the write
 ///    was silently dropped. The design decision (2026-09-04) is that a tag is a tag wherever the
 ///    model wrote it: one scanner runs over reasoning and content alike, in both transports, and
-///    processes each tag when it closes. (Recorded trade-off, D2 in docs/project_notes: a draft
+///    processes each tag when it closes. (Recorded trade-off: a draft
 ///    skeleton in the reasoning executes too.)
 /// 2. The assistant message persisted alongside the tool calls hardcoded Content = string.Empty,
 ///    so even the record of the attempt vanished from the history. The model could not tell it had

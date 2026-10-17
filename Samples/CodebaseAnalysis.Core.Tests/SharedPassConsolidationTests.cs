@@ -22,11 +22,11 @@ public sealed class SharedPassConsolidationTests(ITestOutputHelper output) : IDi
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
         {
-            var candidate = Path.Combine(dir.FullName, "docs", "experimentos", "2026-10-16-pasada-compartida");
+            var candidate = Path.Combine(dir.FullName, "Fixtures", "shared-pass-2026-10-16");
             if (Directory.Exists(candidate))
                 return candidate;
         }
-        throw new DirectoryNotFoundException("docs/experimentos/2026-10-16-pasada-compartida");
+        throw new DirectoryNotFoundException("Fixtures/shared-pass-2026-10-16");
     }
 
     /// <summary>Los 230 hallazgos de <c>findings_all.json</c>, un lote por su campo <c>batch</c>, leídos con el lector de D2.</summary>

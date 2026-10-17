@@ -6,7 +6,7 @@ namespace CodebaseAnalysis.Core.Tests;
 
 /// <summary>
 /// D1 sobre la corrida real de <c>Framework</c> (<c>m\fw</c>): el mismo tamaño que el experimento de la pasada compartida
-/// (docs/experimentos/2026-10-16-pasada-compartida: 11 lotes, 177 ficheros, ~202 k tokens) y un lote más (12, ver la aserción). Opcional: sin la BD o sin
+/// (fixtures Fixtures/shared-pass-2026-10-16: 11 lotes, 177 ficheros, ~202 k tokens) y un lote más (12, ver la aserción). Opcional: sin la BD o sin
 /// el mapa de dominios de esa máquina no comprueba nada. Solo lee.
 /// </summary>
 public sealed class SharedPassFrameworkTests(ITestOutputHelper output)

@@ -73,7 +73,7 @@ public sealed class ParityTests(ITestOutputHelper output)
     /// <summary>
     /// Propiedades que cambian a propósito frente al original, por etiqueta de nodo. Todo lo demás tiene que coincidir.
     /// El original las calculaba con las aristas CALLS/USAGE de cbm, que resuelve por nombre; ahora salen de las
-    /// referencias exactas de Roslyn (tanda 2 del informe 2026-09-30-uso-de-roslyn-y-javac).
+    /// referencias exactas de Roslyn (tanda 2 del enriquecimiento con Roslyn).
     /// </summary>
     private static readonly (string[] Labels, string[] Properties, string Why)[] IntendedProperties =
     [

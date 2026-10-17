@@ -16,7 +16,7 @@ public sealed record LlmBatchOutput
 /// <summary>
 /// Lector de los ficheros del registro de la pasada compartida: <c>registry.json</c> (hallazgos consolidados) y la salida de cada
 /// lote (resúmenes de ficheros y tipos, contratos de miembros y hallazgos). Formato del experimento
-/// <c>docs/experimentos/2026-10-16-pasada-compartida</c>; los campos que faltan quedan vacíos.
+/// <c>Samples/CodebaseAnalysis.Core.Tests/Fixtures/shared-pass-2026-10-16</c>; los campos que faltan quedan vacíos.
 /// </summary>
 public static class LlmRegistryJson
 {

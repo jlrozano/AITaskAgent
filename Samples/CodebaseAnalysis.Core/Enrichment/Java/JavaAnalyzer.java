@@ -1,7 +1,6 @@
 /*
  * JavaAnalyzer (analyzerVersion "4", schema 3): analizador Java del enriquecimiento nativo del grafo
- * (docs/plans/2026-09-28-enriquecimiento-nativo-java-plan.md, T2; registros field y ref en
- * docs/plans/2026-09-29-referencias-tipos-campos-plan.md, Q1-Q4). Un solo fichero, Java 17, sin dependencias.
+ * (incluye los registros field y ref). Un solo fichero, Java 17, sin dependencias.
  *
  * Uso (source launcher, sin paso de compilacion):
  *   java <JvmOptions> --add-exports jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED
@@ -49,7 +48,7 @@
  * project; los demas se cuentan en summary.refs (type y field por origen, contexts de los refs de tipo del proyecto por
  * ocurrencia, records, selfExcluded, unresolvedByReason) junto a summary.fields.
  *
- * Schema 3 (referencias exactas, patrones de error y comentarios; docs/auditoria/2026-09-30-uso-de-roslyn-y-javac.md, tandas 2-4).
+ * Schema 3 (referencias exactas, patrones de error y comentarios).
  * call: kind "ref" para X::m (la linea es la del nombre). method: "isOverride" (sobrescribe o implementa cualquier metodo, tambien del
  * JDK), "overrides" (keys de los metodos del proyecto que sobrescribe o implementa, el mas cercano por cada camino de supertipos) y
  * "docSource" (javadoc | comment). type: "outer" (FQN del tipo con nombre que lo contiene o null) y "docSource"; field: "docSource".

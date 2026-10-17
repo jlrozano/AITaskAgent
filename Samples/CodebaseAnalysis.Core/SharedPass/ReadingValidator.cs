@@ -84,7 +84,7 @@ public sealed record ReadingValidation(BatchReading Valid, IReadOnlyList<Rejecte
 public sealed record RejectedFinding(ReadFinding Finding, string Reason);
 
 /// <summary>
-/// La validación en cascada de D2 (port de <c>scripts/validate.py</c> del experimento) tras la de esquema
+/// La validación en cascada de D2 (port del <c>validate.py</c> del experimento de la pasada compartida) tras la de esquema
 /// (<see cref="BatchReadingJson.Parse"/>):
 /// <list type="number">
 /// <item><b>cobertura</b>: cada fichero del lote en <c>files</c>; cada tipo y cada método del grafo con su entrada (por ruta y

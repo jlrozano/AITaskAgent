@@ -27,11 +27,11 @@ public sealed class LlmRegistryGraphTests(ITestOutputHelper output) : IDisposabl
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
         {
-            var candidate = Path.Combine(dir.FullName, "docs", "experimentos", "2026-10-16-pasada-compartida");
+            var candidate = Path.Combine(dir.FullName, "Fixtures", "shared-pass-2026-10-16");
             if (Directory.Exists(candidate))
                 return candidate;
         }
-        throw new DirectoryNotFoundException("docs/experimentos/2026-10-16-pasada-compartida no está en ningún directorio superior");
+        throw new DirectoryNotFoundException("Fixtures/shared-pass-2026-10-16 no está en ningún directorio superior");
     }
 
     private static IReadOnlyList<LlmFindingRecord> Registry() =>
