@@ -143,7 +143,9 @@ public sealed class UserChoiceChip
 `Question` and `UserChoiceChip` exist so a conversational UI can render a single closed
 clarification question with selectable chips instead of a free-text prompt. When
 `UserFeedback.NeedMoreInfo` is true the analyzer serializes the feedback into the conversation as
-an assistant message, so the next turn continues from the clarification.
+an assistant message, so the next turn continues from the clarification. In every successful case
+it first removes the raw JSON assistant reply that `BaseLlmStep` recorded, so without
+`NeedMoreInfo` the turn leaves only the user message in the conversation.
 
 Every property carries a `[Description]` attribute; those descriptions are what the model sees in
 the generated JSON schema, so they are part of the prompt contract, not just documentation.
@@ -167,7 +169,8 @@ if (_step is IRouterOptions options &&
 This is a structural validation, so `RetryMiddleware` handles it: the error text is fed back into
 the conversation and the step is retried (up to `MaxRetries`). The model sees exactly which option
 names are legal and normally corrects itself on the next attempt — a hallucinated option never
-reaches the router.
+reaches the router. If every attempt invents an option, the step ends with that last validation
+message as its error and the pipeline stops.
 
 A `StepValidationEvent` with `ValidationType = "structural"` is emitted for each failed attempt.
 
@@ -190,7 +193,7 @@ public sealed class RouterStep(
 - If no route matches and `DefaultRoute` is null, the step throws
   `InvalidOperationException: No route for intention X and no default route`.
 - The selected step is appended to `input.NextSteps`, so the pipeline runs it next and then resumes
-  the parent flow.
+  the parent flow. The pipeline result is then the routed step's result, not the analyzer's.
 
 ### Usage
 
@@ -272,6 +275,8 @@ var analyzer = new IntentionAnalyzerStep<LlmStringStepResult>(
 analyzer.SetVariable("customerType", "premium");
 ```
 
-With an `ITemplateProvider`, `promptTemplateName` and `systemPromptTemplateName` are treated as
-template **names** resolved by the provider instead of inline text. See
-[LLM Steps](llm-steps.md) for the template syntax.
+With an `ITemplateProvider`, `promptTemplateName` is treated as a template **name** resolved by the
+provider instead of inline text (when it is omitted, the default `{{ input }}` is looked up as a
+name, and not being found, is sent unrendered — pass a name explicitly). `systemPromptTemplateName`
+is always inline text: the analyzer composes the system prompt itself and renders it without the
+provider. See [LLM Steps](llm-steps.md) for the template syntax.

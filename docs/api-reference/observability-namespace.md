@@ -48,7 +48,9 @@ await foreach (var evt in reader.Reader.ReadAllAsync(cancellationToken))
 ```
 
 Handlers always receive `IProgressEvent`; filter by type yourself. Events with
-`SuppressFromUser = true` are logged but never delivered to subscribers.
+`SuppressFromUser = true` are never delivered to subscribers, but they still go through automatic
+logging: before routing, the channel calls `evt.WriteLog(logger, eventLogLevel)` for every event,
+unless the level is `LogLevel.None`, in which case nothing is logged.
 
 ```csharp
 public interface IEventSubscription : IAsyncDisposable
@@ -57,8 +59,11 @@ public interface IEventSubscription : IAsyncDisposable
 }
 ```
 
-`EventChannelOptions` controls the automatic logging level (`EventLogLevel`, default `None`) and
-the buffer size (`ChannelCapacity`, default 1000).
+The automatic logging level is the `eventLogLevel` constructor argument (default
+`LogLevel.Information`); the DI registration passes `AITaskAgentOptions.Observability.EventLogLevel`
+(default `LogLevel.Debug`). `EventChannelOptions` (`EventLogLevel`, default `None`;
+`ChannelCapacity`, default 1000) is public, but `EventChannel` builds its own instance from the
+constructor argument, so the per-subscriber buffer of `Subscribe` is always 1000.
 
 **Source:** [EventChannel.cs](../../Framework/Observability/EventChannel.cs)
 
@@ -79,11 +84,22 @@ public abstract record ProgressEventBase : IProgressEvent
     public string? CorrelationId { get; init; }
     public bool SuppressFromUser { get; init; }   // controls UI visibility
     public string SchemaVersion { get; init; } = "1.0";
+
+    // Override to log the fields specific to an event type.
+    public virtual void WriteLog(ILogger logger, LogLevel level);
 }
 ```
 
 `StepName` is not `required`; it defaults to an empty string. `SchemaVersion` is new and exists so
 event payloads can evolve without breaking consumers.
+
+`WriteLog` is how `EventChannel` logs an event: the channel decides whether and at which level, the
+event decides which of its fields appear. The base implementation writes only the common fields
+with the template `IProgressEvent.CommonLogFormat`
+(`"{EventType} from {StepName} | CorrelationId: {CorrelationId}"`), the same thing the default
+interface implementation of `IProgressEvent.WriteLog` does for events that do not derive from this
+record (such as `StepProgressEvent`). Override it in a derived event to log its own payload;
+`LlmResponseEvent` is the only built-in event that does.
 
 ---
 
@@ -232,7 +248,7 @@ public sealed record StepValidationEvent : ProgressEventBase
     public bool IsValid { get; init; }
     public string? StepPath { get; init; }
     public string? ValidationError { get; init; }
-    public string ValidationType { get; init; } = "Structural";   // or "Semantic"
+    public string ValidationType { get; init; } = "structural";   // or "semantic"
     public int AttemptNumber { get; init; } = 1;
 }
 ```
@@ -325,14 +341,23 @@ public sealed record LlmResponseEvent : ProgressEventBase
     public string? RawFinishReason { get; init; }
     public bool IsThinking { get; init; }
     public int TokensUsed { get; init; }
+    public int? PromptTokens { get; init; }
+    public int? CompletionTokens { get; init; }
+    public int? CachedPromptTokens { get; init; }
+    public decimal? CostUsd { get; init; }
     public string? Model { get; init; }
     public string? Provider { get; init; }
     public List<ToolCall>? ToolCalls { get; init; }
+
+    public override void WriteLog(ILogger logger, LogLevel level);   // common fields + IsThinking, FinishReason, Content, TokensUsed
 }
 ```
 
 `FinishReason.Streaming` marks an incremental chunk; `IsThinking` marks reasoning traces, and
-`ChoiceIndex` identifies the candidate when the model returns several.
+`ChoiceIndex` identifies the candidate when the model returns several. `PromptTokens`,
+`CompletionTokens`, `CachedPromptTokens` and `CostUsd` are only set on the final event of the
+primary choice (so summing them over a run counts each call once) and are `null` when the service
+reports no split, no cache figure or the model has no price in `LlmProvider.Models`.
 
 ---
 

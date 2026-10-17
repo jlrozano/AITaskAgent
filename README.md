@@ -71,9 +71,12 @@ result.NextSteps.Add(new AdditionalStep());
 ```csharp
 using AITaskAgent.Configuration;
 using AITaskAgent.Core.Execution;
+using AITaskAgent.Core.StepResults;
 using AITaskAgent.Core.Steps;
+using Microsoft.Extensions.DependencyInjection;
 
-// Register services, then initialise the framework's static factories
+// Register services, then initialise the framework's static factories.
+// `services` must already hold an IConfiguration (the generic host registers one).
 services.AddAITaskAgent();
 var provider = services.BuildServiceProvider();
 provider.UseAITaskAgent();
@@ -167,6 +170,7 @@ steps:
 | Microsoft.CodeAnalysis.CSharp | 5.0.0 | Compiling YAML schemas into real types at startup |
 | Microsoft.ClearScript.V8 | 7.5.0 | Running JavaScript validation embedded in schemas |
 | Google.GenAI | 0.10.0 | Gemini provider |
+| OpenAI | 2.7.0 | Referenced by `Framework/AITaskAgent.csproj`; no code in the repository uses it |
 
 The OpenAI provider talks HTTP directly rather than through the official SDK, which is what lets it
 work against any OpenAI-compatible endpoint (OpenRouter, Groq, Ollama, …) and pass vendor-specific

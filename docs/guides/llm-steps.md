@@ -31,7 +31,7 @@ var role = env.Roles["default"];
 var llmStep = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>(
     name: "AnalyzeText",
     role: role,
-    prompt: "Analyze: {{ input }}",
+    prompt: "Analyze the sentiment of the last user message.",
     systemPrompt: "You are an analyst.")
 {
     Tools = [new SearchTool(), new CalculatorTool()],
@@ -46,7 +46,7 @@ var llmStep = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>(
 |-----------|------|-------------|
 | `name` | `string` | Step identifier; also the key under which the result is cached |
 | `role` | `LlmRole` | Provider, model, inference settings, fallbacks, default system prompt |
-| `prompt` | `string` | User message (template text) |
+| `prompt` | `string` | User message, sent **verbatim**: `BaseLlmStep` renders no template, so `{{ input }}` would reach the model literally. Use `TemplateLlmStep` (or override `BuildUserMessageAsync`) to render one |
 | `systemPrompt` | `string?` | Overrides `role.SystemPrompt` when supplied |
 
 ### Notable properties
@@ -77,17 +77,19 @@ public TemplateLlmStep(
 var step = new TemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
     name: "TemplatedAnalysis",
     role: role,
-    templateProvider: new FileTemplateProvider("./templates"),
     tools: ["web_search"],
-    promtTemplateString: "Analyze the following data: {{ input }}\nFocus on: {{ context.focus }}");
+    promtTemplateString: "Analyze the following data: {{ input }}\nFocus on: {{ context.focus }}",
+    systemTemplateString: "You are a data analyst.");
 
 step.SetVariable("focus", "trends");
 ```
 
 When `promtTemplateString` / `systemTemplateString` are omitted they default to the template
-**names** `"{name}_promt.md"` and `role.SystemPrompt ?? "{name}_system.md"`, resolved by the
-provider. The `tools` argument is a list of tool **names**, resolved through
-`AvailableTools.Instance`.
+**names** `"{name}_prompt.md"` and `role.SystemPrompt ?? "{name}_system.md"`, resolved by the
+provider. Without a `templateProvider` those defaults are rendered as inline text, so the model
+receives the literal string `"{name}_prompt.md"`: pass the template strings explicitly in that case.
+The `tools` argument is a list of tool **names**, resolved through `AvailableTools.Instance`; it
+replaces `role.Tools` (no names means no tools).
 
 ### The template model
 
@@ -106,7 +108,11 @@ Keys are matched case-insensitively. Formatters are **pipes**:
 {{ input.items | yaml }}
 {{ context.name | upcase }}
 {{ context.total | default "0" }}
+{{ context.total ?? 0 }}
 ```
+
+`default` only replaces a value that exists but is empty; a key that does not resolve at all renders
+empty unless you use the `?? fallback` form.
 
 Available filters: `json`, `yaml`, `upcase`, `downcase`, `capitalize`, `strip`, `date`, `default`,
 `csv`, `size`. The engine also supports `{{ include 'path' }}`, the legacy `@[path]` include form,
@@ -131,14 +137,18 @@ public sealed class FileTemplateProvider(
     : ITemplateProvider
 ```
 
-Templates are files under `folderPath` (markdown by convention), looked up by the **file name
-including its extension** — which is why `TemplateLlmStep` defaults to `"{name}_promt.md"` and
-`"{name}_system.md"`. Paths that escape `folderPath` are rejected.
+Templates are `.md` files under `folderPath`. The provider **appends `.md`** to the name it is
+given: `GetTemplate("Analyze_prompt")` reads `Analyze_prompt.md`. Note that `TemplateLlmStep`'s
+default names already end in `.md` (`"{name}_prompt.md"`), so with this provider they resolve to
+`{name}_prompt.md.md`. Paths that escape `folderPath` are rejected.
 
-The provider keeps an LRU + TTL + size-bounded cache, and is deliberately forgiving: when the file
-does not exist it returns the *name itself*, so an inline template string passed where a name was
-expected still renders. Set `validateTemplates: true` to make a genuinely missing template throw
-`FileNotFoundException` instead.
+The provider keeps an LRU + TTL + size-bounded cache. When the file does not exist `Render` returns
+`null`, and `TemplateLlmStep` then uses the name it passed **as is, unrendered**: an inline template
+string passed together with a provider reaches the model with its `{{ }}` placeholders intact. Set
+`validateTemplates: true` to make a missing template throw `FileNotFoundException` instead.
+
+With a provider, pass template **names** (`templateProvider: new FileTemplateProvider("./templates")`,
+`promtTemplateString: "Analyze_prompt"`); without one, the strings are the templates themselves.
 
 `StatelessTemplateLlmStep` is the same thing on a throwaway conversation: it does not append to the
 pipeline conversation, which makes it the right choice for classifiers and side queries.
@@ -166,16 +176,22 @@ Exceptions are **not** retried — they are treated as system failures. Only err
 
 ## Provider Fallback
 
-`BaseLlmStep` implements `IFallbackable`. When an attempt fails, the step can switch to the next
-entry of `role.Fallbacks` (or the global `FallbackProviders` list). `RetryMiddleware` then
-**resets the attempt counter to 1**, so a fresh provider gets a full retry budget instead of
-inheriting the exhausted one.
+`BaseLlmStep` implements `IFallbackable`. When an attempt fails with a provider error (an error
+whose `OriginalException` is an `LlmProviderException`), the step switches to the next entry of
+`role.Fallbacks` (or the global `FallbackProviders` list when the role has none). Any other failure
+— a tool-iteration limit, a parsing or template bug, a cancellation — does not switch.
+`RetryMiddleware` then **resets the attempt counter to 1**, so a fresh provider gets a full retry
+budget instead of inheriting the exhausted one.
 
 ```csharp
-protected ILlmService LlmService { get; }   // current provider's service
-protected string Model { get; }             // current model
-protected LlmProvider Provider { get; }     // current provider
+protected ILlmService GetLlmService(PipelineContext context);          // current provider's service
+protected string GetModel(PipelineContext context);                    // current model
+protected LlmProvider GetProvider(PipelineContext context);            // current provider
+protected LlmInferenceSettings GetInference(PipelineContext context);  // current inference settings
 ```
+
+The fallback position lives in per-invocation state inside the `PipelineContext`, not in the step
+instance, which is why these take the context.
 
 These reflect the *active* fallback position, not the role's primary entry.
 
@@ -185,15 +201,18 @@ Tools are executed iteratively until the LLM returns a response without tool cal
 
 ```csharp
 var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>(
-    "ResearchAgent", role, "{{ input }}")
+    "ResearchAgent", role, "Research the topic the user asked about.")
 {
     Tools = [new WebSearchTool(), new DatabaseQueryTool()],
     MaxToolIterations = 5
 };
 ```
 
-Repetition of the same tool calls cuts the loop early — three repeats when every tool in the batch
-is `IsReadOnly`, one otherwise. See [Tools Advanced](tools-advanced.md).
+Repetition of the same tool calls cuts the loop early, turning the response into a final one that
+tells the model why: a read-only call (`IsReadOnly`) is cut when the same call appears in 3 of the
+last 10 iterations, consecutive or not (an iteration whose response executed an action tag counts
+as progress and restarts the count); a batch containing a non-read-only call is cut when it repeats
+identically on consecutive iterations for the second time. See [Tools Advanced](tools-advanced.md).
 
 ## Streaming
 
@@ -248,6 +267,8 @@ public sealed class LlmResult
     public int? TokensUsed { get; init; }
     public int? PromptTokens { get; init; }
     public int? CompletionTokens { get; init; }
+    public int? ReasoningTokens { get; init; }
+    public int? CachedPromptTokens { get; init; }
     public decimal? CostUsd { get; internal set; }                // filled by BaseLlmStep
     public string? Model { get; init; }
     public object? NativeResponse { get; init; }
@@ -270,12 +291,16 @@ public sealed record LlmResponse
     public FinishReason? FinishReason { get; init; }
     public string? RawFinishReason { get; init; }
     public List<ToolCall>? ToolCalls { get; init; }
+    public string? ToolLoopStopMessage { get; init; }   // set when the step cut a repeating tool loop
 }
 ```
 
 `LlmResult` follows the Result pattern for provider-level failures: build it with
-`LlmResult.Success(...)` or `LlmResult.Failure(error, isRetriable)` instead of throwing. Only
-`IsRetriable` failures are worth another attempt; the rest go straight to the fallback chain.
+`LlmResult.Success(...)` or `LlmResult.Failure(error, isRetriable)` instead of throwing.
+`IsRetriable` is consumed by the provider services themselves (`OpenAILlmService`,
+`GeminiLlmService`), which retry those failures internally with the delays of their `RetryPolicy`.
+Whatever failure reaches the step, retriable or not, is wrapped in an `LlmProviderException`, is not
+retried by `RetryMiddleware`, and goes to the fallback chain.
 
 ## JSON Response Parsing
 
@@ -283,11 +308,16 @@ For typed results, the step:
 
 1. Generates a JSON schema from `TOut`'s value type
 2. Uses native structured output when the **provider's** `Inference.JsonSupport` is `true`;
-   otherwise it requests plain JSON mode and injects the schema into the system prompt
-3. Parses the response and runs structural validation, retrying with the parse error as feedback
+   otherwise it injects the schema into the system prompt (no JSON mode is requested)
+3. Deserializes the response; a parse failure is a recoverable error, retried with the parse error
+   as feedback. The parsed value is **not** validated against the schema — the schema only guides
+   the model — so add structural or semantic validation if you need its constraints enforced
 
 `[Description]` attributes on the value type become part of the schema the model sees, so they are
-prompt surface, not just documentation:
+prompt surface, not just documentation. Data annotations are translated too: `[Required]` marks the
+property as required, `[Range]` sets minimum/maximum on integer and floating-point properties, and
+`[StringLength]`, `[MinLength]`, `[MaxLength]`, `[RegularExpression]`, `[EmailAddress]` and `[Url]`
+map to their schema keywords; `[ExcludeFromLlmSchema]` hides a property:
 
 ```csharp
 public sealed class Analysis
@@ -300,7 +330,7 @@ public sealed class Analysis
 }
 
 var step = new BaseLlmStep<LlmStringStepResult, LlmStepResult<Analysis>>(
-    "Analyze", role, "{{ input }}");
+    "Analyze", role, "Analyze the last user message.");
 ```
 
 For open-weight models whose tool-call formatting is non-standard, see

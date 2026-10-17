@@ -21,10 +21,10 @@ DotNetEnricher enrich --solution <.sln|.slnx> --db <copia del grafo> [--repo-roo
 ```
 
 - `--repo-root` es la raíz del repositorio analizado, la que usó cbm para el `file_path` y los qualified_names. La app la pasa siempre. Sin ella se toma la carpeta con `.git` más cercana por encima de la solución, o la de la solución si no hay ninguna. El original usaba siempre la carpeta de la solución, y con la solución en `src/` los QN no casaban.
-- `--project` es el proyecto de cbm. Por defecto se toma el mayoritario en la tabla `nodes`, con la misma lógica que `GraphProject.ResolveAsync` de la app. La app ya no lo pasa: antes lo deducía del nombre de la carpeta de la solución, no casaba con el de cbm, fallaban todos los patches y se creaba un segundo proyecto en el grafo.
+- `--project` es el proyecto de cbm. Por defecto se toma el mayoritario en la tabla `nodes`, con la misma lógica que `GraphProject.ResolveAsync` de la app. La app solo lo pasa si se configura `DotNetEnricher:ProjectName`: antes lo deducía del nombre de la carpeta de la solución, no casaba con el de cbm, fallaban todos los patches y se creaba un segundo proyecto en el grafo.
 - `--verbose` muestra el progreso de cada enriquecedor. Los avisos de carga de la solución (`WorkspaceFailed`) salen siempre, porque un proyecto que no carga sus documentos es la causa habitual de un enriquecimiento vacío.
 
-- `--restore` (`auto` por defecto; también `siempre`/`nunca`), `--restore-timeout` (300 s) y `--cache-dir` controlan la restauración de paquetes NuGet (sección siguiente). La app los pasa desde `DotNetEnricher:Restore`, `DotNetEnricher:RestoreTimeoutSeconds` y `<carpeta de la BD>/enrichment/dotnet-restore`.
+- `--restore` (`auto` por defecto, `always`/`siempre` o `never`/`nunca`; un valor desconocido se avisa y se usa `auto`), `--restore-timeout` (300 s; 0 = sin límite) y `--cache-dir` (por defecto `%LOCALAPPDATA%/DotNetEnricher/restore/<hash de la solución>`) controlan la restauración de paquetes NuGet (sección siguiente). La app los pasa desde `DotNetEnricher:Restore`, `DotNetEnricher:RestoreTimeoutSeconds` y `<carpeta de la BD>/enrichment/dotnet-restore`.
 
 La BD tiene que ser la copia del análisis: el CLI se niega a escribir en la caché de cbm (`~/.cache/codebase-memory-mcp`).
 
@@ -43,7 +43,7 @@ Sin `project.assets.json` Roslyn no resuelve los paquetes NuGet (p. ej. `SqlConn
 | 0 | Correcto. |
 | 2 | Correcto con avisos: algún enriquecedor no encontró en el grafo más del 5 % de los nodos que buscaba. |
 | 1 | Argumentos o entradas que no sirven: no existe la solución o la BD, la solución no está dentro de la raíz o el grafo no tiene nodos. |
-| 3 | La solución no se pudo cargar o no tiene ningún proyecto C# con código. |
+| 3 | No se encontró MSBuild (SDK de .NET), la solución no se pudo cargar o no tiene ningún proyecto C# con código. |
 | 4 | Fallo durante el enriquecimiento. La transacción se deshace y el grafo queda como estaba. |
 
 El original devolvía 0 aunque faltaran la solución o la BD. La app trata 0 y 2 como éxito; con cualquier otro código, o si se agota el tiempo, avisa y sigue con el enriquecimiento por LLM (`SemanticEnrichmentStep`), salvo con `DotNetEnricher:Required`.
@@ -60,7 +60,7 @@ Toda la pasada va por una sola conexión y una sola transacción, con el mismo p
 
 Antes de enriquecer, la pasada retira del grafo lo que cbm indexó de `bin/`, `obj/` y los ficheros generados (`*.g.cs`, `*.Designer.cs`, `*.AssemblyInfo.cs`, `TemporaryGeneratedFile_*`…; `GeneratedArtifacts`, también enlazado): sin ello los totales, métricas, ciclos y comunidades cuentan salida de compilación.
 
-El nombre y la versión de la pasada (`DotNetEnricherIdentity`), las marcas (`EnrichmentMarks`), el registro (`EnrichmentRuns`) y la resolución del proyecto (`GraphProject`) son ficheros de `CodebaseAnalysis.Core` enlazados en este proyecto. No se referencia Core porque traería al proceso el Framework y el cliente del LLM, y esos ficheros solo dependen de `Microsoft.Data.Sqlite`.
+El nombre y la versión de la pasada (`DotNetEnricherIdentity`, ahora la 5), las marcas (`EnrichmentMarks`), el registro (`EnrichmentRuns`), la resolución del proyecto (`GraphProject`), la retirada de ficheros generados (`GeneratedArtifacts`), el modo de restauración (`DotNetRestoreMode`) y los nombres de credencial (`CredentialNames`) son ficheros de `CodebaseAnalysis.Core` enlazados en este proyecto. No se referencia Core porque traería al proceso el Framework y el cliente del LLM, y esos ficheros solo dependen de `Microsoft.Data.Sqlite`.
 
 ## Enriquecedores
 
@@ -73,7 +73,7 @@ Se ejecutan por este orden:
 | `CallEnricher` | Aristas `CALLS` exactas desde las referencias de Roslyn en lugar de las de cbm (sección «Llamadas y excepciones»). Va antes de `ProjectEnricher` y `GraphAnalyticsEnricher`, que las leen. |
 | `DiEnricher` | Nodos `DiRegistration` (`_di_.{servicio}->{implementación}`) con `consumer_count` (quién consume el servicio, por referencias de Roslyn), aristas `DI_RESOLVES` y `di_lifetime`/`di_registered_as` en la implementación. |
 | `RouteEnricher` | Nodos `Route` (`__route__{VERBO}__{ruta}`) de controllers y Minimal APIs, con `MapGroup` anidados, `auth_required` (explícito `false` si no se declara nada y no hay protección global) y contrato; aristas `HANDLES` desde el método que atiende la ruta. Una lambda como handler deja la ruta huérfana. |
-| `FieldEnricher` | Nodos `Field` con `field_name`, `type_fqn`, `accessibility`, `is_static`, `is_final` y aristas `DEFINES`, `READS` y `WRITES` exactas, con la forma del analizador Java (las consume `unused_fields`). |
+| `FieldEnricher` | Nodos `Field` con `field_name`, `type_fqn`, `accessibility`, `is_static`, `is_final` y aristas `DEFINES`, `READS` y `WRITES` exactas, con la forma del analizador Java (las consume la faceta `unread_fields`). |
 | `ExtensionPointEnricher` | `language` por extensión; `is_extension_point`/`is_extension_impl` y aristas `EXTENDS_POINT` y `REGISTERED_VIA`. |
 | `IssueEnricher` | `detected_issues` e `issue_rules` por método: diagnósticos del compilador y reglas de sintaxis/operaciones (`async void`, catch que traga, `.Result`/`.Wait()`, `IDisposable` sin liberar, captive dependency). |
 | `ThrowsEnricher` | `throws`, `rethrows`, `rethrow_loses_stack`, `swallows_exceptions` y `swallowed_catches` por método, y aristas `THROWS` exactas (sección «Llamadas y excepciones»). |
@@ -107,7 +107,7 @@ El nombrado de comunidades usa las IDF de `token_vectors`, que crea cbm al index
 
 ## Referencias exactas de Roslyn
 
-`ReferenceIndex` recorre una vez todos los árboles con el modelo semántico (un `GetSymbolInfo` por nombre, más los `new`, inicializadores de constructor, atributos e indexadores) y guarda las referencias a símbolos del código fuente: quién, a qué, en qué línea, y si es una lectura, una escritura, la lista de bases de un tipo o un argumento de una llamada de registro de DI. Hace lo que `SymbolFinder.FindReferencesAsync` por cada símbolo, sin recargar la solución; por eso el CLI no conserva el `Solution`, basta con las compilaciones. Lo comparten `CallEnricher`, `DiEnricher`, `FieldEnricher`, `MetricsEnricher` y `ReachabilityEnricher`. `GraphSymbols` lo cruza con los nodos de cbm por qualified_name.
+`ReferenceIndex` recorre una vez todos los árboles con el modelo semántico (un `GetSymbolInfo` por nombre, más los `new`, inicializadores de constructor, atributos e indexadores) y guarda las referencias a símbolos del código fuente: quién, a qué, en qué línea, y si es una lectura, una escritura, la lista de bases de un tipo o un argumento de una llamada de registro de DI. Hace lo que `SymbolFinder.FindReferencesAsync` por cada símbolo, sin recargar la solución; por eso el CLI no conserva el `Solution`, basta con las compilaciones. Lo comparten `CallEnricher`, `DiEnricher`, `FieldEnricher`, `ConcurrencyEnricher`, `MetricsEnricher` y `ReachabilityEnricher`. `GraphSymbols` lo cruza con los nodos de cbm por qualified_name.
 
 - **Código muerto.** Las aristas entre métodos y tipos C# salen del índice, no de CALLS/USAGE de cbm (que solo se siguen desde nodos que Roslyn no resolvió). Lo que nombra el código de nivel superior (`Program.cs`) o un miembro sin nodo es raíz. Un método privado (ordinario, sin atributos, que no sea explícito de interfaz, manejador de eventos ni `Main`) solo vive si lo referencia código vivo. Un servicio registrado en DI con `consumer_count = 0` ya no es raíz; sí lo son los de `AddHostedService` y los de servicios externos (los resuelve el framework).
 - **`unused_registration`.** `consumer_count = 0`: nadie nombra el tipo del servicio salvo la llamada de registro y la lista de bases de las implementaciones. Cuentan los parámetros de constructor, `GetService<T>`/`GetRequiredService<T>`, `[FromServices]`, `IEnumerable<T>` y las factorías. Sin `consumer_count` (servicio externo, hosted service) no se marca.
@@ -154,9 +154,11 @@ Las `CALLS` de cbm (resueltas por nombre: `strategy` `unique_name`, `suffix_matc
 | `SolutionPath` | vacío | Relativa al repositorio. Por defecto, el primer `.slnx`/`.sln` de la raíz o de sus subcarpetas inmediatas. |
 | `ProjectName` | vacío | Proyecto de cbm; por defecto, el mayoritario en el grafo. |
 | `TimeoutSeconds` | `900` | Límite del proceso; al superarlo se mata. 0 = sin límite. Tiene que quedar por debajo de `CodebaseAnalysis:Timeouts:EnrichMinutes`, que cubre también el fallback. |
+| `Restore` | `auto` | `auto`, `always`/`siempre` o `never`/`nunca` (`--restore`); un valor desconocido se avisa y se usa `auto`. Si no es `auto`, entra en la huella de configuración. |
+| `RestoreTimeoutSeconds` | `300` | Límite de `dotnet restore` (`--restore-timeout`), dentro de `TimeoutSeconds`; 0 = sin límite propio. |
 
 ## Tests
 
-`Samples/DotNetEnricher.Tests` prueba los enriquecedores que consume la app (DI, rutas, flujos, alcanzabilidad, ciclomática, proyectos, métodos, `IMPLEMENTS`, referencias exactas, campos, patrones de error, comentarios, llamadas, excepciones, constructores, APIs sensibles, concurrencia, huellas y procedencia) sobre soluciones pequeñas compiladas sin MSBuild y un grafo con el esquema de cbm, más la transacción, el registro de pasadas y los códigos de salida.
+`Samples/DotNetEnricher.Tests` prueba los enriquecedores que consume la app (DI, rutas, flujos, alcanzabilidad, ciclomática, proyectos, métodos, `IMPLEMENTS`, referencias exactas, campos, patrones de error, comentarios, llamadas, excepciones, constructores, constantes, APIs sensibles, concurrencia, huellas y procedencia) sobre soluciones pequeñas compiladas sin MSBuild y un grafo con el esquema de cbm, más la transacción, el registro de pasadas, la restauración de paquetes y los códigos de salida.
 
 El test de paridad (`[ParityFact]`) indexa una copia de `eval-repos/csharp-simple` con cbm, la enriquece con el BdpGraphEnricher.CLI instalado y con este CLI, y compara nodos, aristas y propiedades admitiendo solo las diferencias buscadas (`IntendedProperties` en `ParityTests`, cada una con su motivo). Se salta si falta cbm, el CLI original o el repositorio; se pueden indicar con `DOTNETENRICHER_PARITY_CBM`, `DOTNETENRICHER_PARITY_BDP_CLI` y `DOTNETENRICHER_PARITY_REPO`. La copia va a `%LOCALAPPDATA%\DotNetEnricherParity`, no a `%TEMP%`, porque el original no enriquece nada bajo una carpeta `Temp`.

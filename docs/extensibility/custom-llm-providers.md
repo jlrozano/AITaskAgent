@@ -42,9 +42,9 @@ exact match first, then substring — against the `Name` of every registered `IL
 means the binder throws at startup rather than silently sending the prompt to another vendor.
 
 ```csharp
-public sealed class OpenAILlmService : ILlmService, IDisposable
+public class OpenAILlmService : ILlmService, IDisposable
 {
-    public string Name => "openai";
+    public virtual string Name => "openai";
     // ...
 }
 ```
@@ -62,12 +62,14 @@ public sealed class OpenAILlmService : ILlmService, IDisposable
 the model catalogue, so it cannot price them. `BaseLlmStep` fills the value in after the call:
 
 ```csharp
-result.CostUsd = Provider.CalculateCost(result.Model ?? Model, result.PromptTokens, result.CompletionTokens);
+// private helper in BaseLlmStep: priced by the model the service reports, then by the requested one
+result.CostUsd = PriceOf(provider, result.Model, model, result.PromptTokens, result.CompletionTokens, result.CachedPromptTokens);
 ```
 
-`LlmProvider.CalculateCost` reads `InputPricePerMillion` / `OutputPricePerMillion` from the
-provider's `Models` list. Report `PromptTokens` and `CompletionTokens` accurately and pricing takes
-care of itself.
+`LlmProvider.CalculateCost` reads `InputPricePerMillion` / `OutputPricePerMillion` (and
+`CachedInputPricePerMillion` for cached prompt tokens) from the provider's `Models` list. Report
+`PromptTokens`, `CompletionTokens` and, if the vendor gives it, `CachedPromptTokens` accurately and
+pricing takes care of itself.
 
 ### Errors are results, not exceptions
 

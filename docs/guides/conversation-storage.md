@@ -49,6 +49,10 @@ services.AddSingleton<IConversationStorage>(
 └── ...
 ```
 
+`basePath` defaults to `"conversations"`. Each file holds `ConversationId`, `MaxTokens`, `Messages`,
+`Metadata`, `StartedAt` and `LastActivityAt`. Bookmarks and the token counter are not persisted: a
+loaded conversation uses the built-in 4-characters-per-token estimator.
+
 ### Usage
 
 ```csharp
@@ -87,7 +91,10 @@ services.AddSingleton<IConversationStorage, InMemoryConversationStorage>();
 ## YamlFileConversationStorage
 
 Same contract as `FileConversationStorage`, serializing to YAML instead of JSON, which makes saved
-transcripts readable and diffable. It also understands a legacy session format on load.
+transcripts readable and diffable. It reads and writes a session format: one `session-{id}.yaml`
+file per conversation with `id`, `title`, `agents`, `startedAt`, `completedAt`, `messages` and
+`events`. Only the `title` and `agents` metadata entries survive a round trip; other metadata,
+`MaxTokens` and bookmarks are not stored.
 
 ```csharp
 services.AddSingleton<IConversationStorage>(
@@ -100,21 +107,41 @@ The `basePath` is required — there is no default.
 
 ## Custom Implementation
 
+`ConversationContext` does not round-trip through a plain serializer: `History` is get-only and its
+`Messages` is read-only. Persist the messages and rebuild the context, as `FileConversationStorage`
+does:
+
 ```csharp
 public class RedisConversationStorage : IConversationStorage
 {
     private readonly IDatabase _redis;
-    
+
+    private sealed record Snapshot(string Id, int MaxTokens, List<Message> Messages,
+        Dictionary<string, object?> Metadata, DateTime StartedAt, DateTime LastActivityAt);
+
     public async Task SaveConversationAsync(ConversationContext conversation, CancellationToken ct)
     {
-        var json = JsonConvert.SerializeObject(conversation);
+        var json = JsonConvert.SerializeObject(new Snapshot(conversation.ConversationId,
+            conversation.History.MaxTokens, [.. conversation.History.Messages], conversation.Metadata,
+            conversation.StartedAt, conversation.LastActivityAt));
         await _redis.StringSetAsync($"conv:{conversation.ConversationId}", json);
     }
-    
+
     public async Task<ConversationContext?> GetConversationAsync(string conversationId, CancellationToken ct)
     {
         var json = await _redis.StringGetAsync($"conv:{conversationId}");
-        return json.IsNull ? null : JsonConvert.DeserializeObject<ConversationContext>(json!);
+        if (json.IsNull) return null;
+
+        var s = JsonConvert.DeserializeObject<Snapshot>(json!)!;
+        var context = new ConversationContext(s.MaxTokens)
+        {
+            ConversationId = s.Id,
+            Metadata = s.Metadata,
+            StartedAt = s.StartedAt,
+            LastActivityAt = s.LastActivityAt
+        };
+        context.History.AddMessages(s.Messages);
+        return context;
     }
 }
 ```

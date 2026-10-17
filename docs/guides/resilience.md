@@ -13,6 +13,7 @@ AITaskAgent includes built-in resilience patterns to handle transient failures a
 | `TimeoutMiddleware` | Timeout | Step execution time limits |
 | `CircuitBreaker` | Circuit Breaker | Prevent cascading failures |
 | `RateLimiter` | Token Bucket | Rate limit API calls |
+| `RetryPolicy` | Retry with backoff | Attempt count and delays for the transport-level retry inside `OpenAILlmService` / `GeminiLlmService` (constructor argument) |
 
 > [!NOTE]
 > `CircuitBreaker` and `RateLimiter` are standalone classes. `AddAITaskAgent()` does **not**
@@ -127,8 +128,9 @@ Built-in middleware for automatic retries with validation.
 4. If the result has an error **without** an exception → recoverable (invalid JSON, bad option
    name…). Retry so the model can self-correct
 5. Runs structural validation (`result.ValidateAsync`) → retry if failed
-6. Runs semantic validation (`step.Validators`) → retry if failed
-7. Attempts exhausted → return an error result: `Validation failed after N attempts`
+6. Runs semantic validation (`step.ValidateAsync`, which in `StepBase` runs `step.Validators`) → retry if failed
+7. Attempts exhausted → return the last attempt's result, whose `Error` carries the last failure
+   message (`Validation failed after N attempts` is only logged)
 
 There is no backoff delay between attempts: the feedback loop, not waiting, is what is expected to
 fix the failure.
@@ -158,13 +160,14 @@ var step = new MyStep { MaxRetries = 1 };
 ```csharp
 public interface IFallbackable
 {
-    bool SwitchToNextFallback(IStepResult error, int attempt);
+    bool SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt);
 }
 ```
 
-`StepBase` implements it, and `BaseLlmStep` gives it meaning: it advances through
-`role.Fallbacks` (or the global `FallbackProviders` list), so `LlmService`, `Model`, `Provider` and
-`Inference` all point at the next entry.
+`StepBase` implements it (returning `false`), and `BaseLlmStep` gives it meaning: when the error's
+`OriginalException` is an `LlmProviderException` it advances through `role.Fallbacks` (or the global
+`FallbackProviders` list), so `GetLlmService(context)`, `GetModel(context)`, `GetProvider(context)`
+and `GetInference(context)` all point at the next entry. Other failures never switch.
 
 ![The fallback chain: each hop reassigns the provider, resets the attempt counter and rewinds the conversation](../assets/images/llm-fallback-chain.png)
 
@@ -192,7 +195,8 @@ transcript of someone else's failure.
 ```
 
 A role with no `Fallbacks` inherits the environment-level `FallbackProviders` list. Both are
-validated at startup — see [Configuration](configuration.md).
+validated when `IOptions<LlmEnvironment>` is first built (an unknown provider or a missing model
+throws) — see [Configuration](configuration.md).
 
 ---
 
@@ -208,10 +212,13 @@ Enforces execution time limits per step. Because Timeout wraps Retry in the chai
 var step = new SlowStep { Timeout = TimeSpan.FromSeconds(30) };
 ```
 
-Resolution order is `step.Timeout ?? IPipeline.DefaultStepTimeout`. **A null result is valid and
-means no timeout** — the step runs with the incoming cancellation token untouched.
+Resolution order is `step.Timeout ?? IPipeline.DefaultStepTimeout`. A null result would mean no
+timeout, but `Pipeline` always resolves a non-null `DefaultStepTimeout` (1 minute through
+`AddAITaskAgent()`, 30 minutes when `Pipeline` is constructed directly), so in practice every step
+is timed.
 
-On expiry the middleware emits a `StepTimeoutEvent`:
+When the expiry's `OperationCanceledException` reaches it, the middleware emits a
+`StepTimeoutEvent` and returns an error result (`Step X timed out after T`):
 
 ```csharp
 public sealed record StepTimeoutEvent : ProgressEventBase
@@ -221,6 +228,10 @@ public sealed record StepTimeoutEvent : ProgressEventBase
     public TimeSpan ConfiguredTimeout { get; init; }
 }
 ```
+
+Because `RetryMiddleware` catches every exception thrown by the step (`OperationCanceledException`
+included) and turns it into an error result carrying it, a timeout that fires inside step code
+usually surfaces as that error result instead, without a `StepTimeoutEvent`.
 
 Pipeline-level timeout:
 
@@ -236,7 +247,7 @@ await pipeline.ExecuteAsync(
 ```
 
 Defaults come from `PipelineOptions` (`DefaultPipelineTimeout`, `DefaultStepTimeout`), seeded from
-`AITaskAgent:Timeouts`.
+`AITaskAgent:Timeouts` (defaults 10 minutes and 1 minute).
 
 ---
 
@@ -268,6 +279,10 @@ public class ResilientLlmService : ILlmService
     // ... InvokeStreamingAsync, EstimateTokenCount, GetMaxContextTokens delegate to _inner
 }
 ```
+
+`CircuitBreaker` only counts **exceptions**. Provider services report failures as
+`LlmResult.Failure` instead of throwing, so the circuit above never opens unless the delegate turns
+a failed result into an exception (and back into a result outside `ExecuteAsync`).
 
 ### LLM with Rate Limiting
 

@@ -38,19 +38,29 @@ public interface IPipelineMiddleware
 
 ### ObservabilityMiddleware
 
-Always first. Provides:
+Always the first of the internal middlewares (your registered ones wrap it). Runs once per step,
+whatever the number of attempts. Provides:
 - OpenTelemetry traces (`Activity`)
 - Native metrics (counters, histograms)
-- Event emission (`StepStartedEvent`, `StepCompletedEvent`)
+- Event emission (`StepStartedEvent` with `AttemptNumber = 1`, `StepCompletedEvent`)
 - Enrichment hooks through `IEnrichable` (`StepBase.Enrichable`)
 
 ### TimeoutMiddleware
 
 Creates a linked `CancellationToken` from `step.Timeout ?? IPipeline.DefaultStepTimeout`.
 
-A **null** timeout is legal and means "no timeout": the step runs with the incoming token
-untouched. On expiry the middleware emits a `StepTimeoutEvent` carrying `StepName`, `StepPath` and
-`ConfiguredTimeout`, then surfaces the cancellation.
+A **null** resolved timeout would mean "no timeout" (the step runs with the incoming token
+untouched), but `Pipeline` always resolves a non-null `DefaultStepTimeout`: 1 minute through
+`AddAITaskAgent()` (`AITaskAgent:Timeouts:DefaultStepTimeout`), 30 minutes (`PipelineOptions`) when
+`Pipeline` is constructed directly. When an `OperationCanceledException` caused by the expiry reaches
+it, the middleware emits a `StepTimeoutEvent` carrying `StepName`, `StepPath` and
+`ConfiguredTimeout`, and returns an error result (`Step X timed out after T`) instead of throwing.
+
+> [!NOTE]
+> `RetryMiddleware`, inside it, catches every exception thrown by the step —
+> `OperationCanceledException` included — and turns it into an error result carrying the exception.
+> So a timeout that fires inside step code normally surfaces as that error result, with no
+> `StepTimeoutEvent`.
 
 Because Timeout wraps Retry, the timeout is **global across all retry attempts**, not per attempt.
 
@@ -60,13 +70,17 @@ Terminal middleware that handles retry logic:
 
 1. Executes `step.ExecuteAsync(...)` — emitting a `StepStartedEvent` for every attempt after the first
 2. Runs structural validation (`result.ValidateAsync`)
-3. Runs semantic validation (`step.Validators`)
+3. Runs semantic validation (`step.ValidateAsync`, which in `StepBase` runs `step.Validators` in order)
 4. If invalid and attempts remain, retries with the error text as feedback
 5. Calls `step.FinalizeAsync(...)` on completion
 
+When the attempts run out it returns the last attempt's result, whose `Error` holds the last
+failure message; `Validation failed after N attempts` is only logged.
+
 Exceptions are **fatal**, not retried. Only error results *without* an `OriginalException` are
 retried, on the theory that those are recoverable logic/parsing errors an LLM can self-correct.
-When the step implements `IFallbackable` and switches provider, the attempt counter resets to 1.
+On those fatal paths (exception, or error with `OriginalException`) a step that implements
+`IFallbackable` is asked to switch provider first; when it does, the attempt counter resets to 1.
 
 ## Registering Custom Middlewares
 

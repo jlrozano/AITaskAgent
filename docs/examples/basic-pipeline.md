@@ -145,10 +145,11 @@ catch (Exception ex)
 }
 ```
 
-**Output:**
+**Output** (branch order is not guaranteed: `ParallelResult` stores branches in a
+`ConcurrentDictionary`; the list prints through its default `ToString()`):
 ```
 Parallel results:
-  FetchUsers: [Alice, Bob]
+  FetchUsers: System.Collections.Generic.List`1[System.String]
   FetchOrders: 42
   FetchSettings: dark-mode
 ```

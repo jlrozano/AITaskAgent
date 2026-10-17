@@ -167,21 +167,22 @@ catch (Exception ex)
 }
 ```
 
-**Output:**
+**Output** (the pipeline stores a step's result in `context.StepResults` only after the whole
+middleware chain returns, so a snapshot taken inside the chain does not yet include the current step):
 ```
 [Snapshot] Step: Step1
   Path: 
-  Results: Step1
+  Results: 
   Metadata: startTime
 
 [Snapshot] Step: Step2
   Path: 
-  Results: Step1, Step2
+  Results: Step1
   Metadata: startTime
 
 [Snapshot] Step: Step3
   Path: 
-  Results: Step1, Step2, Step3
+  Results: Step1, Step2
   Metadata: startTime, endTime
 ```
 

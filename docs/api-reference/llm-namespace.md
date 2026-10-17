@@ -22,14 +22,14 @@ public sealed class LlmEnvironment
 {
     public Dictionary<string, LlmProvider> Providers { get; init; }  // case-insensitive keys
     public Dictionary<string, LlmRole> Roles { get; init; }          // case-insensitive keys
-    public string DefaultRole { get; init; } = "default";
+    public string DefaultRole { get; set; } = "default";
     public List<FallbackProviderSettings> FallbackProviders { get; init; } = [];
 }
 
 public class FallbackProviderSettings
 {
-    public string Provider { get; init; }      // must be a key in Providers
-    public string Model { get; init; }
+    public string Provider { get; init; } = string.Empty;   // must be a key in Providers
+    public string Model { get; init; } = string.Empty;
     public LlmInferenceSettings? Inference { get; init; }
 }
 ```
@@ -48,19 +48,22 @@ public class LlmProvider
     public List<LlmModelSettings> Models { get; init; } = [];
     public required ILlmService Service { get; init; }
 
-    public decimal? CalculateCost(string? model, int? promptTokens, int? completionTokens);
+    public decimal? CalculateCost(string? model, int? promptTokens, int? completionTokens, int? cachedPromptTokens = null);
 }
 
 public record LlmModelSettings(
     string Name,
     decimal? InputPricePerMillion,   // null = unknown: CalculateCost returns null
     decimal? OutputPricePerMillion,
-    LlmInferenceSettings Inference);
+    LlmInferenceSettings Inference,
+    decimal? CachedInputPricePerMillion = null);   // null = cached tokens billed at InputPricePerMillion
 ```
 
 Pricing lives on the provider, not in the `ILlmService`: every provider prices the same way and no
 service ever receives the model catalogue. `BaseLlmStep` calls `CalculateCost` after each
-invocation and writes the value into `LlmResult.CostUsd`.
+invocation and writes the value into `LlmResult.CostUsd`. The model is looked up
+case-insensitively, first by the model the service reports and then by the requested one; cached
+prompt tokens are clamped to the prompt tokens and billed at `CachedInputPricePerMillion`.
 
 `Service` is resolved at binding time by matching the JSON `ServiceType` (defaulting to the
 provider key) against the `Name` of each registered `ILlmService`.
@@ -88,7 +91,9 @@ public record LlmFallback(
 
 A role's `Fallbacks` default to `LlmEnvironment.FallbackProviders` when the role declares none.
 `BaseLlmStep` walks the chain through `IFallbackable.SwitchToNextFallback`, rewinding the
-conversation to its initial bookmark on each switch.
+conversation to its initial bookmark on each switch. It only switches when the error's
+`OriginalException` is an `LlmProviderException`, and refuses a fallback whose `Model` or
+`Provider.Service` did not resolve.
 
 **Source:** [LlmRole.cs](../../Framework/LLM/Configuration/LlmRole.cs)
 
@@ -109,6 +114,9 @@ public record LlmInferenceSettings
     public bool JsonSupport { get; init; }        // default false
     public bool ToolSupport { get; init; }        // default true
     public IList<string>? Stop { get; init; }
+    public bool UseMaxCompletionTokens { get; init; }          // default false
+    public int? RequestTimeoutSeconds { get; init; }
+    public int? StreamingInactivityTimeoutSeconds { get; init; }
 
     public T? GetOption<T>(string key);           // case-insensitive
 }
@@ -162,14 +170,16 @@ public abstract partial class BaseLlmStep(
     public string? SystemPrompt { get; set; }
     public string? Prompt { get; set; }
 
-    protected ILlmService LlmService { get; }
-    protected string Model { get; }
-    protected LlmProvider Provider { get; }
-    protected LlmInferenceSettings Inference { get; }
+    // Resolved for the active engine (role, or the current fallback) of this execution
+    protected ILlmService GetLlmService(PipelineContext context);
+    protected string GetModel(PipelineContext context);
+    protected LlmProvider GetProvider(PipelineContext context);
+    protected LlmInferenceSettings GetInference(PipelineContext context);
 
     protected virtual Task<string?> BuildUserMessageAsync(IStepResult input, PipelineContext context);
     protected virtual Task<string?> BuildSystemMessageAsync(IStepResult input, PipelineContext context);
     protected virtual ConversationContext GetConversationContext(PipelineContext context);
+    protected virtual void AddConversationToContext(PipelineContext context, ConversationContext conversation, ILlmStepResult result);
     protected virtual Task<LlmRequest> BuildLlmRequestAsync(...);
     protected virtual LlmRequest ConfigureLlmRequest(LlmRequest request, PipelineContext context);
     protected virtual Task<(IStepResult? Result, string? Error)> ParseLlmResponseAsync(...);
@@ -248,6 +258,8 @@ public sealed class LlmResult
     public int? TokensUsed { get; init; }
     public int? PromptTokens { get; init; }
     public int? CompletionTokens { get; init; }
+    public int? ReasoningTokens { get; init; }
+    public int? CachedPromptTokens { get; init; }
     public decimal? CostUsd { get; internal set; }   // filled by BaseLlmStep
     public string? Model { get; init; }
     public object? NativeResponse { get; init; }
@@ -265,7 +277,8 @@ public sealed class LlmResult
     public static LlmResult Success(
         IReadOnlyList<LlmResponse> candidates,
         int? tokensUsed = null, int? promptTokens = null, int? completionTokens = null,
-        decimal? costUsd = null, string? model = null, object? nativeResponse = null);
+        decimal? costUsd = null, string? model = null, object? nativeResponse = null,
+        int? reasoningTokens = null, int? cachedPromptTokens = null);
 
     public static LlmResult Failure(Exception error, bool isRetriable);
 }
@@ -286,6 +299,7 @@ public sealed record LlmResponse
     public FinishReason? FinishReason { get; init; }
     public string? RawFinishReason { get; init; }
     public List<ToolCall>? ToolCalls { get; init; }
+    public string? ToolLoopStopMessage { get; init; }   // set when the step cut its tool loop
 }
 ```
 
@@ -304,6 +318,8 @@ public sealed class LlmStreamChunk
     public int? TokensUsed { get; init; }
     public int? PromptTokens { get; init; }
     public int? CompletionTokens { get; init; }
+    public int? ReasoningTokens { get; init; }
+    public int? CachedPromptTokens { get; init; }
     public IReadOnlyList<ToolCallUpdate>? ToolCallUpdates { get; init; }
     public int ChoiceIndex { get; init; }
     public object? NativeChunk { get; init; }
@@ -355,11 +371,13 @@ public interface ILlmStepResult : IStepResult
     int? TokensUsed { get; }
     string GetAssistantMessageOrDefault(string? defaultMessage = null);
 }
+
+public interface ILlmStepResult<T> : ILlmStepResult, IStepResult<T> { }
 ```
 
 | Class | Value | Notes |
 |-------|-------|-------|
-| `LlmStepResult` | `object?` | Adds `Reasoning` on top of `ILlmStepResult` |
+| `LlmStepResult` | `object?` | Adds `Reasoning` and `ToolLoopStopMessage` on top of `ILlmStepResult` |
 | `LlmStepResult<T>` | `T` | Typed variant |
 | `LlmStringStepResult` | `string` | Adds `Content` and `ToolCalls`; valid when either is present |
 | `LlmIntentionResult` | `Intention` | Produced by `IntentionAnalyzerStep`, consumed by `RouterStep` |
@@ -371,6 +389,9 @@ public interface ILlmStepResult : IStepResult
 ```csharp
 public abstract class LlmTool : ITool
 {
+    public const string ParametersDataKey = "parameters";   // keys used in the tool events' AdditionalData
+    public const string ResultDataKey = "result";
+
     public abstract string Name { get; }
     public abstract string Description { get; }
     public virtual string? UsageGuidelines => null;
@@ -379,7 +400,10 @@ public abstract class LlmTool : ITool
     protected abstract BinaryData ParametersSchema { get; }
     public virtual ToolDefinition GetDefinition();
 
-    // Template Method: ExecuteAsync handles traces, metrics and tool.* events
+    // Template Method: ExecuteAsync (not virtual) handles traces, metrics and tool.* events
+    public Task<string> ExecuteAsync(string argumentsJson, PipelineContext context, string stepName,
+        ILogger logger, CancellationToken cancellationToken = default);
+
     protected abstract Task<string> InternalExecuteAsync(
         string argumentsJson,
         PipelineContext context,
@@ -425,7 +449,8 @@ case-insensitive, and `GetAllTools(module)` filters by the assembly name declari
 public sealed class ConversationContext(
     int maxTokens = 4000,
     Func<string, int>? tokenCounter = null,
-    ILogger<ConversationContext>? logger = null)
+    ILogger<ConversationContext>? logger = null,
+    ConversationOptions? conversationOptions = null)   // KeepFirstNMessages, UseBookmarks
 {
     public string ConversationId { get; init; }
     public MessageHistory History { get; }
@@ -437,7 +462,8 @@ public sealed class ConversationContext(
     public ConversationContext AddAssistantMessage(string content);
     public ConversationContext AddSystemMessage(string content);
     public ConversationContext AddToolMessage(string toolCallId, string content);
-    public ConversationContext AddAssistantMessageWithToolCalls(IEnumerable<ToolCall> toolCalls);
+    public ConversationContext AddAssistantMessageWithToolCalls(IEnumerable<ToolCall> toolCalls, string? content = null);
+    public ConversationContext ReplaceMessage(int index, Message message);
     public void AddMessage(Message message);
 
     public string CreateBookmark();
@@ -473,7 +499,7 @@ public class TemplateLlmStep<TIn, TOut>(
     LlmRole role,
     ITemplateProvider? templateProvider = null,
     IList<string>? tools = null,          // tool NAMES, resolved via AvailableTools.Instance
-    string? promtTemplateString = null,   // defaults to "{name}_promt.md"
+    string? promtTemplateString = null,   // defaults to "{name}_prompt.md"
     string? systemTemplateString = null)  // defaults to role.SystemPrompt ?? "{name}_system.md"
     : BaseLlmStep<TIn, TOut>(...);
 

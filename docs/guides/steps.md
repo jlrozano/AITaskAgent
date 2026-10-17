@@ -97,10 +97,19 @@ var typed = new ParallelStep<StepResult<string>>("FetchAll", new FetchUserStep()
 
 **Key behaviors:**
 - Each branch runs on `context.CloneForBranch()`: a **cloned** `ConversationContext` and its own
-  step path, so nested results are keyed independently
+  step path, so nested results are keyed independently. That path keeps the parent's path and adds
+  the parallel step's name and the branch name: a branch `FetchUserStep` of `FetchAll` caches its
+  step under `{parent}/FetchAll/FetchUserStep/FetchUserStep` (for example
+  `Loop/Iter_2/FetchAll/FetchUserStep/FetchUserStep` inside a loop), so loop iterations and
+  same-named branches of different parallel steps never share a cache entry
 - `Metadata`, `StepResults` and the `EventChannel` are **shared** across branches (thread-safe)
 - Each branch emits `BranchStartedEvent` / `BranchCompletedEvent` with a unique `BranchId`
 - All branches pass through the middleware chain (observability, timeout, retry)
+- Concurrency is capped by `MaxDegreeOfParallelism` (init-only; `0`, the default, means
+  `Environment.ProcessorCount`)
+- A failing branch does not cancel the others: every error message is joined into
+  `ParallelResult.Error`, so the parallel step fails if any branch failed
+- Results are keyed by each branch step's `Name`
 
 **Accessing results:**
 
@@ -114,12 +123,18 @@ if (result is ParallelResult parallelResult)
 
     // Or the whole dictionary
     IReadOnlyDictionary<string, IStepResult> all = parallelResult.Value;
+
+    // The indexer returns the branch result's Value directly
+    object? prefs = parallelResult["FetchPreferencesStep"];
 }
 ```
 
 ### LoopStep
 
-Runs its `Steps` repeatedly until a `BreakStep` result appears or `MaxIterations` is reached.
+Runs its `Steps` repeatedly until an iteration ends with a `BreakStep` result or `MaxIterations`
+is reached. The check happens after the iteration's last step: a `BreakStep` in the middle of
+`Steps` does not stop the steps after it. Each iteration receives the previous iteration's final
+result as input.
 
 ```csharp
 var loop = new LoopStep(
@@ -211,8 +226,11 @@ var step = new MyStep { Timeout = TimeSpan.FromSeconds(30) };
 await pipeline.ExecuteAsync(..., pipelineTimeout: TimeSpan.FromMinutes(5));
 ```
 
-A null step timeout falls back to `IPipeline.DefaultStepTimeout`; if that is null too, the step
-runs untimed. See [Resilience](resilience.md).
+A null step timeout falls back to `IPipeline.DefaultStepTimeout`, which `Pipeline` always resolves
+to a value: 1 minute through `AddAITaskAgent()` (`AITaskAgent:Timeouts:DefaultStepTimeout`), 30
+minutes when `Pipeline` is constructed directly. The timeout of a `LoopStep` or `ParallelStep`
+covers all of its children, since they run inside its single execution. See
+[Resilience](resilience.md).
 
 ### Validation
 
@@ -243,6 +261,10 @@ public interface IStepValidator
 step.AddValidator(new BusinessRuleValidator());
 IReadOnlyList<IStepValidator> current = step.Validators;
 ```
+
+`AddValidator` / `Validators` live on `StepBase`, whose `ValidateAsync` runs the validators in order
+and stops at the first failure. Steps that implement `IStep` directly (`SwitchStep`, `RouterStep`)
+have no validator list.
 
 `IStepValidator` is deliberately decoupled from Core so validators can ship from external modules,
 and its `Id` is what a [YAML pipeline](yaml-pipelines.md) references. Each failure emits a

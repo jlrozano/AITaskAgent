@@ -9,8 +9,8 @@ A unit of work in the pipeline. Implements `IStep` or `IStep<TIn, TOut>`.
 The output of a step. Implements `IStepResult` or `IStepResult<T>`.
 
 ### Pipeline
-`sealed class Pipeline : IPipeline`. A DI singleton that runs steps sequentially through a
-middleware chain. Resolve `IPipeline` — it is not a static class.
+`sealed class Pipeline : PipelineRuntimeBase, IPipeline`. A DI singleton that runs steps
+sequentially through a middleware chain. Resolve `IPipeline` — it is not a static class.
 
 ### PipelineContext
 Shared state across all steps in a pipeline execution:
@@ -62,9 +62,10 @@ The retry loop happens inside Observability's single call, so only the first att
 ```csharp
 public interface IStepResult
 {
-    bool HasError { get; }           // Error occurred
+    bool HasError => Error != null;  // Error occurred
     IStepError? Error { get; set; }  // Error details (Message + OriginalException)
-    IStep Step { get; }              // Producer step
+    string StepName { get; }         // Name of the producer step
+    string StepType { get; }         // Type name of the producer step
     object? Value { get; }           // Result value
     List<IStep> NextSteps { get; }   // Dynamic routing
     object? SuspendInfo { get; set; }// Set when execution pauses for external input
@@ -82,7 +83,7 @@ see [Resilience](resilience.md).
 // Access conversation
 context.Conversation.AddUserMessage("Hello");
 
-// Store metadata (also reachable from prompts as {{ context.userid }})
+// Store metadata (reachable from TemplateLlmStep / YAML prompts as {{ context.userid }})
 context.Metadata["userId"] = "123";
 
 // Get a previous step result. The key is the step's full path:

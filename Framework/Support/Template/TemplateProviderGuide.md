@@ -6,14 +6,16 @@ The template provider system allows you to externalize LLM prompts into markdown
 ## Components
 
 ### ITemplateProvider
-Interface for loading templates by name.
+Interface for loading templates by name: `GetTemplate(name)` returns the raw text (or null) and `Render(name, model)` renders it.
 
 ### FileTemplateProvider
 File-based implementation with intelligent caching:
 - **LRU (Least Recently Used)**: Evicts oldest accessed items
 - **TTL (Time To Live)**: Items expire after 5 minutes (default)
 - **Size-based**: Cache limited to 1MB (default) with 10% margin
-- **File format**: `.md` (markdown)
+- **File format**: `.md` (markdown); the provider appends `.md` to the name, so names are given **without** extension
+- **Missing template**: `Render` returns null, or throws `FileNotFoundException` when `validateTemplates: true`
+- **Engine**: the optional `templateEngine` (`ITemplateRendered`); when null, `TinyTemplateRendered` is used with the template folder as base directory for includes
 
 ### Template-based LLM Steps
 
@@ -21,37 +23,38 @@ File-based implementation with intelligent caching:
 Uses `context.Conversation` for stateful conversation history.
 
 ```csharp
-var templateEngine = new JsonTemplateEngine();
 var templateProvider = new FileTemplateProvider(
     folderPath: "templates",
+    templateEngine: new TinyTemplateRendered(), // optional
     enableCache: true,
     ttl: TimeSpan.FromMinutes(5),
     maxCacheSizeBytes: 1_048_576 // 1MB
 );
 
+// Constructor: (name, role, templateProvider, tools, promtTemplateString, systemTemplateString)
 var criticStep = new TemplateLlmStep<ParallelResult, CriticResult>(
-    llmService,
-    templateEngine,
+    "Critic",
+    criticRole,                 // LlmRole
     templateProvider,
-    name: "Critic",
-    profile: nVideaProfile,
-    promptTemplateName: "critic_prompt",
-    systemPromptTemplateName: "critic_system"
+    null,                       // tool names
+    "critic_prompt",
+    "critic_system"
 );
 ```
+
+With a provider, the prompt and system strings are template **names**. If the prompt name is omitted it defaults to `"{name}_prompt.md"`, and the system one to the role's `SystemPrompt` or `"{name}_system.md"`; since `FileTemplateProvider` appends `.md` itself, pass the names explicitly.
 
 #### StatelessTemplateLlmStep<TIn, TOut> (Stateless)
 Creates clean conversation context for each execution.
 
 ```csharp
 var writerStep = new StatelessTemplateLlmStep<UserIntentionResponse, LlmStringStepResult>(
-    llmService,
-    templateEngine,
+    "Writer",
+    writersRole,
     templateProvider,
-    name: "Writer",
-    profile: nVideaProfile,
-    promptTemplateName: "writer_prompt",
-    systemPromptTemplateName: "writer_system"
+    null,
+    "writer_prompt",
+    "writer_system"
 );
 ```
 
@@ -59,53 +62,54 @@ var writerStep = new StatelessTemplateLlmStep<UserIntentionResponse, LlmStringSt
 
 ## Template Syntax
 
-Templates use the `JsonTemplateEngine` syntax:
+Templates use the `TinyTemplateRendered` syntax (see `TemplateEngineExamples.md`). Inside template-based steps the model is `{ Input, Context }`: `Input` is the step input's `Value`, `Context` the pipeline metadata plus step variables. Property names are matched case-insensitively.
 
 ### Basic Interpolation
 ```markdown
-Hello {{User.Name}}, your score is {{Score}}.
+Hello {{Input.User.Name}}, your score is {{Input.Score}}. Session: {{Context.sessionid}}
 ```
 
 ### Nested Properties
 ```markdown
-{{User.Address.City}}
+{{Input.User.Address.City}}
 ```
 
 ### Arrays
 ```markdown
-First item: {{Items[0].Name}}
+First item: {{Input.Items[0].Name}}
 ```
 
 ### Default Values
 ```markdown
-{{MissingProp ?? N/A}}
+{{Input.MissingProp ?? N/A}}
 ```
 
-### Custom Formatters
+### Pipe Filters
 
 #### CSV (Token-Efficient)
 ```markdown
 Here's the data:
-{{DatabaseResults:csv}}
+{{ Input.DatabaseResults | csv }}
 ```
 
 #### JSON
 ```markdown
-Config: {{Settings:json}}
+Config: {{ Input.Settings | json }}
 ```
 
 #### JSON Indented
-```markdown
+````markdown
 ```json
-{{Settings:json:indent}}
-\```
+{{ Input.Settings | json "indent" }}
+```
+````
+
+#### Date Formatting
+```markdown
+Date: {{ Input.Timestamp | date "yyyy-MM-dd" }}
 ```
 
-#### Date/Number Formatting
-```markdown
-Date: {{Timestamp:yyyy-MM-dd}}
-Score: {{Value:F2}}%
-```
+There is no number-formatting filter.
 
 ---
 
@@ -136,7 +140,7 @@ var provider = new FileTemplateProvider(
 ```
 
 - Templates loaded once, cached for 5 minutes
-- Cache evicts LRU items when size exceeds 1.1MB
+- Cache evicts LRU items when size exceeds 1.1MB (until it is back under 1MB)
 - Minimal file I/O
 
 ### Development (Cache Disabled)
@@ -157,38 +161,29 @@ var provider = new FileTemplateProvider(
 
 ### Before (Manual String Concatenation)
 ```csharp
-var criticStep = new StatelessLlmStep<StepResult, CriticResult>(
-    llmService,
-    name: "Critic",
-    profile: nVideaProfile,
-    promptBuilder: (input, context) =>
-    {
-        var results = (context.StepResults["Router/NewStoryPhase/ParallelWriters"] as ParallelResult)?.Value;
-        var draft1 = (results?["Writer1"] as LlmStringStepResult)?.Content ?? "No draft 1";
-        var draft2 = (results?["Writer2"] as LlmStringStepResult)?.Content ?? "No draft 2";
+var results = parallelResult.Value; // IReadOnlyDictionary<string, IStepResult>
+var draft1 = (results.GetValueOrDefault("Writer1") as LlmStringStepResult)?.Value ?? "No draft 1";
+var draft2 = (results.GetValueOrDefault("Writer2") as LlmStringStepResult)?.Value ?? "No draft 2";
 
-        return Task.FromResult($@"Analyze the following two drafts:
+var prompt = $@"Analyze the following two drafts:
 
 Draft 1:
 {draft1}
 
 Draft 2:
-{draft2}");
-    },
-    systemPrompt: "You are a harsh literary critic..."
-);
+{draft2}";
+var systemPrompt = "You are a harsh literary critic...";
 ```
 
 ### After (Template-Based)
 ```csharp
 var criticStep = new StatelessTemplateLlmStep<ParallelResult, CriticResult>(
-    llmService,
-    templateEngine,
+    "Critic",
+    criticRole,
     templateProvider,
-    name: "Critic",
-    profile: nVideaProfile,
-    promptTemplateName: "critic_prompt",
-    systemPromptTemplateName: "critic_system"
+    null,
+    "critic_prompt",
+    "critic_system"
 );
 ```
 
@@ -197,10 +192,10 @@ var criticStep = new StatelessTemplateLlmStep<ParallelResult, CriticResult>(
 Analyze the following two drafts of the same story.
 
 ## Draft 1
-{{Writer1.Content ?? No draft 1}}
+{{Input.Writer1.Value ?? No draft 1}}
 
 ## Draft 2
-{{Writer2.Content ?? No draft 2}}
+{{Input.Writer2.Value ?? No draft 2}}
 ```
 
 **critic_system.md**:
@@ -216,5 +211,5 @@ You are a harsh literary critic. Be constructive but demanding.
 2. **Version Control**: Track prompt changes in git
 3. **A/B Testing**: Easy to swap templates
 4. **Collaboration**: Non-developers can edit prompts
-5. **Token Optimization**: Use `:csv` formatter for tabular data
+5. **Token Optimization**: Use the `| csv` filter for tabular data
 6. **Maintainability**: Centralized prompt management

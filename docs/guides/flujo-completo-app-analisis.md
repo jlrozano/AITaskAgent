@@ -1,17 +1,17 @@
 # Flujo completo de la app de análisis de código
 
-Este documento describe de extremo a extremo la app que analiza un repositorio de código y produce un conjunto de informes: el runner de línea de comandos (`Samples/CodebaseAnalysisPipeline`), el núcleo (`Samples/CodebaseAnalysis.Core`), la web (`Samples/CodebaseAnalysisWeb`) y el enriquecedor de C# (`Samples/DotNetEnricher`). Recoge qué hace cada paso, qué LLM interviene en cada uno y con qué system prompt, y deja el texto íntegro de todas las plantillas en el [apéndice](#apendice). El estado descrito es el del árbol de trabajo de la rama `consolidation` a 2026-10-02, con cambios sin commitear: las referencias `fichero:línea` apuntan a ese árbol y no a un commit. Lo que no se ha podido leer en el código va marcado `[I]` (inferido) y no se presenta como hecho.
+Este documento describe de extremo a extremo la app que analiza un repositorio de código y produce un conjunto de informes: el runner de línea de comandos (`Samples/CodebaseAnalysisPipeline`), el núcleo (`Samples/CodebaseAnalysis.Core`), la web (`Samples/CodebaseAnalysisWeb`) y el enriquecedor de C# (`Samples/DotNetEnricher`). Recoge qué hace cada paso, qué LLM interviene en cada uno y con qué system prompt, y deja el texto íntegro de todas las plantillas en el [apéndice](#apendice). El estado descrito es el de la rama `consolidation` a 2026-10-02, revisado el 2026-10-17 contra el commit `5feaa92` (preparación por subsistema, protocolo de notas, pasada compartida, corte de bucles de herramientas, enriquecedor de C# v5 y nodos del LLM en el grafo). Las referencias `fichero:línea` revisadas apuntan a ese commit; algunas de las no revisadas pueden haberse desplazado unas líneas, aunque el símbolo citado sigue en el fichero. Lo que no se ha podido leer en el código va marcado `[I]` (inferido) y no se presenta como hecho.
 
 Las rutas sin prefijo son relativas a `Samples/CodebaseAnalysis.Core` (`CORE`); `CLI` es `Samples/CodebaseAnalysisPipeline`, `WEB` es `Samples/CodebaseAnalysisWeb`, `DNE` es `Samples/DotNetEnricher` y `FW` es `Framework`. La guía [`docs/guides/codebase-analysis-flujo-y-politica-de-informes.md`](codebase-analysis-flujo-y-politica-de-informes.md) sigue siendo la referencia complementaria para las mediciones sobre el repositorio objetivo y para la política de análisis de cada informe (su parte 2); este documento se entiende sin abrirla, y la sección [Discrepancias encontradas](#s-discrepancias) dice qué partes de la guía han quedado desfasadas.
 
-Índice: [1. Visión general](#s-vision) · [2. Los pasos](#s-pasos) · [3. LLMs y system prompts](#s-llms) · [4. Configuración](#s-config) · [5. Limitaciones conocidas](#s-limites) · [Discrepancias encontradas](#s-discrepancias) · [Apéndice](#apendice).
+Índice: [1. Visión general](#s-vision) · [2. Los pasos](#s-pasos) (preparación por subsistema en [2.5.1](#s-preparacion), pasada compartida en [2.5.2](#s-pasada-compartida)) · [3. LLMs y system prompts](#s-llms) · [4. Configuración](#s-config) · [5. Limitaciones conocidas](#s-limites) · [Discrepancias encontradas](#s-discrepancias) · [Apéndice](#apendice).
 
 <a id="s-vision"></a>
 ## 1. Visión general
 
-La app indexa un repositorio con una herramienta externa, `codebase-memory-mcp` (cbm), que lo vuelca en un grafo SQLite de nodos y aristas; copia ese grafo a una base propia del análisis (`.codebase/codebase.db`) y a partir de ahí es la única que se escribe. Sobre la copia actúan enriquecedores deterministas (un analizador Java basado en `javac`, un plugin para Struts/JSP y un enriquecedor de C# basado en Roslyn) que sustituyen las aristas aproximadas de cbm por resueltas y añaden métricas, hallazgos y alcanzabilidad. Un paso SQL calcula después 64 facetas de texto que resumen el grafo, y nueve auditores LLM las reciben en paralelo, cada uno con su rol, su par de plantillas y siete herramientas de solo lectura; cada auditor escribe su informe en cuanto termina. Una síntesis sin herramientas redacta `00_resumen_ejecutivo.md` a partir de los semáforos y de los índices de secciones de los demás informes, y un validador determinista comprueba al final la forma de los informes sin bloquear el resultado. Los LLM intervienen solo en cinco sitios del flujo principal (el fallback de enriquecimiento, los nueve auditores, la síntesis, el verificador a demanda y el chat), más la descripción de imágenes y los embeddings en el tratamiento de documentos.
+La app indexa un repositorio con una herramienta externa, `codebase-memory-mcp` (cbm), que lo vuelca en un grafo SQLite de nodos y aristas; copia ese grafo a una base propia del análisis (`.codebase/codebase.db`) y a partir de ahí es la única que se escribe. Sobre la copia actúan enriquecedores deterministas (un analizador Java basado en `javac`, un plugin para Struts/JSP y un enriquecedor de C# basado en Roslyn) que sustituyen las aristas aproximadas de cbm por resueltas y añaden métricas, hallazgos y alcanzabilidad. Un paso SQL calcula después 64 facetas de texto que resumen el grafo. Con la preparación por subsistema, que está activa por defecto (`CodebaseAnalysis:Preparation:Mode = Subsystems`), cuatro pasos más inventarían el repositorio, descubren sus subsistemas (con una llamada al LLM para nombrarlos), planifican qué subsistemas investiga cada informe y reparten el tiempo. Una pasada compartida opcional, desactivada por defecto (`CodebaseAnalysis:SharedPass:Enabled = false`), lee el código por lotes y deja un registro de hallazgos en el grafo. Nueve auditores LLM reciben las facetas en paralelo, cada uno con su rol, su par de plantillas y siete herramientas de solo lectura; cuatro de ellos (01, 04, 05 y 06) investigan antes cada subsistema elegido por separado y consolidan las notas. Cada auditor escribe su informe en cuanto termina. Una síntesis sin herramientas redacta `00_resumen_ejecutivo.md` a partir de los semáforos y de los índices de secciones de los demás informes, y un validador determinista comprueba al final la forma de los informes sin bloquear el resultado. Los LLM intervienen en el flujo principal en el fallback de enriquecimiento, el nombrado de subsistemas, la pasada compartida si está activada (lector y juez), los nueve auditores con sus investigaciones y la síntesis. Fuera de él están el verificador a demanda, el chat, la descripción de imágenes y los embeddings del tratamiento de documentos.
 
-El pipeline completo se monta con seis pasos de primer nivel que el motor ejecuta en secuencia y que la interfaz agrupa en cinco fases de progreso (`AnalysisPipelineFactory.cs:143-153`; `Progress/AnalysisEventMapper.cs:32-53`). `LanguageEnricherStep` y `DotNetEnricherStep` comparten la fase `enrich`, y el enriquecimiento semántico por LLM no es un paso propio: lo invoca `DotNetEnricherStep` como camino alternativo (`AnalysisPipelineFactory.cs:116-128`). El límite de todo el pipeline es `CodebaseAnalysis:Timeouts:PipelineMinutes` (240), que aplica `CodebaseAnalysisPipeline` con su propio token para poder decir qué clave se ha superado (`AnalysisPipelineFactory.cs:432-463`).
+El pipeline completo se monta con seis pasos de primer nivel, más los cuatro de la preparación (con `Mode = Subsystems`) y el de la pasada compartida (solo con `SharedPass:Enabled`), que el motor ejecuta en secuencia y que la interfaz agrupa en cinco fases de progreso (`AnalysisPipelineFactory.cs:144-199`; `Progress/AnalysisEventMapper.cs:31-61`). `LanguageEnricherStep` y `DotNetEnricherStep` comparten la fase `enrich`; los pasos de la preparación y la pasada compartida van en la fase `facets`. El enriquecimiento semántico por LLM no es un paso propio: lo invoca `DotNetEnricherStep` como camino alternativo (`AnalysisPipelineFactory.cs:160-170`). El límite de todo el pipeline es `CodebaseAnalysis:Timeouts:PipelineMinutes` (240 por defecto en el código; el `appsettings.analysis.json` del sample pone todos los `Timeouts` a 0, es decir, sin límite), que aplica `CodebaseAnalysisPipeline` con su propio token para poder decir qué clave se ha superado (`AnalysisPipelineFactory.cs:603-634`; `Hosting/AnalysisTimeouts.cs:24-55`; `appsettings.analysis.json:28-36`).
 
 ```mermaid
 flowchart TD
@@ -26,9 +26,11 @@ flowchart TD
     end
     subgraph facets["Fase facets"]
         s4["4 SqlFacetExtractorStep: 64 facetas en memoria"]
+        p1["Preparación (Mode = Subsystems, por defecto): inventario, mapa de dominios (LLM nombra), plan de cobertura, presupuesto de tiempo"]
+        sp["SharedPassStep (solo con SharedPass:Enabled; apagado por defecto): lector y juez LLM, registro en el grafo"]
     end
     subgraph reports["Fase reports"]
-        s5["5 ParallelReportsExecution: nueve Auditor_Tipo, LLM con siete herramientas"]
+        s5["5 ParallelReportsExecution: nueve Auditor_Tipo, LLM con siete herramientas; 01, 04, 05 y 06 investigan por subsistema y consolidan"]
     end
     subgraph synthesis["Fase synthesis"]
         s6["6 ExecutiveSynthesizerStep: LLM sin herramientas"]
@@ -39,11 +41,15 @@ flowchart TD
     s3 -. "sin solución .NET, CLI ausente o fallo" .-> s3b
     s3 --> s4
     s3b --> s4
-    s4 --> s5 --> s6 --> host --> salida
+    s4 --> p1
+    p1 -.-> sp
+    p1 --> s5
+    sp -.-> s5
+    s5 --> s6 --> host --> salida
     s6 -. "reincorpora al grafo los informes marcados" .-> s1
 ```
 
-Los pasos y sus límites de tiempo, en el orden real de la factoría:
+Los pasos y sus límites de tiempo, en el orden real de la factoría (`AnalysisPipelineFactory.cs:154-196`). Los límites entre paréntesis son los valores por defecto del código (`Hosting/AnalysisTimeouts.cs:24-43`); el `appsettings.analysis.json` del sample los pone todos a 0, que los quita (`appsettings.analysis.json:28-36`):
 
 | # | Paso (clase) | Fase | Límite de tiempo | LLM |
 |---|---|---|---|---|
@@ -51,37 +57,45 @@ Los pasos y sus límites de tiempo, en el orden real de la factoría:
 | 2 | `LanguageEnricherStep` | `enrich` | `JavaAnalyzer:StepTimeoutSeconds` (3600) | no |
 | 3 | `DotNetEnricherStep`, con `SemanticEnrichmentStep` como alternativa | `enrich` | `EnrichMinutes` (20), que cubre el CLI y el fallback | solo el fallback |
 | 4 | `SqlFacetExtractorStep` | `facets` | 5 minutos fijos (`Steps/SqlFacetExtractorStep.cs:25`) | no |
-| 5 | `TolerantReportsParallelStep` `ParallelReportsExecution`, con nueve `Auditor_<Tipo>` | `reports` | `ReportsMinutes` (60) el conjunto y `AuditorMinutes` (15) cada auditor | sí |
+| 4a | `RepositoryInventoryStep` (solo con `Preparation:Mode = Subsystems`, el valor por defecto) | `facets` | 10 minutos fijos (`Steps/RepositoryInventoryStep.cs:95`) | no |
+| 4b | `DomainDiscoveryStep` (ídem) | `facets` | 20 minutos, con 5 por tanda de nombrado (`Steps/DomainDiscoveryStep.cs:40`, `:67`) | sí, el sub-step `DomainNaming` con el rol `FunctionalAuditor` |
+| 4c | `CoveragePlanningStep` (ídem) | `facets` | 5 minutos fijos (`Steps/CoveragePlanningStep.cs:45`) | no |
+| 4d | `TimeBudgetStep` (ídem) | `facets` | 5 minutos fijos (`Steps/TimeBudgetStep.cs:61`) | no |
+| 4e | `SharedPassStep` (solo con `SharedPass:Enabled = true`; apagado por defecto) | `facets` | sin límite del motor; plazo interno `SharedPass:MaxMinutes` (90) (`Steps/SharedPassStep.cs:52-56`) | sí, roles `SharedPassReader` y `SharedPassJudge` |
+| 5 | `TolerantReportsParallelStep` `ParallelReportsExecution`, con nueve `Auditor_<Tipo>` | `reports` | `ReportsMinutes` (60) el conjunto y `AuditorMinutes` (15) cada auditor; con la preparación, `TimeBudgetStep` reescribe el límite de cada informe y sube el del paralelo si no cabe | sí |
 | 6 | `ExecutiveSynthesizerStep` | `synthesis` | `SynthesisMinutes` (15) | sí |
 
-La factoría ofrece además dos pipelines reducidos que reutilizan estos pasos: el de regeneración (`PrepareRegenerationStep`, facetas, auditores pedidos y, si se pide, síntesis; `AnalysisPipelineFactory.cs:166-190`) y el de verificación (`PrepareRegenerationStep`, un `Verify_<Tipo>` por informe en paralelo y, si se pide, síntesis; `AnalysisPipelineFactory.cs:199-240`). Se describen en [2.9](#s-regenerar) y [2.10](#s-verificar).
+La factoría ofrece además dos pipelines reducidos que reutilizan estos pasos: el de regeneración (`PrepareRegenerationStep`, facetas, los pasos de la preparación reutilizando el mapa de dominios guardado si coincide con el grafo, auditores pedidos y, si se pide, síntesis; sin pasada compartida; `AnalysisPipelineFactory.cs:217-244`) y el de verificación (`PrepareRegenerationStep`, un `Verify_<Tipo>` por informe en paralelo y, si se pide, síntesis; `AnalysisPipelineFactory.cs:253-294`). Se describen en [2.9](#s-regenerar) y [2.10](#s-verificar).
 
 ### 1.1 Entrada: opciones y arranque del runner
 
-El runner de línea de comandos carga `appsettings.analysis.json` solo del directorio del ejecutable, sustituye las referencias `${VARIABLE}` por variables de entorno y superpone después, por este orden, variables de entorno, user secrets y argumentos (`Hosting/AnalysisConfiguration.cs:14-23`, `:32-36`, `:57-65`). La ruta del repositorio sale de `--repo` o de `CodebaseAnalysis:RepositoryPath`, relativa al directorio actual (`Hosting/AnalysisRunOptions.cs:20-24`); la base del grafo, de `--db` o `CodebaseAnalysis:DatabasePath` (por defecto `.codebase/codebase.db`), y los informes, de `--output` o `CodebaseAnalysis:OutputReportsPath` (por defecto `reports`), ambas relativas al repositorio (`:81-95`). `--force-reindex` y `CodebaseAnalysis:ForceReindex` fuerzan una reindexación; `--reports` (o `CodebaseAnalysis:RequestedReports`) elige los informes por nombre o alias y, si queda vacío, se piden todos (`:54-75`, `:167-168`); los topes de iteraciones de herramientas salen de `CodebaseAnalysis:Auditors` y la concurrencia de los auditores de `CodebaseAnalysis:Reports:MaxParallelAuditors` (`:154-183`, `:201-236`). `--validate-reports` evita el pipeline y valida los informes que hay en disco (`CLI/Program.cs:39-51`).
+El runner de línea de comandos carga `appsettings.analysis.json` solo del directorio del ejecutable, sustituye las referencias `${VARIABLE}` por variables de entorno y superpone después, por este orden, variables de entorno, user secrets y argumentos (`Hosting/AnalysisConfiguration.cs:14-23`, `:32-36`, `:57-65`). La ruta del repositorio sale de `--repo` o de `CodebaseAnalysis:RepositoryPath`, relativa al directorio actual (`Hosting/AnalysisRunOptions.cs:20-24`); la base del grafo, de `--db` o `CodebaseAnalysis:DatabasePath` (por defecto `.codebase/codebase.db`), y los informes, de `--output` o `CodebaseAnalysis:OutputReportsPath` (por defecto `reports`), ambas relativas al repositorio (`:81-95`). `--force-reindex` y `CodebaseAnalysis:ForceReindex` fuerzan una reindexación; `--reports` (o `CodebaseAnalysis:RequestedReports`) elige los informes por nombre o alias y, si queda vacío, se piden todos (`:54-75`, `:167-168`); los topes de iteraciones de herramientas salen de `CodebaseAnalysis:Auditors` y la concurrencia de los auditores de `CodebaseAnalysis:Reports:MaxParallelAuditors` (`:154-183`, `:201-236`). `--validate-reports` evita el pipeline y valida los informes que hay en disco; con `--validation-output <carpeta>` escribe `_validation.json` fuera del repositorio y con `--expected <fichero>` añade la comparación con hallazgos esperados (`CLI/Program.cs:39`, `:48-52`; `Hosting/AnalysisRunOptions.cs:123-127`; `Hosting/ReportValidationCommand.cs:19-60`). `--verify <informes|all>` verifica informes ya escritos sin analizar de nuevo y `--verify-synthesis` rehace además el resumen ejecutivo ([2.10](#s-verificar); `CLI/Program.cs:54-62`; `Hosting/VerificationCommand.cs:52-92`).
 
-Con esas opciones el runner configura Serilog (consola y `<LogsPath>/analysis-pipeline-<fecha>.log`, con nivel de `--log-level`, `--trace` o `--debug`), registra los servicios LLM y el framework, conecta de forma opcional el servidor MCP de cbm (desactivado por defecto), construye los roles LLM, construye la entrada del pipeline, registra las herramientas y ejecuta `AnalysisRunner.RunAsync` (`CLI/Program.cs:53-98`, `:103-150`, `:191-192`). `LlmRoleFactory.BuildRoles` exige doce roles y detiene el arranque con sus nombres si falta alguno (`Hosting/LlmRoleFactory.cs:20-24`, `:76-83`). El primer Ctrl+C cancela el pipeline y mata el árbol de procesos del indexador; el segundo termina el proceso (`CLI/Program.cs:156-167`). Al terminar, el runner escribe `reports/_run_meta.json` aunque el análisis se haya cancelado o haya fallado, valida los informes y fija el código de salida: 130 si se canceló, 1 si hay informes sin generar o errores y 0 en el resto (`CLI/Program.cs:205-229`, `:254-258`, `:277`).
+Con esas opciones el runner configura Serilog (consola y `<LogsPath>/analysis-pipeline-<fecha>.log`, con nivel de `--log-level`, `--trace` o `--debug`), registra los servicios LLM y el framework, conecta de forma opcional el servidor MCP de cbm (desactivado por defecto), construye los roles LLM, construye la entrada del pipeline, registra las herramientas y ejecuta `AnalysisRunner.RunAsync` (`CLI/Program.cs:64-89`, `:96-152`, `:163`, `:210-211`). `LlmRoleFactory.BuildRoles` toma los roles que el framework enlaza de `AITaskAgent:LlmProviders`, exige los doce de `RequiredRoles`, más `SharedPassReader` y `SharedPassJudge` si la pasada compartida está activada, y detiene el arranque con sus nombres si falta alguno (`Hosting/LlmRoleFactory.cs:21-26`, `:79-85`, `:94-95`). El primer Ctrl+C cancela el pipeline y mata el árbol de procesos del indexador; el segundo termina el proceso (`CLI/Program.cs:175-186`). Al terminar, el runner escribe `reports/_run_meta.json` (`kind: analysis`) aunque el análisis se haya cancelado o haya fallado (`CLI/Program.cs:224-234`); si se canceló sale con 130 sin validar, y si no valida los informes y sale con 1 si hay informes sin generar o el pipeline falló y con 0 en el resto (`:237-248`, `:273-297`).
 
 ### 1.2 Salidas
 
 | Ruta | Quién la escribe | Contenido |
 |---|---|---|
-| `reports/01…09_*.md` | cada auditor, al terminar (`Steps/CustomStatelessTemplateLlmStep.cs:144-160`) | informe con la línea final `<!-- analysis-meta: ... -->`, a la que el paso añade la procedencia |
-| `reports/00_resumen_ejecutivo.md` | la síntesis (`Steps/ExecutiveSynthesizerStep.cs:263-264`) | resumen ejecutivo, con la misma línea de procedencia |
-| `reports/_validation.json` | el anfitrión, al terminar, y `--validate-reports` (`Reports/ReportValidation.cs:393-415`) | validación determinista de los informes |
-| `reports/_run_meta.json` | el anfitrión (`CLI/Program.cs:205-215`; `WEB/Analysis/AnalysisRunManager.cs:513-535`) | estado de la ejecución y consumo LLM en total y por paso |
+| `reports/01…09_*.md` | cada auditor, al terminar (`Steps/CustomStatelessTemplateLlmStep.cs:157-167`) | informe con la línea final `<!-- analysis-meta: ... -->`, a la que el paso añade la procedencia |
+| `reports/00_resumen_ejecutivo.md` | la síntesis (`Steps/ExecutiveSynthesizerStep.cs:285-286`) | resumen ejecutivo, con la misma línea de procedencia |
+| `reports/_validation.json` | el anfitrión, al terminar, `--validate-reports` (o la carpeta de `--validation-output`) y `--verify` (`Reports/ReportValidation.cs:429-448`; `Hosting/VerificationCommand.cs:154-155`) | validación determinista de los informes |
+| `reports/_run_meta.json` | el anfitrión (`CLI/Program.cs:224-234`; `WEB/Analysis/AnalysisRunManager.cs:522-534`) | estado de la ejecución (`kind`: `analysis`, `regeneration` o `verification`) y consumo LLM en total y por paso |
+| `reports/_repository_inventory.json`, `_domain_map.json`, `_coverage_plan.json`, `_time_budget.json` | los pasos de la preparación por subsistema, con `Preparation:Mode = Subsystems` (`Preparation/PreparationArtifacts.cs:47-58`; `Steps/RepositoryInventoryStep.cs:120`; `Steps/DomainDiscoveryStep.cs:124`; `Steps/CoveragePlanningStep.cs:79`; `Steps/TimeBudgetStep.cs:149`, `:162`) | inventario, mapa de dominios, plan de cobertura y presupuesto de tiempo ([2.5.1](#s-preparacion)) |
+| `reports/_shared_pass_registry.json` | `SharedPassStep`, solo con `SharedPass:Enabled` (`SharedPass/SharedPassRegistry.cs:24`, `:241-249`) | registro de hallazgos de la pasada compartida ([2.5.2](#s-pasada-compartida)) |
 | `reports/custom/*.md` | las herramientas `create_report` y `update_report` del chat | informes propios; el pipeline no los toca |
 | `.codebase/codebase.db` | detección, ingestas y enriquecedores | copia del grafo, con la tabla `enrichment_runs` |
 | `.codebase/enrichment/java/` | el analizador Java (`Enrichment/Java/JavaAnalyzerRunner.cs:93-95`, `:118`) | `request.txt`, `java-analyzer.log` y, solo con `KeepIntermediate`, `java-analysis.jsonl` |
 | `.codebase/enrichment/dotnet-restore/` | el CLI de C# (`Steps/DotNetEnricherStep.cs:203-205`, `:212`) | caché de la restauración NuGet, fuera del repositorio analizado |
 | `.codebase/backups/<fecha>/` | `ForceReindex` (`Steps/DetectAndIndexGraphStep.cs:190-259`) | BD, exportaciones de Access e informes anteriores |
-| `.codebase/report-history`, `.codebase/documents`, `.codebase/knowledge` | web y chat (`Knowledge/KnowledgePaths.cs`) | versiones de informes, documentos y registro de fuentes del grafo |
+| `.codebase/report-history`, `.codebase/documents`, `.codebase/knowledge`, `.codebase/chat-read-roots.json` | web y chat (`Knowledge/KnowledgePaths.cs`) | versiones de informes, documentos, registro de fuentes del grafo y rutas de lectura adicionales del chat |
+| `<carpeta de la BD>/chat/*.json` | la web (`WEB/Workspace/WorkspaceState.cs:165`; `Chat/ChatSessionStore.cs:54`) | sesiones de chat |
 | `<LogsPath>/analysis-pipeline-<fecha>.log` | el anfitrión | log del análisis |
 
 <a id="s-pasos"></a>
 ## 2. Los pasos
 
-Cada paso se describe con la misma ficha (entrada, salida, dependencias externas, límite de tiempo y reintentos) y tres párrafos: qué hace, qué escribe y cuándo se omite o cae a otro camino. Todos los pasos de primer nivel declaran `MaxRetries => 1`, y el motor de reintentos ejecuta el paso mientras `attempt <= MaxRetries` (`FW/Core/Execution/Middlewares/RetryMiddleware.cs:21-23`), de modo que no hay reintento de paso: lo único que cambia de camino ante un fallo es el fallback de proveedor de un rol LLM, que el sample no configura (el JSON de `appsettings.analysis.json` no declara ningún `Fallbacks`), y el modo de respuesta final de los auditores que agotan sus herramientas.
+Cada paso se describe con la misma ficha (entrada, salida, dependencias externas, límite de tiempo y reintentos) y tres párrafos: qué hace, qué escribe y cuándo se omite o cae a otro camino. Todos los pasos de primer nivel declaran `MaxRetries => 1`, y el motor de reintentos ejecuta el paso mientras `attempt <= MaxRetries` (`FW/Core/Execution/Middlewares/RetryMiddleware.cs:21-23`), de modo que no hay reintento de paso: lo único que cambia de camino ante un fallo es el fallback de proveedor de un rol LLM, que el sample no configura (el JSON de `appsettings.analysis.json` no declara ningún `Fallbacks`), y el modo de respuesta final de los auditores que agotan sus herramientas o a los que se les corta el bucle de herramientas. Las investigaciones por subsistema y la consolidación de los informes en modo B se invocan sin middleware y repiten por su cuenta ese bucle esencial de reintento (`Steps/SubsystemInvestigationReportStep.cs`, `RunWithRetriesAsync`).
 
 <a id="s-detect"></a>
 ### 2.1 `DetectAndIndexGraphStep`: detección e indexado con cbm
@@ -91,7 +105,7 @@ Cada paso se describe con la misma ficha (entrada, salida, dependencias externas
 | Entrada | `AnalysisPipelineInput` (`Steps/DetectAndIndexGraphStep.cs:29-35`) |
 | Salida | `GraphStatusResult` con `ExistedBefore`, `IsEnriched`, nodos, aristas y ruta de la BD (`:131-138`) |
 | Dependencias externas | el ejecutable de cbm, que se busca en `McpServers:CodebaseMemory:Command` o `CodebaseMemory:CliPath`, en `%LOCALAPPDATA%\Programs\codebase-memory-mcp\` y en el `PATH` (`Support/CodebaseMemoryLocator.cs:18-63`), y su caché `~/.cache/codebase-memory-mcp/<proyecto>.db` (`:435-439`) |
-| Límite y reintentos | `DetectMinutes` (15) (`:25`; fijado en `AnalysisPipelineFactory.cs:113`); sin reintentos (`:22`) |
+| Límite y reintentos | `DetectMinutes` (15) (`:25`; fijado en `AnalysisPipelineFactory.cs:155`; 0 en el sample, sin límite); sin reintentos (`:22`) |
 
 **Qué hace.** El paso deja la entrada, la ruta de la BD y las rutas de conocimiento en el contexto (`:36-39`), localiza cbm y decide si indexa: lo hace si no existe la BD, si se fuerza la reindexación o si la BD no tiene nodos estructurales, que son los de etiquetas `Class`, `Interface`, `Struct`, `Record`, `Enum`, `Trait`, `Function`, `Method`, `CsProject`, `AccessTable` o `AccessQuery` (`:44-47`, `:570-590`); los nodos `DocSection` no cuentan, porque los inserta el propio pipeline (`:577-580`). Para indexar lee la versión de cbm con `--version` y un plazo de 30 segundos (`Support/CodebaseMemoryLocator.cs:66`, `:77-112`), prepara la copia de seguridad si hay `ForceReindex` y ejecuta `codebase-memory-mcp cli index_repository {"repo_path": ...}` como proceso hijo. Sus líneas de salida van al canal `indexer` y de la salida JSON se toma el nombre del proyecto que cbm informa, porque deducirlo de la ruta falla con nombres cortos 8.3 de Windows (`DetectAndIndexGraphStep.cs:378-407`). El método no aplica ningún límite propio al proceso: solo lo corta la cancelación o el límite del paso (`:426`), y un código de salida distinto de 0 lanza una excepción (`:428-431`). Con el proceso terminado, copia la BD de la caché sobre `.codebase/codebase.db` tras borrar los ficheros `-wal`, `-shm` y `-journal` que pudieran quedar del grafo anterior (`:435-456`), anota la versión de cbm en la huella de la indexación (`:70`, `:536-550`) y retira del grafo los nodos que cuelgan de la carpeta de la BD, de la carpeta de informes y de `<repo>/.codebase`, porque cbm recorre también la salida del propio pipeline (`:465-508`).
 
@@ -115,7 +129,7 @@ Con o sin indexación nueva, el paso ejecuta siempre el mismo tramo posterior. A
 
 El analizador es `JavaAnalyzer.java`, un único fuente que se ejecuta con el lanzador de código fuente del JDK, sin compilar ni distribuir binarios. La línea de órdenes es `java <JvmOptions> --add-exports jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED [--add-exports jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED] JavaAnalyzer.java --request <request.txt>` (`Enrichment/Java/JavaAnalyzer.java:6-8`; `Enrichment/Java/JavaAnalyzerRunner.cs:99-102`). Compila los fuentes en memoria con `--release 8 -proc:none -implicit:none -Xmaxerrs 1000000 -nowarn -XDshould-stop.ifError=FLOW` (`JavaAnalyzer.java:645-646`), recorre los árboles y emite un fichero JSON Lines con registros `file`, `diag`, `type`, `method`, `call`, `field`, `ref`, `issue`, `comment`, `const` y un `summary` final; la versión del analizador es la 4 y el contrato el schema 3 (`:1-8`, `:20-23`, `:52-68`). Cada llamada lleva su origen (`project`, `jdk`, `jar` o `unresolved` con motivo; `:2460-2471`); las referencias a tipos y campos se agregan por origen, destino, clase y acceso; la complejidad ciclomática se calcula por método (`:2476`); los registros `issue` aplican cinco reglas propias (`empty-catch`, `string-identity`, `undisposed-resource`, `null-return-deref`, `obsolete-api`; `:52-58`), los `comment` recogen marcas TODO y código comentado, y los `const` extraen credenciales con el valor enmascarado y nombres de clase pasados a `Class.forName` o `loadClass` (`:62-68`). El proceso devuelve 0 si terminó aunque haya diagnósticos, 1 si la petición no vale, 2 si `javac` no arrancó y 3 ante un fallo inesperado (`:70-72`).
 
-`JavaAnalyzerRunner` compone el classpath con todos los `.jar` del repositorio más `JavaAnalyzer:ProvidedClasspath` (`:167-195`), trabaja en `<carpeta de la BD>/enrichment/java/` (`:118`) y mata el proceso al superar `JavaAnalyzer:TimeoutSeconds`. `ResolveJdk` no busca `JAVA_HOME`: con `JavaAnalyzer:JdkPath` vacío, que es el valor del sample, devuelve el error `JdkNotConfigured` (`:126-130`; `appsettings.analysis.json:94`), y el paso lo traduce a un aviso, la retirada del código de test y una fila `skipped` en `enrichment_runs` (`Steps/LanguageEnricherStep.cs:150-162`).
+`JavaAnalyzerRunner` compone el classpath con todos los `.jar` del repositorio más `JavaAnalyzer:ProvidedClasspath` (`:167-195`), trabaja en `<carpeta de la BD>/enrichment/java/` (`:118`) y mata el proceso al superar `JavaAnalyzer:TimeoutSeconds`. `ResolveJdk` no busca `JAVA_HOME`: con `JavaAnalyzer:JdkPath` vacío, que es el valor del sample, devuelve el error `JdkNotConfigured` (`:126-130`; `appsettings.analysis.json:152`), y el paso lo traduce a un aviso, la retirada del código de test y una fila `skipped` en `enrichment_runs` (`Steps/LanguageEnricherStep.cs:150-162`).
 
 `JavaGraphWriter.ApplyAsync` lee el resultado entero y lo valida antes de abrir la BD (un JSONL sin `summary` final o con un schema fuera de 1 a 3 no escribe nada; `Enrichment/Java/JavaGraphWriter.cs:371-380`, `:488-498`) y escribe después en una sola transacción sobre la copia, tras comprobar que la ruta no es la BD de la caché de cbm (`Enrichment/EnrichmentMarks.cs:38`, `:63-65`). El orden de la escritura es: retirar la salida de la pasada anterior, identificada por `enriched_by` (`JavaGraphWriter.cs:654`); retirar el código de test; cargar los nodos de cbm de los ficheros analizados; sustituir las aristas `CALLS`, `INHERITS` e `IMPLEMENTS` de cbm que nacen en esos ficheros y, con schema 2 o superior, también las `USAGE`, `USES_TYPE`, `READS` y `WRITES` (`:677-685`); casar o crear tipos, métodos (con sobrecargas), campos, jerarquía, llamadas y referencias; escribir las aristas `OVERRIDES` y aplicar las métricas y hallazgos (`:1554-1569`). Se evita duplicar nodos reutilizando el nodo de cbm por su nombre cualificado cuando existe. El grafo recibe, por tanto, propiedades de tipo (`fqn`, `accessibility`, `is_abstract`, `annotations`, `docstring`, `super_fqn`, `interfaces_fqn`; `:971-980`), de método (`signature`, `param_types`, `is_static`, `is_constructor`, `cyclomatic`, `overload_of`; `:1142-1163`), de campo (`field_name`, `type_fqn`, `accessibility`, `is_static`, `is_final`; `:1262-1265`), el papel de cada tipo (`type_role`, `is_public`; `:292-300`, `:975`), y las propiedades que el analizador posee (`detected_issues`, `issue_rules`, `todo_markers`, `todo_count`, `commented_code`, `commented_code_lines`, `hardcoded_secrets`, `reflection_targets`, `fan_in`, `fan_out`, `hotspot`, `is_override`, `encoding`, `outer_fqn`, `owner_fqn`; `:323-328`). `hotspot` es la complejidad ciclomática por el logaritmo de 1 más `fan_in` (`:1571-1577`). Las aristas que crea son `CALLS` (con `lines`, `count` y `kinds`), `INHERITS`, `IMPLEMENTS`, `DEFINES_METHOD`, `DEFINES`, `OVERRIDES`, `USES_TYPE` (con los contextos del uso), `READS` y `WRITES` (`:302-313`), y todo lo escrito lleva `enriched_by: ["JavaAnalyzer"]`, que es lo que `graph_neighbors` y las facetas leen como arista resuelta. Al final deja una fila `ok` en `enrichment_runs` con recuentos, tiempos por fase de la escritura (`read`, `schema`, `remove_previous`, `remove_tests`, `load_nodes`, `replace_cbm_edges`, `types`, `methods`, `fields`, `patches`, `hierarchy`, `calls`, `refs`, `overrides`, `findings`, `run_row`, `commit`) y el desglose `details.cbm_match` (`:395-411`, `:419-445`, `:670-700`). Cuando lo que no casa con cbm supera el 5 % (`CbmDriftThreshold`), el paso avisa y distingue dos causas: ficheros `.java` que cbm no indexó, con la pista del MAX_PATH si alguno llega a 260 caracteres, y nombres que no casan en ficheros que cbm sí indexó, que es lo único que apunta a un cambio de versión de cbm (`Steps/LanguageEnricherStep.cs:340-383`; `JavaGraphWriter.cs:334-340`).
 
@@ -135,40 +149,45 @@ La alcanzabilidad la calcula `JavaReachabilityWriter` sobre las aristas ya escri
 | Entrada | `GraphStatusResult` (`Steps/DotNetEnricherStep.cs:47-52`) |
 | Salida | `GraphStatusResult` con `IsEnriched = true` y los recuentos (`:165-174`), o el de entrada cuando se omite |
 | Dependencias externas | el CLI `DotNetEnricher` (`DotNetEnricher.exe` o `.dll` en `dotnet-enricher/` junto a la app, o `DotNetEnricher:CliPath`), un SDK de .NET con MSBuild y, para la restauración, acceso a los orígenes NuGet (`:225-248`; `DNE/Program.cs:27-35`) |
-| Límite y reintentos | `EnrichMinutes` (20) para el paso y su fallback (`:43`); el proceso, `DotNetEnricher:TimeoutSeconds` (900), con `RestoreTimeoutSeconds` (300) dentro (`Enrichment/DotNetEnricherOptions.cs:41-60`); sin reintentos (`:40`) |
+| Límite y reintentos | `EnrichMinutes` (20 por defecto; el sample lo pone a 0, sin límite) para el paso y su fallback (`:43`; `Hosting/AnalysisTimeouts.cs:31`; `appsettings.analysis.json:31`); el proceso, `DotNetEnricher:TimeoutSeconds` (900), con `RestoreTimeoutSeconds` (300) dentro (`Enrichment/DotNetEnricherOptions.cs:30-35`, `:47-48`); sin reintentos (`:40`) |
 
-**Qué hace.** El paso decide primero si procede. Si `LanguageEnricherStep` encontró Java y no C#, lo dice y devuelve la entrada sin lanzar el CLI ni el LLM (`:54-64`); si `DotNetEnricher:Enabled` es falso, pasa al fallback (`:69-73`); con una pasada `ok` de `DotNetEnricher` sobre la misma indexación y configuración, o con el grafo ya enriquecido y ninguna pasada registrada (un grafo anterior al registro), no hace nada (`:92-106`); y sin ningún `.sln` o `.slnx` en la raíz del repositorio o en sus subcarpetas inmediatas (`FindSolutionFile`, que nunca mira fuera; `:255-268`) pasa al fallback con un aviso (`:108-113`). En otro caso lanza el CLI como proceso aparte, con la solución, la BD, la raíz del repositorio, la huella de configuración, `--verbose`, `--restore <modo>`, `--restore-timeout <s>` y `--cache-dir <carpeta de la BD>/enrichment/dotnet-restore` (`:129`, `:193-209`). La huella de configuración incluye la solución y el proyecto de cbm, y la restauración solo si no es `auto`, para que las pasadas ya registradas sigan valiendo (`:85-90`). El proyecto de cbm lo resuelve el propio CLI, que toma el mayoritario en la tabla `nodes` (`DNE/EnrichmentPipeline.cs:125-131`). Las líneas del CLI van al canal `indexer` y, si supera su plazo, el paso mata el proceso con todo su árbol, MSBuild incluido (`Steps/DotNetEnricherStep.cs:277-330`).
+**Qué hace.** El paso decide primero si procede. Si `LanguageEnricherStep` encontró Java y no C#, lo dice y devuelve la entrada sin lanzar el CLI ni el LLM (`:54-64`); si `DotNetEnricher:Enabled` es falso, pasa al fallback (`:69-73`); con una pasada `ok` de `DotNetEnricher` sobre la misma indexación y configuración, o con el grafo ya enriquecido y ninguna pasada registrada (un grafo anterior al registro), no hace nada (`:92-106`); y sin ningún `.sln` o `.slnx` en la raíz del repositorio o en sus subcarpetas inmediatas (`FindSolutionFile`, que nunca mira fuera; `:255-268`), salvo que `DotNetEnricher:SolutionPath` fije uno relativo al repositorio (`:80-82`), pasa al fallback con un aviso (`:108-113`). En otro caso lanza el CLI como proceso aparte, con la solución, la BD, la raíz del repositorio, la huella de configuración, `--verbose`, `--restore <modo>`, `--restore-timeout <s>` y `--cache-dir <carpeta de la BD>/enrichment/dotnet-restore` (`:129`, `:193-209`). La huella de configuración incluye la solución y el proyecto de cbm, y la restauración solo si no es `auto`, para que las pasadas ya registradas sigan valiendo (`:84-87`). La pasada se registra como `DotNetEnricher` con `EnricherVersion` `"5"` (`Enrichment/DotNetEnricherIdentity.cs:11-14`). El proyecto de cbm, salvo `DotNetEnricher:ProjectName`, lo resuelve el propio CLI, que toma el mayoritario en la tabla `nodes` (`DNE/EnrichmentPipeline.cs:130-136`; `Support/GraphProject.cs:17-20`). Las líneas del CLI van al canal `indexer` y, si supera su plazo, el paso mata el proceso con todo su árbol, MSBuild incluido (`Steps/DotNetEnricherStep.cs:277-330`).
 
-El CLI (`DNE/EnrichCommand.cs`) valida que existan la solución y la BD y que la solución esté dentro de la raíz del repositorio (`:44-67`) y sigue tres fases. Restaura primero los paquetes NuGet **sin escribir en el repositorio analizado**: `NuGetRestore` redirige la salida de `dotnet restore` (`project.assets.json`, `nuget.g.props`, `nuget.g.targets`) a una carpeta de caché, una por proyecto, mediante ficheros de propiedades que se importan al principio y al final de `Microsoft.Common.props`, y esas mismas propiedades globales se pasan a `MSBuildWorkspace`; con `auto` restaura solo si a algún proyecto le falta su `project.assets.json`, con `always` siempre y con `never` nunca, y un fallo de la restauración deja un aviso y la carga sigue sin paquetes (`DNE/NuGetRestore.cs:20-33`, `:70-80`; `DNE/EnrichCommand.cs:69-88`; `Enrichment/DotNetRestoreMode.cs:3-26`). Carga después la solución con Roslyn y falla con el código 3 si no hay ningún proyecto C# con código (`DNE/EnrichCommand.cs:91-111`). Ejecuta por último los enriquecedores en una sola transacción: antes retira la salida de la pasada anterior de cada enriquecedor y los nodos de salida de compilación (`DNE/EnrichmentPipeline.cs:137-155`), y al final registra la pasada en `enrichment_runs` (`:210-224`). Si un enriquecedor no encuentra en el grafo más del 5 % de los nodos que busca, la pasada termina con el código 2, que el paso trata como aviso (`DNE/EnrichmentPipeline.cs:69`; `Steps/DotNetEnricherStep.cs:155-158`).
+El CLI (`DNE/EnrichCommand.cs`) valida que existan la solución y la BD y que la solución esté dentro de la raíz del repositorio (`:48-60`) y sigue tres fases. Restaura primero los paquetes NuGet **sin escribir en el repositorio analizado**: `NuGetRestore` redirige la salida de `dotnet restore` (`project.assets.json`, `nuget.g.props`, `nuget.g.targets`) a una carpeta de caché, una por proyecto, mediante ficheros de propiedades que se importan al principio y al final de `Microsoft.Common.props`, y esas mismas propiedades globales se pasan a `MSBuildWorkspace`; con `auto` restaura solo si a algún `.csproj` del repositorio le falta su `obj/project.assets.json`, con `always` siempre y con `never` nunca; en los tres casos `obj/` y `bin/` se redirigen a la caché, una caché dentro del repositorio pero fuera de `.codebase` anula restauración y redirección, y un fallo de la restauración deja un aviso y la carga sigue sin paquetes (o con los assets parciales de la caché) (`DNE/NuGetRestore.cs:22-33`, `:45-106`, `:150-188`; `DNE/EnrichCommand.cs:68-90`; `Enrichment/DotNetRestoreMode.cs:8-39`). Carga después la solución con Roslyn y falla con el código 3 si la carga lanza o no hay ningún proyecto C# con código (`DNE/EnrichCommand.cs:92-114`). Ejecuta por último los enriquecedores en una sola transacción: antes repara los `properties` que no son JSON, retira la salida de la pasada anterior de cada enriquecedor y los nodos de salida de compilación (`DNE/EnrichmentPipeline.cs:142-167`), y al final registra la pasada en `enrichment_runs` (`:227-238`). Si un enriquecedor no encuentra en el grafo más del 5 % de los nodos que busca, la pasada termina con el código 2, que el paso trata como aviso (`DNE/EnrichmentPipeline.cs:69`; `Steps/DotNetEnricherStep.cs:155-158`).
 
-Los enriquecedores, en su orden de ejecución (`Order`, con el orden de registro como desempate; `DNE/EnrichmentPipeline.cs:72-107`), y lo que escribe cada uno:
+Los 23 enriquecedores, en su orden de ejecución (`Order`, con el orden de registro como desempate; `DNE/EnrichmentPipeline.cs:72-111`), y lo que escribe cada uno:
 
 | Orden | Enriquecedor | Qué escribe en el grafo |
 |---|---|---|
-| 2 | `SemanticMethodEnricher` | en los métodos, `is_async`, `is_abstract`, `is_virtual`, `is_override`, `is_static` y `accessibility`; crea nodos `Interface` que cbm no indexó; aristas `IMPLEMENTS` (las heredadas con `is_inherited`) y `OVERRIDES` |
-| 2 | `AttributeEnricher` | `attributes[]` (`name`, `args`, `named_args`) en tipos y métodos |
-| 3 | `DiEnricher` | registros de DI de `AddScoped`, `AddSingleton` y `AddTransient` como nodos `DiRegistration` con su ciclo de vida y `consumer_count` |
+| 2 | `SemanticMethodEnricher` | en los métodos, `is_async`, `is_abstract`, `is_virtual`, `is_override`, `is_static` y `accessibility` (también en constructores, con `is_constructor`, y en implementaciones explícitas, con `is_explicit_interface_impl`); crea nodos `Interface` que cbm no indexó; aristas `IMPLEMENTS` (las heredadas con `is_inherited`) y `OVERRIDES` |
+| 2 | `AttributeEnricher` | `attributes[]` (`name` sin el sufijo `Attribute`, `args`, `named_args`) en tipos y métodos |
+| 3 | `CallEnricher` | aristas `CALLS` exactas de Roslyn, una por origen y método llamado, con `exact`, `origin = compiler`, `line`, `lines`, `count`, `kinds` (`invocation`, `creation`, `constructor-initializer`, `delegate`) y `dispatch` (`interface`, `virtual`); sustituye las `CALLS` de cbm de los ficheros C# analizados, salvo las de ficheros con símbolos sin resolver que no tienen equivalente |
+| 3 | `DiEnricher` | nodos `DiRegistration` por cada `AddScoped`, `AddSingleton` y `AddTransient` con `lifetime`, `service_type`, `implementation_type`, `consumer_count` y `consumed_by_framework`, y aristas `DI_RESOLVES` |
 | 4 | `RouteEnricher` | nodos `Route` y aristas `HANDLES` para controladores y Minimal APIs, con autenticación (`auth_required`, `auth_inferred`, roles, políticas) y contrato de entrada y salida |
 | 5 | `FieldEnricher` | nodos `Field` en `<QN del tipo>.<campo>`, arista `DEFINES` y aristas `READS` y `WRITES` exactas |
 | 6 | `ExtensionPointEnricher` | `is_extension_point` en interfaces con al menos dos `IMPLEMENTS`, con `DI_RESOLVES` o descritas por `DOC_DESCRIBES`; la propiedad `language` por extensión |
 | 7 | `IssueEnricher` | `detected_issues` e `issue_rules` por método, campo o tipo, con reglas del compilador (`null-deref`, `unused-field`, `unawaited-task`, `unreachable-code`, `obsolete-api`) y propias (`async-void`, `empty-catch`, `blocking-async`, `undisposed-resource`, `captive-dependency`) |
+| 7 | `ThrowsEnricher` | por método, `throws`, `rethrows`, `rethrow_loses_stack`, `swallows_exceptions` y `swallowed_catches` (`empty`, `inert`, `log-only`, `generic`); aristas `THROWS` exactas al tipo de excepción con nodo, que sustituyen las de cbm |
 | 8 | `ProjectEnricher` | nodos `CsProject` con acoplamiento Ca/Ce/I y rol, aristas `PROJECT_DEPENDS_ON` y `BELONGS_TO_PROJECT` |
 | 8 | `TypeRoleEnricher` | `type_role`, `is_public` y `cs_project` en los tipos; `abstractness`, `distance` y `type_roles` en cada `CsProject` |
 | 9 | `CommentEnricher` | `docstring` y `docstring_source`, `todo_markers` y `todo_count`, `commented_code` y `commented_code_lines`, y `encoding` en el nodo `File` |
 | 9 | `ConstantEnricher` | `hardcoded_secrets` (valor enmascarado) y `reflection_targets` |
-| 10 | `ConfigOptionsEnricher` | nodos de configuración para las clases `*Options`, `*Config`, `*Settings` y las llamadas `Configure<T>` |
-| 11 | `FlowEnricher` | nodos `Flow` y aristas `FLOW_ENTRY` y `FLOW_NEXT` desde los proveedores de entrada (servicios en segundo plano y métodos con `HANDLES`) |
+| 9 | `SensitiveApiEnricher` | `sensitive_apis` (`[{category, api, line}]`) y `sensitive_categories` por método, resueltas por símbolo: `file-io`, `process`, `network`, `deserialization`, `reflection`, `dynamic-code`, `environment`, `sql` |
+| 9 | `ConcurrencyEnricher` | `concurrency_markers` (`lock`, `Interlocked`, `async-void`, `fire-and-forget`, `blocking-wait`, `Task.Run`, `Parallel`, `thread`, `writes-static-mutable`) y `concurrency_kinds` por método; `is_static_mutable` e `is_thread_safe_type` en los `Field` |
+| 10 | `ConfigOptionsEnricher` | `is_config_class`, `config_properties` y `has_validation` en las clases `*Options`, `*Config`, `*Settings` y `*Configuration` (nodo `ConfigClass` nuevo si cbm no tiene la clase); `config_section` y aristas `OPTIONS_CONFIGURES` desde `Configure<T>` y `AddOptions<T>` |
+| 11 | `FlowEnricher` | nodos `Flow` (`flow_kind`, `entry_method_qn`, `step_count`, `path_count`) y aristas `FLOW_ENTRY` y `FLOW_NEXT` (`order`, `path_type`, `condition`, `exception_types`) desde los proveedores de entrada (servicios en segundo plano y métodos con `HANDLES`) |
 | 12 | `ContractEnricher` | `doc_params` y `doc_returns` en métodos, `public_props` en clases, `values` en enums, `doc_coverage` por `CsProject` |
 | 13 | `CyclomaticEnricher` | `cyclomatic` de McCabe real en cada método y constructor |
+| 13 | `HashEnricher` | huellas SHA-256 sin trivia: `body_hash` y `contract_hash` (firma más `throws`) por método, `type_hash` por clase, interfaz o enum |
 | 14 | `MetricsEnricher` | `fan_in`, `fan_out` y `hotspot` por método; `method_count`, `loc_total`, `cyclomatic_total`, `cyclomatic_max` y `fan_in_total` por clase; percentiles y máximos por `CsProject` |
-| 15 | `ReachabilityEnricher` | `is_reachable`, `dead_code_candidate`, `dead_code_confidence` y `dead_code_reason`; `unused_registration` y `unused_config` |
+| 15 | `ReachabilityEnricher` | `is_reachable`, `dead_code_candidate`, `dead_code_confidence` y `dead_code_reason`; `unused_registration` y `unused_config`; raíces adicionales de `TestConventionSuppressor` y `ReflectionTargetSuppressor` |
 | 16 | `GraphAnalyticsEnricher` | `afferent_coupling`, `efferent_coupling` e `instability` por clase; `in_cycle`, `cycle_group`, `cycle_size` y `cycle_members` (Tarjan); `layer_violation` en aristas entre proyectos; `community_id` y `community_name` (Louvain) |
 
-Las descripciones salen de la documentación de cada clase en `DNE/Enrichers/` (por ejemplo `SemanticMethodEnricher.cs:5-12`, `IssueEnricher.cs:8-24`, `ReachabilityEnricher.cs:5-30`, `GraphAnalyticsEnricher.cs:3-24`); la lista de propiedades de `DiEnricher` y de `FlowEnricher` es parcial porque sus clases documentan menos que el resto `[I]`.
+Las descripciones salen de la documentación de cada clase en `DNE/Enrichers/` (por ejemplo `SemanticMethodEnricher.cs:5-13`, `IssueEnricher.cs:8-24`, `ReachabilityEnricher.cs:5-30`, `GraphAnalyticsEnricher.cs:3-24`, `CallEnricher.cs:5-33`, `ThrowsEnricher.cs:6-28`, `SensitiveApiEnricher.cs:7-34`, `ConcurrencyEnricher.cs:7-31`, `HashEnricher.cs:10-29`); las de `DiEnricher`, `FlowEnricher` y `ConfigOptionsEnricher` salen del código que escribe, porque sus clases apenas se documentan (`DiEnricher.cs:130-165`, `FlowEnricher.cs:391-439`, `ConfigOptionsEnricher.cs:60-144`).
 
-**Qué escribe.** Solo en el grafo, en una transacción que se deshace entera si algo falla, y en `.codebase/enrichment/dotnet-restore/` la caché de la restauración. Las marcas de cada enriquecedor son su propio nombre en `enriched_by`, y la pasada completa queda como una fila `DotNetEnricher` en `enrichment_runs` (`DNE/EnrichmentPipeline.cs:62-66`, `:210-224`).
+**Qué escribe.** Solo en el grafo, en una transacción que se deshace entera si algo falla, y en `.codebase/enrichment/dotnet-restore/` la caché de la restauración. Las marcas de cada enriquecedor son su nombre en `enriched_by`, más `enriched_at`, `enricher_version` y, en las aristas, `origin` (`enricher`, o `compiler` en las exactas), que sella el repositorio y no cada enriquecedor (`DNE/Provenance.cs:7-46`); la pasada completa queda como una fila `DotNetEnricher` en `enrichment_runs`, con las aristas de cbm sustituidas por tipo y el detalle de `CallEnricher` y `ThrowsEnricher` (`DNE/EnrichmentPipeline.cs:62-66`, `:194-238`).
 
-**Cuándo se omite o cae a otro camino.** Los códigos de salida del CLI son 0 (correcto), 2 (correcto con avisos), 1 (argumentos o entradas que no sirven), 3 (la solución no se pudo cargar o no tiene proyectos C# compilables) y 4 (fallo durante el enriquecimiento, con la transacción deshecha) (`DNE/EnrichCommand.cs:9-15`; `DNE/Program.cs:12-15`). Un CLI ausente, un código distinto de 0 y 2, o un plazo superado dejan un aviso, una fila `failed` en `enrichment_runs` con el motivo y el paso del fallback, a menos que `DotNetEnricher:Required` sea verdadero, en cuyo caso el paso lanza una excepción y el pipeline se detiene (`Steps/DotNetEnricherStep.cs:145-163`, `:176-186`). El fallback es `SemanticEnrichmentStep` ([2.4](#s-semantico)); se activa con el enriquecedor desactivado, sin solución o con el CLI fallido, y no se activa en un repositorio solo Java ni con una pasada anterior correcta. Un repositorio de otro lenguaje (Python, TypeScript, Go) llega aquí sin solución y cae al fallback `[I]`: el código no trata esos lenguajes de forma específica.
+**Cuándo se omite o cae a otro camino.** Los códigos de salida del CLI son 0 (correcto), 2 (correcto con avisos), 1 (argumentos o entradas que no sirven, incluido un grafo sin nodos con proyecto), 3 (sin MSBuild, o la solución no se pudo cargar o no tiene proyectos C# compilables) y 4 (fallo durante el enriquecimiento, con la transacción deshecha) (`DNE/EnrichCommand.cs:7-14`; `DNE/Program.cs:12-15`, `:27-35`). Un CLI ausente o que no arranca, un código distinto de 0 y 2, o un plazo superado dejan un aviso, una fila `failed` en `enrichment_runs` con el motivo y el paso del fallback, a menos que `DotNetEnricher:Required` sea verdadero, en cuyo caso el paso lanza una excepción y el pipeline se detiene (`Steps/DotNetEnricherStep.cs:145-163`, `:176-186`). El fallback es `SemanticEnrichmentStep` ([2.4](#s-semantico)); se activa con el enriquecedor desactivado, sin solución o con el CLI fallido, y no se activa en un repositorio solo Java ni con una pasada anterior correcta. Un repositorio de otro lenguaje (Python, TypeScript, Go) llega aquí sin solución y cae al fallback `[I]`: el código no trata esos lenguajes de forma específica.
 
 <a id="s-semantico"></a>
 ### 2.4 `SemanticEnrichmentStep`: fallback de enriquecimiento por LLM
@@ -177,12 +196,12 @@ Las descripciones salen de la documentación de cada clase en `DNE/Enrichers/` (
 |---|---|
 | Entrada | `GraphStatusResult` (`Steps/SemanticEnrichmentStep.cs:64-70`) |
 | Salida | el mismo `GraphStatusResult` con los totales recontados (`:176-191`) |
-| Dependencias externas | el rol LLM `Enricher` (`gpt-6-sol` en Azure OpenAI), con la plantilla `enricher_system` y el prompt `enricher_prompt`, sin herramientas (`AnalysisPipelineFactory.cs:119-127`) |
-| Límite y reintentos | lo cubre el de `DotNetEnricherStep` (`EnrichMinutes`, 20), porque se invoca sin pasar por el middleware (`DotNetEnricherStep.cs:214-218`); el rol tiene 300 s por intento (`appsettings.analysis.json:128`); sin reintentos |
+| Dependencias externas | el rol LLM `Enricher` (`gpt-6-sol` en Azure OpenAI), con la plantilla `enricher_system` y el prompt `enricher_prompt`, sin herramientas (`AnalysisPipelineFactory.cs:161-168`) |
+| Límite y reintentos | lo cubre el de `DotNetEnricherStep` (`EnrichMinutes`: 20 por defecto, 0 en el sample), porque se invoca sin pasar por el middleware (`DotNetEnricherStep.cs:214-218`); el rol hereda los 300 s por intento del proveedor (`appsettings.analysis.json:186`, `:279-292`) `[I]`; sin reintentos |
 
-**Qué hace.** Si el grafo ya está enriquecido, no hace nada (`:71-75`). Si no, recorre el repositorio buscando hasta 15 ficheros de rutas, controladores o DI con los patrones `*Controller*.cs`, `*Routes*.cs`, `*Program.cs`, `*Startup.cs`, `*Module*.cs`, `*ServiceCollection*.cs`, sus equivalentes `.ts`, `.java` y `.py`, y los trunca a 4000 caracteres cada uno (`:194-289`). Con esos ficheros, el lenguaje y los frameworks deducidos de las extensiones, llama al rol `Enricher`, que debe devolver un único JSON con `nodes`, `edges` y `node_properties_updates`. El código limpia las vallas Markdown, valida el JSON y lo vuelca en una transacción (`:109-153`, `:291-296`): antes retira los nodos que creó la pasada anterior del fallback (`origin = ai_enricher`), y de lo que propone el modelo solo deja pasar las propiedades de una lista blanca (rutas, verbo, autenticación declarada, roles, DI, contratos, `docstring`, `description`), nunca métricas (`cyclomatic`, `fan_in`, `loc_*`, `afferent_coupling`, `in_cycle`) ni las marcas de origen, que pone el código (`origin: ai_enricher`, `enriched_by: ["SemanticEnricherAgent"]`) (`:19-47`).
+**Qué hace.** Si el grafo ya está enriquecido, no hace nada (`:71-75`). Si no, recorre el repositorio buscando hasta 15 ficheros de rutas, controladores o DI con los patrones `*Controller*.cs`, `*Routes*.cs`, `*Program.cs`, `*Startup.cs`, `*Module*.cs`, `*ServiceCollection*.cs` y otros por nombre para `.ts`, `.java` y `.py` (`app`, `index`, `router`, `views`, `main`, `Application`, `Config`), sin las rutas excluidas, y los trunca a 4000 caracteres cada uno (`:194-289`, `:215-221`). Con esos ficheros, y con el lenguaje y los frameworks de la extensión del último fichero elegido (`:254-273`), llama al rol `Enricher`, que debe devolver un único JSON con `nodes`, `edges` y `node_properties_updates`. El código limpia las vallas Markdown, valida el JSON y lo vuelca en una transacción (`:109-153`, `:291-296`): antes retira los nodos que creó la pasada anterior del fallback (`origin = ai_enricher`), y de lo que propone el modelo solo deja pasar las propiedades de una lista blanca de nodo (rutas y verbo, autenticación declarada, roles y políticas, DI, tipos de petición y respuesta, sección de configuración, `is_async`, `accessibility`, `docstring`, `description`) y otra de arista (`order`, `path_type`, `condition`, `di_lifetime`), nunca métricas (`cyclomatic`, `fan_in`, `loc_*`, `afferent_coupling`, `in_cycle`) ni las marcas de origen, que pone el código (`origin: ai_enricher`, `enriched_by: ["SemanticEnricherAgent"]`) (`:19-47`).
 
-**Qué escribe.** Nodos `Route`, `DiRegistration`, `Flow`, `Interface` y `ConfigClass`, aristas `HANDLES`, `IMPLEMENTS`, `DI_RESOLVES`, `FLOW_ENTRY` y `FLOW_NEXT`, y actualizaciones de propiedades sobre nodos existentes, más una fila `SemanticEnricherAgent` en `enrichment_runs` (`:153-168`; `templates/enricher_prompt.md`). Sus aristas salen en `graph_neighbors` como «estimadas por LLM» y las facetas no las cuentan como resueltas (`Steps/SqlFacetExtractorStep.cs`, función `ResolvedEdgePredicate`).
+**Qué escribe.** Nodos `Route`, `DiRegistration`, `Flow`, `Interface` y `ConfigClass`, aristas `HANDLES`, `IMPLEMENTS`, `DI_RESOLVES`, `FLOW_ENTRY` y `FLOW_NEXT`, y actualizaciones de propiedades sobre nodos existentes, más una fila `SemanticEnricherAgent` en `enrichment_runs` (`:153-168`; `templates/enricher_prompt.md:17`, `:35`). Es lo que pide la plantilla: el código no restringe la etiqueta del nodo ni el tipo de arista, solo las propiedades (`:387-455`). Sus aristas salen en `graph_neighbors` como «estimadas por LLM» y las facetas no las cuentan como resueltas (`Steps/SqlFacetExtractorStep.cs`, función `ResolvedEdgePredicate`).
 
 **Cuándo se omite o falla.** No llama al modelo si no encuentra ficheros de entrada, y lo dice (`:85-91`); tampoco si ya existe una fila `ok` del fallback para la misma indexación y los mismos ficheros, salvo `ForceReindex` (`:93-107`). Una respuesta vacía o un JSON que no se puede procesar dejan una fila `failed`, un aviso y el análisis sigue (`:139-144`, `:170-174`). Su salida no marca el grafo como enriquecido, así que en la siguiente ejecución se vuelve a intentar Roslyn (`:151-152`).
 
@@ -192,26 +211,26 @@ Las descripciones salen de la documentación de cada clase en `DNE/Enrichers/` (
 | Ficha | |
 |---|---|
 | Entrada | `GraphStatusResult` (`Steps/SqlFacetExtractorStep.cs:28-35`) |
-| Salida | `ReportFacetInput`, que también queda en el contexto con la clave `ReportFacetInput` (`:668`), y la huella de procedencia del grafo (`:56-63`) |
+| Salida | `ReportFacetInput`, que también queda en el contexto con la clave `ReportFacetInput` (`:674`), y la huella de procedencia del grafo (`:62-70`) |
 | Dependencias externas | solo la copia del grafo y el disco del repositorio (secretos, instanciación dinámica y documentos); ningún LLM |
 | Límite y reintentos | 5 minutos fijos (`:25`); sin reintentos (`:23`) |
 
-**Qué hace.** Abre la copia, detecta el ecosistema por las extensiones de los ficheros del grafo (`DetectEcosystemAsync`, `:72`, `:1229`), calcula unas métricas derivadas en tablas temporales (`fan_in`, `fan_out`, `method_count`, LOC y complejidad total cuando faltan las propiedades, cada valor con su origen en un campo `*_source`; `:90-98`) y ejecuta las consultas, cada una con `LIMIT` y un `ORDER BY` determinista. Lo desconocido no es cero: `zero_fanin_classes` solo lista tipos con `fan_in` conocido e igual a 0 (`:215-250`), `unvalidated_routes` solo las rutas con `auth_required = false` (`:340-354`) y las rutas sin dato salen con `desconocido` (`:103-112`). Una consulta que falla no se convierte en un conjunto vacío: el resultado es una nota que dice que la faceta no está disponible por un error y que eso no es un conjunto vacío (`:172`, `:185`, `:276`, `:337`, `:394`, `:503`, `:552`, `:613`). Los fragmentos de código (70 líneas como máximo) se adjuntan a los diez primeros elementos de `high_cyclomatic_methods` y `hotspots_ranking` y a `critical_hotspots_exceptions` (`:134-143`, `:333`, `:481-491`). Los candidatos de código muerto y de campos sin leer se leen hasta 20 000 y se agrupan por patrón de nombre o directorio, con una marca `likely_dynamic` cuando el cruce con los sitios de instanciación dinámica y la configuración XML la justifica (`:228-267`). Dos facetas no salen de SQL: `hardcoded_secrets` recorre en disco los ficheros que conoce el grafo y enmascara el valor (`:593-603`), y `provided_documentation` es el índice de hasta 30 documentos subidos con `useInAnalysis` (`:645`; `Steps/ProvidedDocumentationFacet.cs:19-21`). Al final calcula seis totales numéricos para la síntesis (`TotalNodes`, `TotalEdges`, `TotalLoc`, `TotalRoutes`, `TotalFlows`, `DeadCodeCount`; `:649-666`).
+**Qué hace.** Abre la copia, detecta el ecosistema por las extensiones de los ficheros del grafo (`DetectEcosystemAsync`, `:72`, `:1229`), calcula unas métricas derivadas en tablas temporales (`fan_in`, `fan_out`, `method_count`, LOC y complejidad total cuando faltan las propiedades, cada valor con su origen en un campo `*_source`; `:90-98`) y ejecuta las consultas, cada una con `LIMIT` y un `ORDER BY` determinista. Lo desconocido no es cero: `zero_fanin_classes` solo lista tipos con `fan_in` conocido e igual a 0 (`:215-250`), `unvalidated_routes` solo las rutas con `auth_required = false` (`:340-354`) y las rutas sin dato salen con `desconocido` (`:103-112`). Una consulta que falla no se convierte en un conjunto vacío: el resultado es una nota que dice que la faceta no está disponible por un error y que eso no es un conjunto vacío (`:172`, `:185`, `:276`, `:337`, `:394`, `:503`, `:552`, `:613`). Los fragmentos de código (70 líneas como máximo) se adjuntan a los diez primeros elementos de `high_cyclomatic_methods` y `hotspots_ranking` y, en `critical_hotspots_exceptions`, a los seis primeros con hallazgos graves y a los cuatro primeros del resto (`:140-149`, `:487-497`; `Support/CompilerFactsFacets.cs:199-208`). Los candidatos de código muerto y de campos sin leer se leen hasta 20 000 y se agrupan por patrón de nombre o directorio, con una marca `likely_dynamic` cuando el cruce con los sitios de instanciación dinámica y la configuración XML la justifica (`:228-267`). Tres facetas no salen de SQL: `hardcoded_secrets` recorre en disco los ficheros que conoce el grafo y enmascara el valor (`:597-609`), `dynamic_instantiation_sites` recorre el repositorio con el mismo recorrido que el enriquecimiento (`:229-232`, `:1188-1214`) y `provided_documentation` es el índice de hasta 30 documentos subidos con `useInAnalysis` (`:650-653`; `Steps/ProvidedDocumentationFacet.cs:19-21`). Calcula seis totales numéricos para la síntesis: `TotalNodes` y `TotalEdges` al principio, del grafo de código sin el registro del LLM (`origin = 'llm'`; `:87-91`), y `TotalRoutes`, `TotalFlows`, `DeadCodeCount` y `TotalLoc` al final (`:655-672`).
 
-**Facetas y a qué informe van.** `ReportFacetInput` tiene 64 propiedades de texto (`Models/ReportFacetInput.cs:12-175`). Cada plantilla de prompt elige qué placeholders incluye, y esa elección fija qué faceta llega a qué informe; la tabla siguiente se ha generado leyendo los placeholders de los nueve prompts del apéndice. Las referencias de línea sin fichero son de `Steps/SqlFacetExtractorStep.cs`.
+**Facetas y a qué informe van.** `ReportFacetInput` tiene 72 propiedades de texto: las tres rutas, las 64 facetas que calcula este paso y cinco campos de la preparación por subsistema que rellenan pasos posteriores (`Models/ReportFacetInput.cs:9-201`). Cada plantilla de prompt elige qué placeholders incluye, y esa elección fija qué faceta llega a qué informe; la tabla siguiente se ha generado leyendo los placeholders de los nueve prompts de auditor del apéndice. Los cuatro `report_*_investigacion_prompt.md` no reciben facetas, sino `SubsystemInvestigationInput` (`Models/SubsystemInvestigationInput.cs:18-39`). Las referencias de línea sin fichero son de `Steps/SqlFacetExtractorStep.cs`.
 
 | Faceta | Qué es y de dónde sale | Informes |
 |---|---|---|
 | `detected_languages` | Ecosistema por extensiones de los ficheros del grafo y por algunas etiquetas (`SqlFacetExtractorStep.cs:72`, `:1229`) | 01-09 y 00 |
 | `domain_entities_summary` | Clases, records, interfaces, entidades y tablas por `fan_in` conocido; 50 filas (`:123-131`) | 01 |
 | `flows_summary` | Nodos `Flow` con número de pasos y método de entrada; 30 filas (`:114-121`) | 01 |
-| `metrics_summary` | Totales de nodos, aristas, rutas, flujos, registros DI y candidatos de código muerto (`:78-86`) | 01 |
+| `metrics_summary` | Totales de nodos y aristas del código (sin el registro del LLM, `origin = 'llm'`), rutas, flujos, registros DI y candidatos de código muerto (`:77-86`) | 01 |
 | `prompt_templates_catalog` | Nodos `PromptTemplate` que crea la ingesta Markdown; 50 filas (`:626-633`) | 01 |
 | `routes_summary` | Nodos `Route`, `AccessQuery` y `Query` con verbo, ruta y autenticación (`desconocido` si el grafo no la tiene); 50 filas (`:103-112`) | 01 |
 | `workflow_steps_catalog` | Nodos `WorkflowStep`; 50 filas (`:617-624`) | 01, 04 |
 | `bloated_classes` | Clases por LOC y número de métodos, con el origen de cada valor (`loc_source`, `method_count_source`); 25 filas (`:145-153`) | 02 |
 | `coupling_metrics` | `fan_in` y `fan_out` con su origen; 30 filas (`:155-163`) | 02 |
-| `duplicate_candidates` | Los mayores pares de métodos casi idénticos con sus dos ubicaciones (`CompilerFactsFacets.cs:372`) | 02 |
+| `duplicate_candidates` | Hasta 25 pares de métodos casi idénticos (`SIMILAR_TO`, Jaccard ≥ 0,8, cuerpos de 5 líneas o más), los mayores primero, con sus dos ubicaciones (`CompilerFactsFacets.cs:363-392`) | 02 |
 | `duplicate_summary` | Total de pares `SIMILAR_TO` del indexador, umbrales y salvedad (`CompilerFactsFacets.cs:372`) | 02 |
 | `high_cyclomatic_methods` | Métodos por `cyclomatic`; 30 filas, con fragmento de código de los 10 primeros (70 líneas como máximo) (`:134-143`) | 02 |
 | `unread_field_groups` | Campos sin leer agrupados por el tipo que los declara, con `likely_dynamic` y su evidencia (`:257-267`, `DeadCodeGrouping.cs`) | 02, 03 |
@@ -234,7 +253,7 @@ Las descripciones salen de la documentación de cada clase en `DNE/Enrichers/` (
 | `flows_catalog` | Nodos `Flow`; 50 filas (`:299-301`) | 04 |
 | `route_handlers_mapping` | Aristas `HANDLES` método a ruta; 50 filas (`:311-317`) | 04 |
 | `unresolved_forwards` | Forwards de Struts sin destino, de `enrichment_runs.details`; 30 filas (`:319`) | 04, 05 |
-| `critical_hotspots_exceptions` | Métodos con hallazgos graves del compilador, después los de más `hotspot` o con `throws`, con fragmento de código (`CompilerFactsFacets.cs:180`) | 05 |
+| `critical_hotspots_exceptions` | Hasta 30 nodos: primero los de hallazgos graves del compilador (hasta 20), después los de `hotspot > 5` o con `throws`; fragmento de código en los 6 primeros del primer grupo y los 4 primeros del segundo (`CompilerFactsFacets.cs:173-208`) | 05 |
 | `detected_issues_summary` | Totales de `detected_issues` por regla, las graves primero (`CompilerFactsFacets.cs:79`) | 05 |
 | `hardcoded_secrets` | Credenciales literales leídas del disco en los ficheros del grafo, con el valor enmascarado (`:603`, `HardcodedSecretScanner.cs`) | 05, 07 |
 | `resolved_secrets` | Credenciales que el compilador resuelve como constante, enmascaradas (`CompilerFactsFacets.cs:551`) | 05, 07 |
@@ -254,7 +273,7 @@ Las descripciones salen de la documentación de cada clase en `DNE/Enrichers/` (
 | `routes_security_matrix` | Rutas con verbo, autenticación, `auth_inferred` y roles; 50 filas (`:461-469`) | 07 |
 | `commented_code` | Bloques de comentario que parsean como código (`CompilerFactsFacets.cs:511`) | 08 |
 | `complex_classes` | Clases por `cyclomatic_total` y LOC, con su origen; 25 filas (`:519-528`) | 08 |
-| `doc_coverage_metrics` | Cobertura documental por componente, solo con documentación reconocida en C# y Java (`CompilerFactsFacets.DocCoverageSql`, `:494`) | 08 |
+| `doc_coverage_metrics` | Cobertura documental por etiqueta de nodo; en C# y Java solo cuenta la documentación que reconoció el enriquecedor (`docstring_source` xml/javadoc), en el resto vale el `docstring` de cbm (`CompilerFactsFacets.cs:641-651`, `:500`) | 08 |
 | `hotspots_ranking` | Nodos por `hotspot`, con `cyclomatic`, `fan_in` y fragmento de código de los 10 primeros; 30 filas (`:481-491`) | 08 |
 | `obsolete_elements` | `is_obsolete`, `[Obsolete]` de C# y `@Deprecated` de Java; 30 filas (`:508-516`) | 08 |
 | `todo_markers` | Marcas TODO/FIXME/HACK: totales, por tipo, por fichero y las más graves (`CompilerFactsFacets.cs:483`) | 08 |
@@ -265,7 +284,17 @@ Las descripciones salen de la documentación de cada clase en `DNE/Enrichers/` (
 | `di_registrations_catalog` | Nodos `DiRegistration`; 50 filas (`:531-537`) | 09 |
 | `di_summary` | Totales de registros por vida útil, sin consumidor, consumidos por el framework y cautivos (`CompilerFactsFacets.cs:416`) | 09 |
 | `extension_points_catalog` | Nodos con `is_extension_point = 1`; 30 filas (`:555-561`) | 09 |
-| `provided_documentation` | Índice de hasta 30 documentos subidos con `useInAnalysis` (`ProvidedDocumentationFacet.cs:19-21`, `SqlFacetExtractorStep.cs:645`), que entra por la inclusión de `_provided_documentation.md` | 01-09 |
+| `provided_documentation` | Índice de hasta 30 documentos subidos con `useInAnalysis` (`ProvidedDocumentationFacet.cs:19-21`, `SqlFacetExtractorStep.cs:650-653`), que entra por la inclusión de `_provided_documentation.md` | 01-09 |
+
+Las cinco propiedades siguientes no las calcula este paso: viajan en `ReportFacetInput` y las rellenan la preparación por subsistema ([2.5.1](#s-preparacion)) y el envoltorio de modo B sobre su copia (`CloneForReport`, `Models/ReportFacetInput.cs:235-241`).
+
+| Propiedad | Qué es y de dónde sale | Informes |
+|---|---|---|
+| `repository_inventory` | Versión compacta del inventario del repositorio; la rellena `RepositoryInventoryStep` (`Steps/RepositoryInventoryStep.cs:124`), `{}` sin preparación (`Models/ReportFacetInput.cs:183`) | 02, 03, 07, 08, 09 |
+| `domain_map` | Versión compacta del mapa de dominios; la rellena `DomainDiscoveryStep` (`Steps/DomainDiscoveryStep.cs:128`, o el mapa del disco en la regeneración, `:197`) | 02, 03, 07, 08, 09 |
+| `coverage_plan` | Versión compacta del plan de cobertura; la escribe `CoveragePlanningStep` y la reescribe `TimeBudgetStep` si recorta subsistemas (`Steps/CoveragePlanningStep.cs:83`; `Steps/TimeBudgetStep.cs:157`) | 02, 03, 07, 08, 09 |
+| `investigation_notes` | Notas de las investigaciones por subsistema con citas `ruta:línea`, solo en la copia del informe en modo B (`Steps/SubsystemInvestigationReportStep.cs:215`) | 01, 04, 05, 06 |
+| `coverage_summary` | Subsistemas cubiertos, excluidos y fallidos del informe, para su apartado «Cobertura» (`Steps/SubsystemInvestigationReportStep.cs:216`); la síntesis recibe uno propio de `SynthesisCoverage` (`Steps/ExecutiveSynthesizerStep.cs:242-248`) | 01, 04, 05, 06 y 00 |
 
 El resumen por informe de lo que recibe cada auditor es:
 
@@ -281,9 +310,36 @@ El resumen por informe de lo que recibe cada auditor es:
 | 08 | `hotspots_ranking`, `doc_coverage_metrics`, `todo_markers`, `commented_code`, `obsolete_elements`, `complex_classes`, `suspicious_jsps` |
 | 09 | `di_registrations_catalog`, `di_summary`, `unused_di_registrations`, `captive_dependencies`, `di_lifetimes_mapping`, `extension_points_catalog`, `config_adapters_mapping`, `creational_candidates` |
 
-**Qué escribe.** Nada en disco ni en el grafo: las facetas viven en memoria y en el contexto del pipeline. La huella de procedencia del grafo (`graph`) y las filas `ok` de `enrichment_runs` de esa huella (`enrichment`) se guardan en el contexto para que cada informe las lleve en su línea `analysis-meta` (`:56-63`; `Support/ReportProvenance.cs:51-120`).
+Además de esas facetas, los prompts de 02, 03, 07, 08 y 09 reciben `repository_inventory`, `domain_map` y `coverage_plan`, y los de 01, 04, 05 y 06 (los que en modo B consolidan) reciben `investigation_notes` y `coverage_summary`. Todos reciben `detected_languages` y `provided_documentation`.
 
-**Cuándo se omite o cae a otro camino.** Si la BD no existe, el paso emite facetas vacías con un aviso (`:41-45`); si no se puede leer la huella del grafo, avisa y los informes salen sin ella (`:57-63`); si fallan las métricas derivadas, las facetas usan solo las propiedades del grafo (`:92-98`). El paso también se ejecuta en la regeneración, porque las facetas solo viven en memoria (`AnalysisPipelineFactory.cs:160-164`).
+**Qué escribe.** Nada en disco ni en el grafo: las facetas viven en memoria y en el contexto del pipeline. La huella de procedencia del grafo (`graph`) y las filas `ok` de `enrichment_runs` de esa huella (`enrichment`) se guardan en el contexto para que cada informe las lleve en su línea `analysis-meta` (`:62-70`; `Support/ReportProvenance.cs:15-49`, `:51-120`).
+
+**Cuándo se omite o cae a otro camino.** Si la BD no existe, el paso emite facetas vacías con un aviso (`:53-57`); si no se puede leer la huella del grafo, avisa y los informes salen sin ella (`:62-70`); si fallan las métricas derivadas, las facetas usan solo las propiedades del grafo (`:93-104`). El paso también se ejecuta en la regeneración, porque las facetas solo viven en memoria (`AnalysisPipelineFactory.cs:208-215`, `:235`); la verificación no las calcula (`:246-251`).
+
+<a id="s-preparacion"></a>
+### 2.5.1 Preparación por subsistema: inventario, mapa de dominios, plan de cobertura y presupuesto de tiempo
+
+Con `CodebaseAnalysis:Preparation:Mode = Subsystems`, que es el valor por defecto del código y el del sample, la factoría inserta cuatro pasos entre las facetas y los informes; con `Off` no hay ninguno y el pipeline queda como antes de existir la sección (`AnalysisPipelineFactory.cs:357-375`; `Preparation/PreparationOptions.cs:8-15`, `:130`; `appsettings.analysis.json:37-38`). Los cuatro reciben y devuelven el mismo `ReportFacetInput` con los campos de la preparación rellenos, van en la fase `facets`, no fallan duro (un problema interno es un aviso y el análisis sigue sin ese dato; solo se propaga la cancelación) y no tienen reintentos.
+
+| Paso | Qué hace | Escribe | LLM |
+|---|---|---|---|
+| `RepositoryInventoryStep` | une el recorrido del disco, la clasificación por source set, las líneas de producción (`Preparation:CountedExtensions`) y lo que sabe el grafo (entradas, tablas, ficheros con nodos, estado de los enriquecedores, deriva de cbm); escanea el SQL escrito en cadenas y lo lleva al grafo como nodos `Table` con aristas `QUERIES` y `MODIFIES` (`Steps/RepositoryInventoryStep.cs:14-27`, `:251-266`; `Enrichment/AnalysisGraph/SqlTableGraphWriter.cs`) | `reports/_repository_inventory.json` | no |
+| `DomainDiscoveryStep` | calcula de forma determinista los subsistemas (comunidades del grafo, vocabulario de nombres y estructura; `Preparation/DomainMapBuilder.cs`), pide al sub-step `DomainNaming` que los nombre, con validación en código y los nombres derivados si el LLM falla, y escribe el mapa en el grafo como nodos `Subsystem` con aristas `CONTAINS` y `DEPENDS_ON` (`Steps/DomainDiscoveryStep.cs:16-31`, `:147-160`; `Enrichment/AnalysisGraph/SubsystemGraphWriter.cs`). En la regeneración reutiliza `_domain_map.json` si coincide con la huella del grafo y no llama al LLM (`:48-52`) | `reports/_domain_map.json` | sí: rol `FunctionalAuditor` con `domain_naming_system` y `domain_naming_prompt`, sin herramientas, 5 minutos por tanda (`:36-40`, `:71-85`; `AnalysisPipelineFactory.cs:350`) |
+| `CoveragePlanningStep` | puntúa cada subsistema con `Preparation:Weights` y el perfil de cada informe (`Preparation:ReportProfiles`) y elige, para cada informe en modo B que se va a escribir, hasta `MaxSubsystemsPerReport` subsistemas (8 por defecto, 50 en el sample) más una cola larga de `LongTailSize` (3); 01 y 04 no investigan la infraestructura compartida. Cada elección lleva las preguntas de `templates/_investigation_questions_<informe>.md` y la evidencia mínima (`Steps/CoveragePlanningStep.cs:11-22`; `Preparation/CoveragePlanner.cs:14-36`, `:51`; `Preparation/PreparationOptions.cs:133`; `appsettings.analysis.json:39`) | `reports/_coverage_plan.json`, también vacío para que no sobreviva el de otra ejecución | no |
+| `TimeBudgetStep` | calcula con `CodebaseAnalysis:TimeBudget` (curvas `clamp(base + k · tamaño, mín, máx)` para investigación, consolidación y auditor en modo A) el límite de cada informe y de cada investigación y lo escribe en el `Timeout` de cada paso; los multiplica por la cola que impone `MaxConcurrentRequests` del proveedor, sube el del paralelo de informes si no cabe y, si la suma supera `PipelineMinutes`, recorta subsistemas y reescribe el plan (`Steps/TimeBudgetStep.cs:11-32`, `:175-187`; `Preparation/TimeBudgetOptions.cs:42-51`; `AnalysisPipelineFactory.cs:384-397`). Con 0 una curva no limita: el sample pone a 0 todos los coeficientes, de modo que no hay límite por informe (`Preparation/TimeBudgetCalculator.cs:150-152`; `appsettings.analysis.json:71-75`) | `reports/_time_budget.json` | no |
+
+**Informes en modo B.** Los informes 01, 04, 05 y 06 (`CoveragePlanner.ModeBReports`, `Preparation/CoveragePlanner.cs:32-33`) no son un auditor sin más, sino un `SubsystemInvestigationReportStep` que conserva el nombre `Auditor_<Tipo>` (`AnalysisPipelineFactory.cs:426-435`). Por cada subsistema que el plan eligió lanza una investigación `Investigation_<Tipo>_<subsistema>` con el rol, el system prompt y las herramientas del auditor y el prompt `report_<prefijo>_investigacion_prompt`, hasta `MaxParallelInvestigations` (4) a la vez, cada una en un contexto de rama y con su límite del presupuesto (`Steps/SubsystemInvestigationReportStep.cs:3-46`, `:108-123`; `AnalysisPipelineFactory.cs:456-482`). Las notas de cada investigación se guardan en el grafo como nodo `InvestigationNote` con aristas `ABOUT` al subsistema y `CITES` al código citado (`:303`; `Enrichment/AnalysisGraph/InvestigationNoteGraphWriter.cs`). Después invoca la «consolidación», que es el auditor de siempre con las notas (`investigation_notes`) y el resumen de cobertura (`coverage_summary`) en una copia de la entrada y con el tope de herramientas `Preparation:ConsolidationMaxToolIterations` (0 = el del auditor; `AnalysisPipelineFactory.cs:484-490`); es la única que escribe el informe. Una investigación que falla deja su subsistema «no cubierto» y el informe se escribe igual; si fallan todas, el paso termina con error. Sin subsistemas elegidos (`Mode = Off`, sin plan o grafo sin nada que investigar) llama directamente al auditor con su tope completo. El límite por defecto del envoltorio, hasta que el presupuesto lo reescribe, es `AuditorMinutes` por el número de tandas más una (`AnalysisPipelineFactory.cs:469-481`).
+
+<a id="s-pasada-compartida"></a>
+### 2.5.2 `SharedPassStep`: pasada compartida (desactivada por defecto)
+
+Solo con `CodebaseAnalysis:SharedPass:Enabled = true` la factoría añade este paso tras la preparación y antes de los informes, y solo entonces exige los roles `SharedPassReader` y `SharedPassJudge`; apagada, que es el valor del sample, no hay paso ni se piden sus roles (`AnalysisPipelineFactory.cs:191-194`; `Hosting/LlmRoleFactory.cs:90-95`; `appsettings.analysis.json:76-77`). No está en el pipeline de regeneración ni en el de verificación.
+
+**Qué hace.** Reparte los ficheros del mapa de dominios en lotes, uno por subsistema, y parte los que superan `MaxBatchTokens` (50 000) por comunidades del subgrafo o por carpeta (`SharedPass/BatchPlanner.cs:66-70`); arma para cada lote un paquete Markdown con el código y sus relaciones (`SharedPass/PacketBuilder.cs`). Lee cada lote con una llamada al rol `SharedPassReader` (`shared_pass_reader_system`, `shared_pass_reader_prompt`), sin herramientas ni conversación, hasta `MaxParallelBatches` (4) a la vez; valida la respuesta en cascada (esquema, cobertura de cada fichero, tipo y método del lote, y ancla literal de cada hallazgo en el código) y reintenta solo lo que falla hasta `MaxReaderRetries` (2) veces con `shared_pass_reader_retry_prompt`, partiendo el lote si la respuesta se corta (`SharedPass/BatchReader.cs:313-325`; `SharedPass/ReadingValidator.cs:87-96`). Consolida después de forma determinista: funde duplicados entre lotes y calcula la severidad con la rúbrica `S = impacto × probabilidad × exposición`, con la exposición sacada del grafo (`SharedPass/FindingConsolidator.cs:57`, `:463-469`). El juez (`SharedPassJudge`, `shared_pass_judge_system`, `shared_pass_judge_prompt`) revisa los candidatos P0 y P1, los de seguridad y los de confianza del lector menor que `JudgeConfidenceThreshold` (0,6), en tandas de `JudgeBatchSize` (20) con `JudgeContextLines` (15) líneas de código alrededor del ancla (`SharedPass/FindingJudge.cs:76-82`).
+
+**Qué escribe.** El registro, en el grafo y en `reports/_shared_pass_registry.json` (`SharedPass/SharedPassRegistry.cs:11-24`). En el grafo, `LlmRegistryGraphWriter` escribe nodos `Run`, `Batch`, `Finding`, `Anchor` y `Summary` con `origin = 'llm'`, aristas `AT`, `IN`, `ABOUT`, `FROM_SEED`, `INSTANCE_OF`, `SUMMARIZES`, `IN_BATCH` e `IN_RUN`, y los contratos de los métodos como propiedades `llm_*` del nodo de código; reescribir un `run_id` sustituye lo suyo y marca `stale` lo de los Run anteriores del mismo ámbito (`Enrichment/AnalysisGraph/LlmRegistryGraphWriter.cs:175-189`). Los informes no reciben el registro en su prompt en esta versión (el paso devuelve la entrada sin cambios), pero las herramientas lo exponen: `graph_domain` con las vistas `findings` y `llm_contracts` (`Steps/SharedPassStep.cs:15-23`; `Tools/GraphDomainTool.cs:21`, `:115-116`). El progreso sale como evento `sharedpass.progress` y la web lo pinta en su propio panel (`SharedPass/SharedPassProgress.cs`).
+
+**Topes y fallos.** Los topes son uno para la ejecución entera, lectura y juez: `MaxCostPerBatchUsd` (2), `MaxCostPerStageUsd` (10), `MaxCostPerRunUsd` (25), `MaxCallsPerRun` (1000), `MaxTokensPerRun` (50 000 000) y el plazo `MaxMinutes` (90), al vencer el cual se guarda lo que haya con un aviso; el paso no tiene límite del motor ni reintentos, para no perder ni repetir lo gastado (`SharedPass/SharedPassOptions.cs:34-96`; `Steps/SharedPassStep.cs:45-56`). Sin mapa de dominios (preparación apagada o fallida) o con un rol cuyo modelo no tiene precio, la pasada no se ejecuta y queda un aviso; un error interno también es un aviso y el análisis sigue sin registro (`Steps/SharedPassStep.cs:10-17`).
 
 <a id="s-auditores"></a>
 ### 2.6 `ParallelReportsExecution`: los nueve auditores
@@ -291,11 +347,11 @@ El resumen por informe de lo que recibe cada auditor es:
 | Ficha | |
 |---|---|
 | Entrada | el `ReportFacetInput` del paso anterior |
-| Salida | un `SingleReportResult` por auditor dentro de un `ParallelResult` (`AnalysisPipelineFactory.cs:296-324`) |
+| Salida | un `SingleReportResult` por auditor dentro de un `ParallelResult` (`AnalysisPipelineFactory.cs:406-449`) |
 | Dependencias externas | el rol LLM de cada auditor, las siete herramientas de solo lectura y la plantilla de sistema y de usuario de cada informe |
-| Límite y reintentos | `ReportsMinutes` (60) el conjunto y `AuditorMinutes` (15) cada auditor (`AnalysisPipelineFactory.cs:318-323`, `:387-391`); concurrencia: `CodebaseAnalysis:Reports:MaxParallelAuditors`, y con 0 una rama por procesador (`FW/Core/Steps/ParallelStep.cs:50-60`); tope de iteraciones de herramientas 12 por auditor y 16 para `FlowsAuditor` (`appsettings.analysis.json:22-27`) |
+| Límite y reintentos | `ReportsMinutes` (60 por defecto) el conjunto y `AuditorMinutes` (15 por defecto) cada auditor, que el sample pone a 0 (sin límite) y que `TimeBudgetStep` reescribe con la preparación activa (`AnalysisPipelineFactory.cs:424`, `:441-446`; [2.5.1](#s-preparacion)); concurrencia: `CodebaseAnalysis:Reports:MaxParallelAuditors`, y con 0 una rama por procesador (`FW/Core/Steps/ParallelStep.cs:50-60`); tope de iteraciones de herramientas `CodebaseAnalysis:Auditors:MaxToolIterations`, 12 por defecto en el código y 100 en el sample, también para `FlowsAuditor` (`Models/AnalysisPipelineInput.cs:33`; `appsettings.analysis.json:22-27`) |
 
-**Qué hace.** Cada informe pedido es un `CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult>` con su rol, su plantilla de sistema y su plantilla de prompt, y se ejecuta en una conversación nueva, sin historial (`AnalysisPipelineFactory.cs:369-392`; `FW/LLM/Steps/StatelessTemplateLlmStep.cs:55-69`). El nombre del rol, de la plantilla y del fichero salen de tres funciones de `AnalysisPipelineInput` (`Models/AnalysisPipelineInput.cs:82-122`). El auditor recibe en el prompt de usuario las facetas de su informe y las reglas comunes, y dispone de siete herramientas: `view_file`, `view_code_item`, `grep_search`, `graph_search`, `graph_neighbors`, `graph_domain` y `read_document` (`AnalysisPipelineFactory.cs:364-367`). `view_file` lee hasta 800 líneas (`FileTools/Tools/ViewFileTool.cs:19`); `grep_search` devuelve como mucho 50 coincidencias con un último elemento `Truncated` si llega al tope (`FileTools/Tools/GrepSearchTool.cs:30`, `:37`); `graph_neighbors` da los vecinos de un nodo con la procedencia de cada arista (`Tools/GraphNeighborsTool.cs:85-95`). `graph_map`, `graph_health`, `graph_flows`, `find_by_name` y `list_dir` no se asignan a ningún auditor, porque ninguna plantilla los usa (`AnalysisPipelineFactory.cs:355-363`).
+**Qué hace.** Cada informe pedido es un `CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult>` con su rol, su plantilla de sistema y su plantilla de prompt, y se ejecuta en una conversación nueva, sin historial (`AnalysisPipelineFactory.cs:535-563`; `FW/LLM/Steps/StatelessTemplateLlmStep.cs:55-69`). En los informes 01, 04, 05 y 06 con la preparación activa, ese paso es la consolidación de un `SubsystemInvestigationReportStep` ([2.5.1](#s-preparacion)). El nombre del rol, de la plantilla y del fichero salen de tres funciones de `AnalysisPipelineInput` (`Models/AnalysisPipelineInput.cs:82-122`). El auditor recibe en el prompt de usuario las facetas de su informe y las reglas comunes, y dispone de siete herramientas: `view_file`, `view_code_item`, `grep_search`, `graph_search`, `graph_neighbors`, `graph_domain` y `read_document` (`AnalysisPipelineFactory.cs:530-533`). `view_file` lee hasta 800 líneas (`FileTools/Tools/ViewFileTool.cs:19`); `grep_search` devuelve como mucho 50 coincidencias con un último elemento `Truncated` si llega al tope (`FileTools/Tools/GrepSearchTool.cs:30`, `:37`); `graph_neighbors` da los vecinos de un nodo con la procedencia de cada arista (`Tools/GraphNeighborsTool.cs:85-95`). `graph_map`, `graph_health`, `graph_flows`, `find_by_name` y `list_dir` no se asignan a ningún auditor, porque ninguna plantilla los usa (`AnalysisPipelineFactory.cs:521-529`).
 
 Los nueve informes y sus plantillas, con el texto íntegro en el apéndice:
 
@@ -311,11 +367,13 @@ Los nueve informes y sus plantillas, con el texto íntegro en el apéndice:
 | 08 | Deuda técnica y hotspots, `08_deuda_tecnica_hotspots.md` | `TechnicalDebtAuditor` | `report_deuda_system` | `report_deuda_prompt` |
 | 09 | Inyección de dependencias, `09_inyeccion_dependencias.md` | `DiAuditor` | `report_di_system` | `report_di_prompt` |
 
-Las nueve plantillas de sistema incluyen `_mermaid_guidelines.md` y `_graph_rules.md` y no incluyen `_common_rules.md`; los nueve prompts de usuario incluyen `_provided_documentation.md` y `_common_rules.md` (las líneas `@[...]` y `{{ include ... }}` de cada plantilla en el apéndice). `_graph_rules.md` fija la política de evidencia: el grafo sirve para la estructura, una arista resuelta por un enriquecedor es un dato y una heurística de cbm es una pista, en code smells, errores, seguridad y deuda el veredicto exige leer el código, y «nadie lo llama» no prueba código muerto sin cruzar antes con `HANDLES`, las JSP y la configuración. `_common_rules.md` impone el formato de entrega (sin coletillas de chat), la adaptación al ecosistema detectado, que un conjunto vacío no prueba una ausencia, el estilo de redacción, las citas `ruta:línea`, los identificadores de hallazgo `NN-CAT-nnn` y la línea final `<!-- analysis-meta: health=... -->`.
+Las nueve plantillas de sistema de los auditores incluyen `_mermaid_guidelines.md` y `_graph_rules.md` y no incluyen `_common_rules.md`; los nueve prompts de usuario incluyen `_provided_documentation.md` y `_common_rules.md`, y los cuatro prompts de investigación no incluyen ningún fragmento (las líneas `@[...]` y `{{ include ... }}` de cada plantilla en el apéndice). `_graph_rules.md` fija la política de evidencia: el grafo sirve para la estructura, una arista resuelta por un enriquecedor es un dato y una heurística de cbm es una pista, en code smells, errores, seguridad y deuda el veredicto exige leer el código, y «nadie lo llama» no prueba código muerto sin cruzar antes con `HANDLES`, las JSP y la configuración. `_graph_rules.md` explica además las vistas `subsystems` y `tables` de `graph_domain` y las aristas `QUERIES` y `MODIFIES` hacia las tablas. `_common_rules.md` impone el formato de entrega (sin coletillas de chat, ningún texto antes del título), la adaptación al ecosistema detectado, que un conjunto vacío no prueba una ausencia, el estilo de redacción (extensión proporcional, salvo que el informe reciba notas de investigación, que se integran enteras), que lo que no tiene usos dentro del alcance analizado no se llama «muerto», que una severidad P0 o P1 exige citar el camino de activación, una sola severidad por problema, sin relleno, las citas `ruta:línea`, los identificadores de hallazgo `NN-CAT-nnn` y la línea final `<!-- analysis-meta: health=... -->`.
 
-La estructura que exige cada prompt de usuario es la siguiente. El informe 01 pide la misión funcional, los casos de uso y los procesos del sistema, un mapa de capacidades y un diagrama entidad-relación o de flujo de datos. El 02 pide un resumen de mantenibilidad, un diagrama de componentes, un diagnóstico por componente que separe motores cohesivos de smells reales, una matriz de riesgo multidimensional y propuestas en tres niveles (arquitectura, diseño, implementación); cada método con `cyclomatic` de 15 o más (o los tres primeros), cada clase señalada y cada par de duplicación se resuelve en un hallazgo con identificador `02-CAT-nnn`. El 03 pide los totales de candidatos, la clasificación por confianza, los grupos de instanciación dinámica como «dudosos» y no como muertos, y un diagrama. El 04 pide la reconstrucción del camino crítico con `sequenceDiagram` y `flowchart`, con una cita por paso; si no hay nodos `Flow`, debe reconstruirlo con `graph_neighbors`. El 05 pide una rúbrica de severidad P0 a P3, una matriz `| ID | Severidad | Tipo | Evidencia |`, el tratamiento de las credenciales en claro (un secreto real es siempre P0 y nunca se reproduce su valor) y `critical=<n>` en la línea `analysis-meta`. El 06 pide la topología actual y la recomendada, la interpretación de las métricas de Martin y una hoja de ruta en tres niveles. El 07 pide el inventario de la superficie expuesta, la matriz de seguridad, las credenciales y la declaración de «no evaluable» cuando la autenticación es `desconocido`. El 08 pide el ranking de hotspots separado entre núcleo cohesivo y deuda accidental, esfuerzo en días-hombre, una matriz esfuerzo e impacto como `flowchart LR` con cuatro `subgraph` y una hoja de ruta por sprints. El 09 pide la auditoría de registros DI y ciclos de vida, o de patrones creacionales idiomáticos si el ecosistema no tiene contenedor, un semáforo y un plan de acción. Todos terminan con la línea de metadatos.
+La estructura que exige cada prompt de usuario es la siguiente. El informe 01 pide la misión funcional, los casos de uso y los procesos del sistema, un mapa de capacidades y un diagrama entidad-relación o de flujo de datos. El 02 pide un resumen de mantenibilidad, un diagrama de componentes, un diagnóstico por componente que separe motores cohesivos de smells reales, una matriz de riesgo multidimensional y propuestas en tres niveles (arquitectura, diseño, implementación); cada método con `cyclomatic` de 15 o más (o los tres primeros), cada clase señalada y cada par de duplicación se resuelve en un hallazgo con identificador `02-CAT-nnn`. El 03 pide los totales de candidatos, la clasificación por confianza, los grupos de instanciación dinámica como «dudosos» y no como muertos, y un diagrama. El 04 pide la reconstrucción del camino crítico con `sequenceDiagram` y `flowchart`, con una cita por paso; si no hay nodos `Flow`, debe reconstruirlo con `graph_neighbors`. El 05 pide una rúbrica de severidad P0 a P3, una matriz `| ID | Severidad | Tipo | Evidencia |`, el tratamiento de las credenciales en claro (un secreto real es siempre P0 y nunca se reproduce su valor) y `critical=<n>` en la línea `analysis-meta`. El 06 pide la topología actual y la recomendada, la interpretación de las métricas de Martin y una hoja de ruta en tres niveles. El 07 pide el inventario de la superficie expuesta, la matriz de seguridad, las credenciales y la declaración de «no evaluable» cuando la autenticación es `desconocido`. El 08 pide el ranking de hotspots separado entre núcleo cohesivo y deuda accidental, esfuerzo en días-hombre, una matriz esfuerzo e impacto como `flowchart LR` con cuatro `subgraph` y una hoja de ruta por sprints. El 09 pide la auditoría de registros DI y ciclos de vida, o de patrones creacionales idiomáticos si el ecosistema no tiene contenedor, un semáforo y un plan de acción. Los prompts de 02, 03, 07, 08 y 09 piden además, si el plan de cobertura trae subsistemas, recorrerlos uno a uno y cerrar con un apartado `## Cobertura`; los de 01, 04, 05 y 06 piden integrar todas las notas de investigación y cerrar con el mismo apartado. El 08 y la síntesis ya no calculan una nota numérica de salud: el dictamen es el semáforo. Todos terminan con la línea de metadatos.
 
-**Qué hace el paso alrededor del modelo.** Si el auditor agota su tope de herramientas no falla: `CustomStatelessTemplateLlmStep` repite la llamada sobre la misma conversación, sin herramientas, con un mensaje que le pide redactar el informe con lo reunido, y señala en él lo que no ha podido verificar (`Steps/CustomStatelessTemplateLlmStep.cs:29`, `:78-101`, `:191-230`; `AnalysisPipelineFactory.cs:350-353`). Un resultado con error no se escribe como informe (`:105-109`). Con un informe válido, el paso quita un H1 que sea solo el nombre del fichero (`:130`), lee la línea `analysis-meta` y, si el informe declara `critical` o es el de errores, recalcula el recuento desde la matriz de severidad y corrige la línea (`:132`, `:243-256`); avisa si falta la línea (`:133-136`) y le añade la procedencia (`generated_at`, `model`, `provider`, `response_model`, `system_sha`, `prompt_sha`, `graph`, `enrichment`, `app`), donde cada SHA es el de la plantilla renderizada sin datos y con las inclusiones resueltas (`:139`, `:171-189`; `Support/ReportProvenance.cs:61-79`). Por último escribe el fichero en cuanto termina el auditor y emite `report.written` (`:144-160`).
+**Qué hace el paso alrededor del modelo.** Si el auditor agota su tope de herramientas o el framework le corta el bucle de herramientas, no falla: `CustomStatelessTemplateLlmStep` repite la llamada sobre la misma conversación, sin herramientas (`tool_choice: none`), con un mensaje que le pide redactar el informe con lo reunido, y señala en él lo que no ha podido verificar (`Steps/CustomStatelessTemplateLlmStep.cs:99-112`, `:205-226`; `AnalysisPipelineFactory.cs:516-519`). El corte del bucle lo hace `BaseLlmStep`: una llamada de solo lectura con los mismos argumentos que aparece en 3 de las últimas 10 iteraciones, contando solo desde el último turno que ejecutó una etiqueta (una nota), o una llamada que modifica repetida en turnos consecutivos (`FW/LLM/Steps/BaseLlmStep.LlmInvocation.cs:237-240`, `:250-330`); también lo pide una herramienta con `ToolLoopStopRequestedException`, que es lo que hace el protocolo de notas tras `StopAfterWithheldTurns` turnos seguidos con consultas retenidas.
+
+**Protocolo de notas.** Con `CodebaseAnalysis:NoteProtocol:Auditors` y `:Investigations` (los dos `true` por defecto, y el sample no los cambia), cada resultado de herramienta llega marcado `[Rn]` y el modelo debe resumirlo en una etiqueta `<nota r="Rn">…</nota>`; `NoteTagHandler` guarda la nota y sustituye en la conversación el resultado por ella, de modo que el prompt de las vueltas siguientes queda acotado. Con tantos resultados sin anotar (`ReminderFromPending`, 1) cada resultado nuevo lleva un recordatorio y con `WithholdFromPending` (12) la herramienta deja de ejecutarse hasta que el modelo anote (`Notes/NoteProtocolOptions.cs:11-35`; `Notes/NoteTagHandler.cs:9-45`; `Notes/NoteProtocolTool.cs:8-12`; `AnalysisPipelineFactory.cs:559-561`). El framework añade al system prompt el bloque `## IN-TEXT ACTION TAGS (NOT TOOLS)` con las instrucciones de la etiqueta ([3.5.6](#bl-notas)). Los marcadores `[nota Rn guardada]` se quitan del informe antes de escribirlo (`Steps/CustomStatelessTemplateLlmStep.cs:142`). Un resultado con error no se escribe como informe (`:105-109`). Con un informe válido, el paso quita un H1 que sea solo el nombre del fichero (`:130`), lee la línea `analysis-meta` y, si el informe declara `critical` o es el de errores, recalcula el recuento desde la matriz de severidad y corrige la línea (`:132`, `:243-256`); avisa si falta la línea (`:145-148`) y le añade la procedencia (`generated_at`, `model`, `provider`, `response_model`, `system_sha`, `prompt_sha`, `graph`, `enrichment`, `app`), donde cada SHA es el de la plantilla renderizada sin datos y con las inclusiones resueltas (`:139`, `:171-189`; `Support/ReportProvenance.cs:61-79`). Por último escribe el fichero en cuanto termina el auditor y emite `report.written` (`:155-170`).
 
 **Qué escribe.** `reports/01…09_*.md`. **Cuándo cae a otro camino.** `TolerantReportsParallelStep` retira el error agregado de la rama cuando falla alguna rama pero no todas, de modo que la síntesis se ejecuta con los informes disponibles; si fallan todas, mantiene el error y el pipeline termina (`Steps/TolerantReportsParallelStep.cs:25-45`). Un auditor fallido queda en `FailedReports` y la síntesis lo declara como no generado (`Steps/ExecutiveSynthesizerStep.cs:108-114`).
 
@@ -325,166 +383,170 @@ La estructura que exige cada prompt de usuario es la siguiente. El informe 01 pi
 | Ficha | |
 |---|---|
 | Entrada | el `ParallelResult` de los auditores (`Steps/ExecutiveSynthesizerStep.cs:78-84`) |
-| Salida | `AnalysisPipelineFinalResult` con la ruta del resumen, los informes individuales y los informes fallidos (`:289-295`) |
-| Dependencias externas | el rol `ExecutiveSynthesizer`, con `report_sintesis_system` y `report_sintesis_prompt`, sin herramientas (`AnalysisPipelineFactory.cs:326-344`) |
+| Salida | `AnalysisPipelineFinalResult` con la ruta del resumen, los informes individuales y los informes fallidos (`:311-317`) |
+| Dependencias externas | el rol `ExecutiveSynthesizer`, con `report_sintesis_system` y `report_sintesis_prompt`, sin herramientas (`AnalysisPipelineFactory.cs:492-510`) |
 | Límite y reintentos | `SynthesisMinutes` (15) (`:67`); sin reintentos |
 
-**Qué hace.** Reúne los informes de esta ejecución, los informes en disco de los tipos que no se han ejecutado ahora (marcados con la fecha de su ejecución anterior, para que una ejecución parcial no deje un resumen que contradiga a los demás) y los fallidos con su motivo (`:94-175`). De cada informe manda al modelo el semáforo, el recuento `critical` si lo declara, un fragmento del resumen y hasta 30 encabezados `##` y `###` (`:315-372`), junto con las métricas globales de las facetas (`:177-218`). Los defectos críticos son los que declara el informe de errores, o «no disponible» si no hay dato, para que el resumen no afirme cero cuando lo que falta es información (`:220-227`). Llama al modelo, y si no devuelve texto escribe un resumen de respaldo generado por código (`:243-253`, `:382-425`). Quita el H1 que sea el nombre del fichero y añade la misma procedencia que a los informes, con `fallback=true` si el resumen es el de respaldo (`:254-260`).
+**Qué hace.** Reúne los informes de esta ejecución, los informes en disco de los tipos que no se han ejecutado ahora (marcados con la fecha de su ejecución anterior, para que una ejecución parcial no deje un resumen que contradiga a los demás) y los fallidos con su motivo (`:94-175`). De cada informe manda al modelo el semáforo, el recuento `critical` si lo declara, un fragmento del resumen y hasta 30 encabezados `##` y `###` (`:315-372`), junto con las métricas globales de las facetas, el contraste de severidades entre informes que citan el mismo código con severidades muy distintas (`Reports/SeverityContrast.cs`, `:186-188`) y, con la preparación activa, el resumen de cobertura de `SynthesisCoverage`, sacado de `_coverage_plan.json` y de los apartados «Cobertura» de los informes (`:242-248`; `Preparation/SynthesisCoverage.cs:8-13`). Los defectos críticos son los que declara el informe de errores, o «no disponible» si no hay dato, para que el resumen no afirme cero cuando lo que falta es información (`:220-227`). Llama al modelo, y si no devuelve texto escribe un resumen de respaldo generado por código (`:243-253`, `:382-425`). Quita el H1 que sea el nombre del fichero y añade la misma procedencia que a los informes, con `fallback=true` si el resumen es el de respaldo (`:254-260`).
 
-**Qué escribe.** `reports/00_resumen_ejecutivo.md` (`:263-264`). Reincorpora después al grafo los informes del catálogo que estaban marcados y los había retirado la detección (`:271-280`).
+**Qué escribe.** `reports/00_resumen_ejecutivo.md` (`:285-286`). Reincorpora después al grafo los informes del catálogo que estaban marcados y los había retirado la detección (`:293-302`).
 
-**Cuándo cae a otro camino.** Si el modelo no responde, el resumen de respaldo sustituye al del LLM y lo declara en `analysis-meta`. Si el pipeline no llega a la síntesis por un fallo o una cancelación, la reincorporación de los informes retirados ocurre en el `finally` de `CodebaseAnalysisPipeline.ExecuteAsync` (`AnalysisPipelineFactory.cs:459-492`).
+**Cuándo cae a otro camino.** Si el modelo no responde, el resumen de respaldo sustituye al del LLM y lo declara en `analysis-meta`. Si el pipeline no llega a la síntesis por un fallo o una cancelación, la reincorporación de los informes retirados ocurre en el `finally` de `CodebaseAnalysisPipeline.ExecuteAsync` (`AnalysisPipelineFactory.cs:630-663`).
 
 <a id="s-validacion"></a>
 ### 2.8 `ReportValidator`: validación determinista de los informes
 
-La validación no es un paso del pipeline: la ejecuta el anfitrión cuando el pipeline ha terminado, porque el motor cierra el canal de eventos al acabar (`WEB/Analysis/AnalysisRunManager.cs:537-541`). La CLI la lanza tras el análisis con `ReportValidationSummary.RunAfterPipeline` (`CLI/Program.cs:229`), la web en `CompleteRun` salvo en ejecuciones canceladas, y `--validate-reports` o `GET /api/reports/validation` la lanzan a demanda sin LLM ni pipeline (`Hosting/ReportValidationCommand.cs:16-60`). `RunAfterPipeline` valida la carpeta de informes contra el repositorio y el grafo (si la BD existe), escribe `_validation.json` y manda un resumen al log; nunca lanza, y un fallo se convierte en un aviso (`Reports/ReportValidation.cs:393-415`). El resultado no cambia el código de salida ni bloquea nada.
+La validación no es un paso del pipeline: la ejecuta el anfitrión cuando el pipeline ha terminado, porque el motor cierra el canal de eventos al acabar (`WEB/Analysis/AnalysisRunManager.cs:537-541`). La CLI la lanza tras el análisis no cancelado con `ReportValidationSummary.RunAfterPipeline` (`CLI/Program.cs:248`), también tras `--verify` (`Hosting/VerificationCommand.cs:154-155`), la web en `CompleteRun` salvo en ejecuciones canceladas, y `--validate-reports` (`Hosting/ReportValidationCommand.cs:19-60`) o `GET /api/reports/validation` (que no escribe fichero; `WEB/Api/ReportsEndpoints.cs:40-52`) la lanzan a demanda sin LLM ni pipeline. `RunAfterPipeline` valida la carpeta de informes contra el repositorio y el grafo (si la BD existe), escribe `_validation.json` y manda un resumen al log; nunca lanza, y un fallo se convierte en un aviso (`Reports/ReportValidation.cs:429-448`). El resultado no cambia el código de salida del análisis ni bloquea nada; con `--validate-reports`, la salida es 1 si no se pudo escribir el JSON.
 
 | Comprobación | Qué verifica | Gravedad |
 |---|---|---|
-| `citations` | cada `ruta:línea` o `ruta:ini-fin` citada existe y está en rango | error si no existe o está fuera de rango; aviso si la ruta incompleta es ambigua (`Reports/ReportValidator.cs:394`) |
-| `citations_required` | cada informe de auditoría cita código, y cada hallazgo al menos una vez | aviso (`:418`, `:424`) |
-| `source_references` | las citas `nombre › sección` apuntan a un informe o documento que existe | error (`:443`) |
-| `finding_ids` | los identificadores siguen el formato `NN-CAT-nnn`, no se repiten y llevan el número de su informe | error si el formato es inválido o un identificador encabeza dos hallazgos; aviso por repeticiones en una tabla, número de informe incorrecto, falta de prefijo o identificadores citados y no definidos (`:469-537`) |
-| `severe_findings` | cada hallazgo P0 o P1 cita al menos una ubicación que existe | error (`:556`) |
-| `graph_names` | los nombres cualificados entre comillas invertidas existen en el grafo | aviso (`:606`) |
-| `metadata` | existe la línea `analysis-meta`, con semáforo `Green`, `Amber` o `Red` y la procedencia completa | error si falta la línea, el semáforo o la procedencia; aviso si la línea no es la última (`:623-645`) |
-| `mermaid` | los diagramas usan solo los tipos de `_mermaid_guidelines.md` | la gravedad que fija cada problema (`:681`) |
+| `citations` | cada `ruta:línea` o `ruta:ini-fin` citada existe y está en rango | error si no existe o está fuera de rango; aviso si la ruta incompleta es ambigua (`Reports/ReportValidator.cs:472-474`) |
+| `declared_paths` | una ruta de recurso sin línea que el repositorio no tiene pero que declara un fichero de configuración; no cuenta como cita rota | aviso (`:329-348`, `:480-491`) |
+| `citations_required` | cada informe de auditoría cita código, y cada hallazgo al menos una vez | aviso (`:509`, `:515`) |
+| `source_references` | las citas `nombre › sección` apuntan a un informe o documento que existe y a una sección que tiene | error (`:534-537`) |
+| `finding_ids` | los identificadores siguen el formato `NN-CAT-nnn`, no se repiten y llevan el número de su informe | error si el formato es inválido o un identificador encabeza dos hallazgos; aviso por repeticiones en una tabla, número de informe incorrecto, falta de prefijo o identificadores citados y no definidos (`:558-632`) |
+| `severe_findings` | cada hallazgo P0 o P1 cita al menos una ubicación que existe | error (`:647`) |
+| `graph_names` | los nombres cualificados entre comillas invertidas existen en el grafo | aviso (`:697`) |
+| `coverage` | un informe en modo B lleva el apartado «Cobertura» y nombra cada subsistema que `_coverage_plan.json` eligió para él; sin plan en disco o sin subsistemas elegidos no se comprueba | aviso (`:712-738`) |
+| `metadata` | existe la línea `analysis-meta`, con semáforo `Green`, `Amber` o `Red` y la procedencia completa | error si falta la línea, el semáforo o la procedencia; aviso si la línea no es la última o si hay texto antes del título (`:746-782`) |
+| `mermaid` | los diagramas usan solo los tipos de `_mermaid_guidelines.md` | error con un tipo vacío, prohibido o desconocido; aviso con un `flowchart` en otra dirección (`:811-848`) |
 
-Los nombres de las comprobaciones, los niveles y los estados salen de `Reports/ReportValidation.cs:11-79`. `_validation.json` lleva además los totales, las colisiones de identificadores entre informes y, con `--expected <fichero>`, la comparación con una lista de hallazgos esperados que escribe quien evalúa (`Hosting/ReportValidationCommand.cs:8-12`). La comprobación mide la forma del informe, no si sus hallazgos son ciertos: una cita válida dice que la línea existe, no que diga lo que el informe afirma.
+Los nombres de las comprobaciones, los niveles y los estados salen de `Reports/ReportValidation.cs:11-91`. `_validation.json` lleva además los totales (con `declaredPathsMissing`), las colisiones de identificadores entre informes y, con `--expected <fichero>`, la comparación con una lista de hallazgos esperados que escribe quien evalúa, incluidas las trampas `notExpected` como falsos positivos (`Hosting/ReportValidationCommand.cs:7-12`; `Reports/ExpectedFindings.cs:83-113`). La comprobación mide la forma del informe, no si sus hallazgos son ciertos: una cita válida dice que la línea existe, no que diga lo que el informe afirma.
 
 <a id="s-regenerar"></a>
 ### 2.9 Regeneración de informes
 
-La regeneración rehace los informes elegidos sobre el grafo que ya existe, sin detectar, indexar ni enriquecer. `AnalysisPipelineFactory.CreateRegenerationPipeline` monta `PrepareRegenerationStep`, `SqlFacetExtractorStep`, el paralelo con solo los auditores pedidos y, si se pide, la síntesis (`AnalysisPipelineFactory.cs:166-190`). `PrepareRegenerationStep` (fase `facets`, 5 minutos fijos) pone en el contexto las mismas claves que la detección, falla con un mensaje que manda lanzar un análisis completo si no existe la BD o no tiene grafo estructural, asegura el esquema y retira del grafo los informes del catálogo, que vuelven en la síntesis o en el `finally` del pipeline (`Steps/PrepareRegenerationStep.cs:62-123`). `AnalysisRunner.RegenerateAsync` construye una copia de la entrada con los informes pedidos y sin `ForceReindex`, y esa copia solo conserva la entrada básica, los topes de iteraciones por auditor y por rol; no copia `MaxParallelAuditors` ni la codificación por defecto de los fuentes (`Hosting/AnalysisRunner.cs:71-96`, `:142-151`).
+La regeneración rehace los informes elegidos sobre el grafo que ya existe, sin detectar, indexar ni enriquecer. `AnalysisPipelineFactory.CreateRegenerationPipeline` monta `PrepareRegenerationStep`, `SqlFacetExtractorStep`, los pasos de la preparación por subsistema (reutilizando `_domain_map.json` si coincide con la huella del grafo, para no volver a nombrar con el LLM), el paralelo con solo los auditores pedidos y, si se pide, la síntesis; no ejecuta la pasada compartida (`AnalysisPipelineFactory.cs:217-244`). `PrepareRegenerationStep` (fase `facets`, 5 minutos fijos) pone en el contexto las mismas claves que la detección, falla con un mensaje que manda lanzar un análisis completo si no existe la BD o no tiene grafo estructural, asegura el esquema y retira del grafo los informes del catálogo, que vuelven en la síntesis o en el `finally` del pipeline (`Steps/PrepareRegenerationStep.cs:62-123`). `AnalysisRunner.RegenerateAsync` construye una copia de la entrada con los informes pedidos y sin `ForceReindex`, y esa copia solo conserva la entrada básica, los topes de iteraciones por auditor y por rol; no copia `MaxParallelAuditors` ni la codificación por defecto de los fuentes, de modo que la regeneración y la verificación corren sin tope de concurrencia propio (`Hosting/AnalysisRunner.cs:71-96`, `:142-151`). Las herramientas sí conservan la codificación, porque se registran con la entrada original (`Hosting/AnalysisToolRegistration.cs:38`).
 
-En la web, `POST /api/analysis/{runId}/regenerate` con `{ reports[], synthesis }` reabre la última ejecución en memoria con el mismo `runId` y el mismo log de eventos, emite `run.regeneration_started` y cierra con un segundo `run.completed`. Devuelve 404 si la ejecución no es la última en memoria, 400 con una lista vacía o un informe desconocido y 409 si hay un análisis, un turno de chat o una operación de conocimiento en curso, si no hay repositorio abierto o si el abierto no es el de la ejecución (`WEB/Analysis/AnalysisRunManager.cs:127-215`). Al terminar, `failedReports` se recalcula quitando los regenerados que escribieron su informe y añadiendo los que no lo escribieron y los pedidos en la ejecución original que no tienen `report.written` en toda la ejecución (`:228-247`, `:328-376`).
+En la web, `POST /api/analysis/{runId}/regenerate` con `{ reports[], synthesis }` reabre la última ejecución en memoria con el mismo `runId` y el mismo log de eventos, emite `run.regeneration_started` y cierra con un segundo `run.completed`. Devuelve 404 si la ejecución no es la última en memoria, 400 con una lista vacía o un informe desconocido y 409 si hay un análisis, un turno de chat o una operación de conocimiento en curso, si no hay repositorio abierto o si el abierto no es el de la ejecución (`WEB/Analysis/AnalysisRunManager.cs:127-231`). Al terminar, `failedReports` se recalcula quitando los regenerados que escribieron su informe y añadiendo los que no lo escribieron y los pedidos en la ejecución original que no tienen `report.written` en toda la ejecución (`:233-252`, `:343-401`).
 
 <a id="s-verificar"></a>
 ### 2.10 Verificación a demanda: `VerifyReportStep` y el rol `ReportVerifier`
 
-Verificar no es una etapa del análisis: es una operación por informe que comprueba un informe ya escrito contra el código y reescribe lo que el código contradice. `POST /api/analysis/{runId}/verify` (`{ reports[], synthesis }`, con `synthesis` en falso por defecto) reutiliza el camino de la regeneración: mismas exclusiones, mismo `runId` y mismo log, con el evento `run.verification_started` y un `report.verified` por informe (`WEB/Analysis/AnalysisRunManager.cs:30`, `:127-135`, `:137-215`). El pipeline es `PrepareRegenerationStep`, un `Verify_<Tipo>` por informe en paralelo con el tope `MaxParallelAuditors` y, si se pide, la síntesis; no calcula facetas porque el verificador no las consume (`AnalysisPipelineFactory.cs:199-240`).
+Verificar no es una etapa del análisis: es una operación por informe que comprueba un informe ya escrito contra el código y reescribe lo que el código contradice. `POST /api/analysis/{runId}/verify` (`{ reports[], synthesis }`, con `synthesis` en falso por defecto) reutiliza el camino de la regeneración: mismas exclusiones, mismo `runId` y mismo log, con el evento `run.verification_started` y un `report.verified` por informe (`WEB/Analysis/AnalysisRunManager.cs:30`, `:127-135`, `:137-215`). El pipeline es `PrepareRegenerationStep`, un `Verify_<Tipo>` por informe en paralelo y, si se pide, la síntesis; no calcula facetas porque el verificador no las consume (`AnalysisPipelineFactory.cs:253-294`). El paralelo lee `MaxParallelAuditors`, pero la copia de la entrada no lo conserva y corre sin tope propio ([2.9](#s-regenerar)). También se lanza por línea de comandos con `--verify <informes|all>` y `--verify-synthesis`, que reutiliza `AnalysisRunner.VerifyAsync` y deja `_run_meta.json` (`kind: verification`) y `_validation.json` como la web; sale con 0 si verificó todo, 1 si algo falló o no había nada que verificar y 130 si se canceló (`Hosting/VerificationCommand.cs:100-159`; `CLI/Program.cs:54-62`).
 
 | Ficha | |
 |---|---|
 | Entrada | el informe en `reports/` (`Steps/VerifyReportStep.cs:60-68`) |
 | Salida | `VerificationResult` con el resultado (`verified`, `corrected`, `warnings` o `failed`), el número de cambios y las versiones (`:141-162`) |
-| Dependencias externas | el rol `ReportVerifier`, con `report_verifier_system` y `report_verifier_prompt` y cuatro herramientas: `view_file`, `view_code_item`, `grep_search` y `graph_neighbors` (`AnalysisPipelineFactory.cs:249-250`, `:260-274`) |
-| Límite y reintentos | `VerifierMinutes` (10) para la llamada, con dos minutos de margen para validar y escribir (`:219-224`); tope de iteraciones 12; sin reintentos |
+| Dependencias externas | el rol `ReportVerifier`, con `report_verifier_system` y `report_verifier_prompt` y cuatro herramientas: `view_file`, `view_code_item`, `grep_search` y `graph_neighbors` (`AnalysisPipelineFactory.cs:303-304`, `:314-328`) |
+| Límite y reintentos | `VerifierMinutes` (10 por defecto; 0 en el sample, sin límite) para la llamada, con dos minutos de margen para validar y escribir (`AnalysisPipelineFactory.cs:278`); tope de iteraciones el de los auditores para el rol `ReportVerifier` (12 por defecto, 100 en el sample) y, al agotarlo, una última llamada sin herramientas con `VerifierToolLimitPrompt` (`:273`, `:310-312`); sin reintentos |
 
 **Qué hace.** En tres tiempos. Prepara: valida el informe con `ReportValidator` y arma un único texto con cuatro bloques (`<borrador>`, `<fallos_validacion>`, `<recuentos>` con las cifras que el borrador afirma y `<evidencias>` con el código que rodea a cada cita que resuelve), neutralizando las secuencias `@[` para que el motor de plantillas no las expanda (`Steps/VerifyReportStep.cs:66-73`; `Support/ReportVerification.cs:41`, `:83-85`, `:92-112`). Llama al rol en una conversación nueva con el límite propio del paso (`:75-99`). Cierra: interpreta la respuesta (`SIN CAMBIOS` o el informe corregido con el apartado final «Cambios de la verificación»), restaura la línea `analysis-meta` del original, valida el resultado y escribe con `ReportWriter.Update`, que guarda el original como versión `baseline` para poder deshacer (`:101-139`; `Support/ReportVerification.cs:236`, `:285`). La línea `analysis-meta` gana `verification=ok|corrected(n)|warnings(m)` (`Support/ReportVerification.cs:293-300`).
 
-**Cuándo se omite o falla.** Si el informe no existe, el verificador falla, no responde a tiempo, se corta por longitud o devuelve algo inservible (sin título, sin el apartado final o con menos de la mitad del original), el fichero no se toca y el carril dice el motivo (`Steps/VerifyReportStep.cs:63-64`, `:85-104`, `:165-171`). Si declara cambios pero el texto no cambia, se toma como sin cambios (`:107-113`). Verificar no cambia `failedReports`, y la síntesis no se rehace sola.
+**Cuándo se omite o falla.** Si el informe no existe, el verificador falla, no responde a tiempo, se corta por longitud o devuelve algo inservible (sin título, sin el apartado final o con menos de la mitad del original), el fichero no se toca y el carril dice el motivo (`Steps/VerifyReportStep.cs:63-64`, `:85-104`, `:165-171`). Si declara cambios pero el texto no cambia, se toma como sin cambios (`:107-113`). Verificar no cambia `failedReports` (el `run.completed` lleva aparte `unverifiedReports`), y la síntesis no se rehace sola.
 
 <a id="s-reincorporar"></a>
 ### 2.11 Reincorporación de conocimiento al grafo
 
 El usuario puede subir documentos (PDF, Word, Excel, imágenes, Markdown) y marcar fuentes para el grafo desde la web. `KnowledgeGraphIngestor` añade cada fuente como un nodo `UserDocument`, un nodo `UserDocSection` por sección con arista `HAS_SECTION` y aristas `DOC_DESCRIBES` hacia el código que menciona, con `origin = user_document` (`Knowledge/Graph/KnowledgeGraphIngestor.cs:13-29`); añadir es una transacción que borra lo que hubiera de esa clave e inserta de nuevo, y todas las escrituras de conocimiento del proceso pasan por un único cerrojo (`:31-50`). Las fuentes marcadas se registran en `.codebase/knowledge/graph-sources.json` (`Knowledge/KnowledgePaths.cs`, propiedad `GraphSourcesFile`). Los embeddings de esas fuentes viven aparte, en `.codebase/knowledge/embeddings.db`, y los calcula un cliente HTTP propio contra el proveedor configurado (`Knowledge/Embeddings/EmbeddingStore.cs:20-24`; `Knowledge/Embeddings/EmbeddingClient.cs:106-111`).
 
-Dentro de un análisis, la reincorporación ocurre en tres puntos. La detección retira primero los informes del catálogo marcados, que son la salida de la ejecución anterior, y reincorpora los documentos aportados y los informes propios, para que los auditores los vean (`Steps/DetectAndIndexGraphStep.cs:146-172`; `ReincorporateAsync` en `Knowledge/Graph/KnowledgeGraphIngestor.cs:149`, `RetireAsync` en `:176`). La síntesis reincorpora los informes del catálogo con su contenido nuevo (`Steps/ExecutiveSynthesizerStep.cs:271-280`). Si el pipeline falla o se cancela antes de la síntesis, el `finally` de `CodebaseAnalysisPipeline` los reincorpora con el contenido que haya en disco, para que no queden fuera del grafo hasta el siguiente análisis (`AnalysisPipelineFactory.cs:470-492`). La regeneración y la verificación retiran y reincorporan los informes por el mismo mecanismo.
+Dentro de un análisis, la reincorporación ocurre en tres puntos. La detección retira primero los informes del catálogo marcados, que son la salida de la ejecución anterior, y reincorpora los documentos aportados y los informes propios, para que los auditores los vean (`Steps/DetectAndIndexGraphStep.cs:146-172`; `ReincorporateAsync` en `Knowledge/Graph/KnowledgeGraphIngestor.cs:149`, `RetireAsync` en `:176`). La síntesis reincorpora los informes del catálogo con su contenido nuevo (`Steps/ExecutiveSynthesizerStep.cs:293-302`). Si el pipeline falla o se cancela antes de la síntesis, el `finally` de `CodebaseAnalysisPipeline` los reincorpora con el contenido que haya en disco, para que no queden fuera del grafo hasta el siguiente análisis (`AnalysisPipelineFactory.cs:630-663`). La regeneración y la verificación retiran y reincorporan los informes por el mismo mecanismo.
 
 <a id="s-chat"></a>
 ### 2.12 Chat: `ChatAgent`, herramientas y selector de modelo
 
-Un turno de chat es un único paso LLM (`BaseLlmStep`) con prompt literal (la pregunta del usuario no pasa por el motor de plantillas), la conversación reconstruida con los turnos completados anteriores (hasta `CodebaseAnalysis:Chat:MaxHistoryTurns`, 20) y diecisiete herramientas: `graph_search`, `graph_neighbors`, `graph_domain`, `view_file`, `view_file_outline`, `view_code_item`, `list_dir`, `find_by_name`, `grep_search`, `list_reports`, `read_report`, `create_report`, `update_report`, `list_documents`, `read_document`, `describe_image` y `semantic_search` (`Chat/ChatAgent.cs:36-62`, `:92-98`, `:149-154`, `:220-228`). El tope de iteraciones de herramientas es `CodebaseAnalysis:Chat:MaxToolIterations` (12) y el turno entero se limita a `TurnTimeoutMinutes` (5) con un token propio, para que el error diga qué clave se superó; al paso y al motor les llega sin límite, porque un valor nulo les haría aplicar sus plazos por defecto (`:195-203`, `:222-228`). `create_report` y `update_report` solo escriben dentro de un `ChatTurnScope`, es decir, durante un turno de chat (`Hosting/AnalysisToolRegistration.cs:63-65`).
+Un turno de chat es un único paso LLM (`BaseLlmStep`) con prompt literal (la pregunta del usuario no pasa por el motor de plantillas), la conversación reconstruida con los turnos completados anteriores (hasta `CodebaseAnalysis:Chat:MaxHistoryTurns`, 20) y diecisiete herramientas: `graph_search`, `graph_neighbors`, `graph_domain`, `view_file`, `view_file_outline`, `view_code_item`, `list_dir`, `find_by_name`, `grep_search`, `list_reports`, `read_report`, `create_report`, `update_report`, `list_documents`, `read_document`, `describe_image` y `semantic_search` (`Chat/ChatAgent.cs:36-73`, `:103-109`, `:160-165`, `:231-239`). El tope de iteraciones de herramientas es `CodebaseAnalysis:Chat:MaxToolIterations` (12) y el turno entero se limita a `TurnTimeoutMinutes` (5) con un token propio, para que el error diga qué clave se superó; al paso y al motor les llega sin límite, porque un valor nulo les haría aplicar sus plazos por defecto (`:206-214`, `:231-239`). `create_report` y `update_report` solo escriben dentro de un `ChatTurnScope`, es decir, durante un turno de chat (`Hosting/AnalysisToolRegistration.cs:63-65`).
 
 **Rutas de lectura adicionales.** Además del repositorio, el chat puede leer, solo lectura, las carpetas que el usuario añada desde el panel del chat (`GET/POST/DELETE /api/chat/read-roots`) y las de `CodebaseAnalysis:Chat:AllowedReadRoots`. Solo se guarda la ruta, en `<repo>/.codebase/chat-read-roots.json`: no se indexa, extrae ni copia nada, no se crea ningún fichero en la carpeta ni en el repositorio, y no hay escritura (`create_report` y `update_report` siguen limitadas a los informes del repositorio). Al reservar cada turno, `ChatService` revalida las rutas (`AllowedReadRoots.Revalidate`: absoluta, existente, directorio, sin raíz de unidad, carpeta del sistema, perfil entero del usuario, `.codebase` del repositorio ni carpeta que contenga el repositorio o ya esté dentro de él, UNC solo con `CodebaseAnalysis:Chat:AllowUncPaths`, y un enlace vale lo que su destino), las suma a las carpetas permitidas de `FileToolsConfiguration` y las pasa al prompt (`Support/AllowedReadRoots.cs`, `Support/ReadRootsStore.cs`, `WEB/Chat/ChatService.cs`). El límite lo sigue poniendo FileTools en cada llamada: resuelve enlaces y junctions de cualquier nivel y rechaza lo que salga de las raíces, y `..` o una ruta hermana dan acceso denegado. Las seis herramientas de ficheros (`list_dir`, `find_by_name`, `grep_search`, `view_file`, `view_file_outline`, `view_code_item`) llevan en su descripción las raíces permitidas (`Tools/ReadRootsAwareTool.cs`). El `ClaimAuditor` solo contrasta referencias dentro del repositorio, así que una cita de un fichero de estas rutas queda `unchecked`.
 
-El system prompt lo construye `ChatPromptBuilder`: renderiza `chat_system` con `repository_path` y concatena, detrás, los [bloques de contexto](#bl-chat-contexto): la tabla de informes del análisis con su semáforo, los informes propios, los documentos aportados (hasta 40), el recuento de nodos y aristas del grafo y el resumen ejecutivo del último análisis, truncado a 12 000 caracteres (`Chat/ChatPromptBuilder.cs:25-46`, `:48-149`). La plantilla obliga a marcar cada hecho sobre el sistema con `[V]` (leído en el código en ese turno, con `ruta:línea`), `[D]` (sacado de un informe o documento, con `nombre › sección`) o `[I]` (inferido), y exige que el grafo se trate como índice y no como código leído (`templates/chat_system.md`). Al cerrar el turno, `ClaimAuditor` recorre las marcas y las contrasta con la evidencia que dejaron los resultados de las herramientas en ese turno: `view_file` aporta el tramo que enseñó, `view_code_item` el tramo `Location` de cada nodo devuelto, `grep_search` las líneas con coincidencia, `graph_search` solo los tramos de `include_code`, y `read_report` y `read_document` el informe o documento leído; `graph_neighbors`, `graph_domain` y la tabla de `graph_search` no aportan evidencia, y un resultado que empieza por `Error`, `TOOL_ERROR` o `TOOL_CALL_ERROR` no cuenta (`Chat/ClaimAuditor.cs:23-26`, `:402-455`, `:459-461`). Una marca sin respaldo queda `unchecked` con el motivo y nunca se rechaza la respuesta; la comprobación es de cobertura, no de verdad (`:86-135`). La auditoría no tumba nunca un turno: si falla, el turno se guarda sin ella (`Chat/ChatAgent.cs:307-322`).
+El system prompt lo construye `ChatPromptBuilder`: renderiza `chat_system` con `repository_path` y concatena, detrás, los [bloques de contexto](#bl-chat-contexto): la tabla de informes del análisis con su semáforo, los informes propios, los documentos aportados (hasta 40), el recuento de nodos y aristas del grafo y el resumen ejecutivo del último análisis, truncado a 12 000 caracteres (`Chat/ChatPromptBuilder.cs:25-46`, `:48-149`). La plantilla obliga a marcar cada hecho sobre el sistema con `[V]` (leído en el código en ese turno, con `ruta:línea`), `[D]` (sacado de un informe o documento, con `nombre › sección`) o `[I]` (inferido), y exige que el grafo se trate como índice y no como código leído (`templates/chat_system.md`). Al cerrar el turno, `ClaimAuditor` recorre las marcas y las contrasta con la evidencia que dejaron los resultados de las herramientas en ese turno: `view_file` aporta el tramo que enseñó, `view_code_item` el tramo `Location` de cada nodo devuelto, `grep_search` las líneas con coincidencia, `graph_search` solo los tramos de `include_code`, y `read_report` y `read_document` el informe o documento leído; `graph_neighbors`, `graph_domain` y la tabla de `graph_search` no aportan evidencia, y un resultado que empieza por `Error`, `TOOL_ERROR` o `TOOL_CALL_ERROR` no cuenta (`Chat/ClaimAuditor.cs:23-26`, `:402-455`, `:459-461`). Una marca sin respaldo queda `unchecked` con el motivo y nunca se rechaza la respuesta; la comprobación es de cobertura, no de verdad (`:86-135`). La auditoría no tumba nunca un turno: si falla, el turno se guarda sin ella (`Chat/ChatAgent.cs:318-333`).
 
-El modelo que responde se elige por sesión entre los de `CodebaseAnalysis:Chat:Models`, once entradas `{ Id, Label, Role, Streaming }` en el sample, donde `Role` es un rol de `AITaskAgent:LlmProviders:Roles` con su proveedor, su modelo y sus `Options` (`Chat/ChatModelCatalog.cs:37-114`; `appsettings.analysis.json:37-55`). `DefaultModel` es el modelo de las sesiones nuevas (`gpt-6-sol`); lo incoherente (rol inexistente, `Id` repetido, modelo sin precio, `Streaming` sin `UseStreaming`) se avisa en el log y se omite sin abortar el arranque (`Chat/ChatModelCatalog.cs:79-113`). Se cambia entre turnos con `PUT /api/chat/sessions/{id}/model` (`WEB/Chat/ChatService.cs:84-103`) y cada turno guarda el modelo que lo respondió. Las sesiones se guardan por repositorio (`Chat/ChatSessionStore.cs`).
+El modelo que responde se elige por sesión entre los de `CodebaseAnalysis:Chat:Models`, once entradas `{ Id, Label, Role, Streaming }` en el sample, donde `Role` es un rol de `AITaskAgent:LlmProviders:Roles` con su proveedor, su modelo y sus `Options` (`Chat/ChatModelCatalog.cs:37-114`; `appsettings.analysis.json:95-113`). `DefaultModel` es el modelo de las sesiones nuevas (`gpt-6-sol`); un `Role` que no existe o un `Id` repetido se avisan en el log y se omiten, y un modelo sin precio o un `Streaming` sin `UseStreaming` en su rol solo se avisan, sin abortar el arranque (`Chat/ChatModelCatalog.cs:79-124`). Se cambia entre turnos con `PUT /api/chat/sessions/{id}/model` (`WEB/Chat/ChatService.cs:84-103`) y cada turno guarda el modelo que lo respondió. Las sesiones se guardan por repositorio (`Chat/ChatSessionStore.cs`).
 
 <a id="s-web"></a>
 ### 2.13 Capa web: endpoints, SSE y eventos
 
-La web aloja el mismo pipeline a través de `AnalysisRunner`, sin reimplementar nada: `PipelineAnalysisWorkflow` limpia los pools de conexiones SQLite (el chat y las herramientas del grafo mantienen la BD abierta con pool, y la indexación la sobrescribe) y delega en `AnalysisRunner.RunAsync`, `RegenerateAsync` o `VerifyAsync` (`WEB/Analysis/PipelineAnalysisWorkflow.cs:14-57`). Al arrancar construye una vez los roles (los doce del pipeline más `ChatAssistant`), el catálogo de modelos del chat, el proveedor de plantillas y el describidor de imágenes (`WEB/Hosting/AnalysisHost.cs:15-47`). Solo escucha en loopback (`Urls` es `http://127.0.0.1:5180`) y falla si una URL o un endpoint de Kestrel no lo son, porque no tiene autenticación, puede leer el disco y gasta la clave del LLM (`WEB/Program.cs:26`; `WEB/appsettings.json:2`; `WEB/Hosting/WebSecurity.cs:5-59`).
+La web aloja el mismo pipeline a través de `AnalysisRunner`, sin reimplementar nada: `PipelineAnalysisWorkflow` limpia los pools de conexiones SQLite (el chat y las herramientas del grafo mantienen la BD abierta con pool, y la indexación la sobrescribe) y delega en `AnalysisRunner.RunAsync`, `RegenerateAsync` o `VerifyAsync` (`WEB/Analysis/PipelineAnalysisWorkflow.cs:14-57`). Al arrancar construye una vez los roles (los doce del pipeline, los dos de la pasada compartida si está activada, más `ChatAssistant`), el catálogo de modelos del chat, el proveedor de plantillas y el describidor de imágenes (`WEB/Hosting/AnalysisHost.cs:15-47`). Solo escucha en loopback (`Urls` es `http://127.0.0.1:5180`) y falla si una URL o un endpoint de Kestrel no lo son, porque no tiene autenticación, puede leer el disco y gasta la clave del LLM (`WEB/Program.cs:26`; `WEB/appsettings.json:2`; `WEB/Hosting/WebSecurity.cs:5-59`).
 
 | Endpoint | Función |
 |---|---|
-| `POST /api/analysis` | lanza un análisis con `{ forceReindex, reports[] }`; 202 con la ejecución, o 409 si hay otro análisis, un turno de chat, una operación de conocimiento o ningún repositorio abierto (`WEB/Api/AnalysisEndpoints.cs:15-21`; `WEB/Analysis/AnalysisRunManager.cs:82-122`) |
+| `POST /api/analysis` | lanza un análisis con `{ forceReindex, reports[] }`; 202 con la ejecución, 400 con un informe desconocido, o 409 si hay otro análisis, un turno de chat, una operación de conocimiento o ningún repositorio abierto (`WEB/Api/AnalysisEndpoints.cs:15-21`; `WEB/Analysis/AnalysisRunManager.cs:82-122`) |
 | `GET /api/analysis/current` | la última ejecución en memoria, o 204 |
 | `POST /api/analysis/{runId}/cancel` | pide la cancelación; 409 si ya no está en curso |
 | `POST /api/analysis/{runId}/regenerate` y `/verify` | las operaciones de [2.9](#s-regenerar) y [2.10](#s-verificar) |
 | `GET /api/analysis/{runId}/events` | flujo SSE de eventos con reanudación por `after` o `Last-Event-ID` (`WEB/Api/AnalysisEndpoints.cs:59-94`) |
 | `GET/PUT /api/workspace` | repositorio abierto |
 | `GET /api/meta` | catálogo de informes, informes por defecto, límites de documentos y funciones disponibles (embeddings, descripción de imágenes) |
-| `GET /api/reports`, `/api/reports/{fichero}`, `/api/reports/custom[/{fichero}]`, `.../versions`, `.../versions/{id}/restore`, `GET /api/reports/validation` | lectura, versionado y validación de informes |
+| `GET /api/reports`, `/api/reports/{fichero}`, `/api/reports/custom[/{fichero}]`, `DELETE /api/reports/custom/{fichero}`, `.../versions[/{id}]`, `.../versions/{id}/restore`, `GET /api/reports/validation` | lectura, versionado y validación de informes |
 | `GET /api/source` | código del repositorio |
-| `GET/POST/PATCH/DELETE /api/documents[...]`, `POST /api/documents/{id}/describe` | documentos aportados y descripción de imágenes |
-| `GET/POST/DELETE /api/knowledge/graph[...]` y `/api/knowledge/embeddings[...]` | fuentes marcadas para el grafo y los embeddings |
+| `GET/POST/PATCH/DELETE /api/documents[...]`, `GET /api/documents/{id}/raw` y `/text`, `POST /api/documents/{id}/describe` | documentos aportados y descripción de imágenes |
+| `GET /api/knowledge`, `POST /api/knowledge/graph` y `/embeddings`, `DELETE /api/knowledge/graph/{kind}/{id}` y `/embeddings/{kind}/{id}` | fuentes marcadas para el grafo y los embeddings |
 | `GET/POST/DELETE /api/chat/sessions[...]`, `GET /api/chat/models`, `PUT /api/chat/sessions/{id}/model`, `POST /api/chat/sessions/{id}/messages` | sesiones de chat; el último envía una pregunta y responde por SSE |
 | `GET /api/chat/read-roots`, `POST /api/chat/read-roots` `{ path }`, `DELETE /api/chat/read-roots?path=` | rutas de lectura adicionales del repositorio abierto: lista (`path`, `global`, `problem`), alta (201, idempotente; 400 `invalid_path` con el motivo; 409 `no_workspace`) y baja (204; 404 `not_found`) |
 
-La lista sale de `WEB/Api/*.cs`. El flujo SSE del análisis es un registro de eventos por ejecución con un número de secuencia, un tope de 50 000 eventos y reproducción desde el último `seq` visto (`WEB/Analysis/AnalysisEventLog.cs:14-16`; `WEB/Api/AnalysisEndpoints.cs:75-92`), con un comentario `: keep-alive` cada 15 segundos (`WEB/Sse/SseWriter.cs:7-12`, `:64`). El chat usa el mismo escritor SSE, sin reproducción, y el turno se cancela si el cliente aborta la petición o se detiene el servidor (`WEB/Api/ChatEndpoints.cs:105-204`).
+La lista sale de `WEB/Api/*.cs`. El flujo SSE del análisis es un registro de eventos por ejecución con un número de secuencia, un tope de 50 000 eventos (`CodebaseAnalysis:Web:MaxEventsPerRun`) y reproducción desde el último `seq` visto; en la reproducción las salidas de herramienta suman como mucho 4 MiB (las más antiguas quedan con `outputDropped: true`) y de los `sharedpass.progress` solo el último conserva los lotes (`WEB/Analysis/AnalysisEventLog.cs:13-23`; `WEB/Api/AnalysisEndpoints.cs:75-92`), con un comentario `: keep-alive` cada 15 segundos (`WEB/Sse/SseWriter.cs:7-12`, `:64`). El chat usa el mismo escritor SSE, sin reproducción, y el turno se cancela si el cliente aborta la petición o se detiene el servidor (`WEB/Api/ChatEndpoints.cs:145-204`).
 
-Los eventos que recibe el cliente se llaman `analysis` y llevan el tipo en `type`: `run.started`, `run.completed` (con `status`, `exitCode`, `failedReports`, `usage` y los totales de `validation`), `run.regeneration_started`, `run.verification_started`, `pipeline.started`, `pipeline.completed`, `step.started`, `step.completed`, `step.validation`, `step.timeout`, `branch.started`, `branch.completed`, `llm.response`, `tool.started`, `tool.completed`, `log`, `report.written`, `report.verified` y `log.truncated` (`Progress/AnalysisEventDto.cs:28-81`; `WEB/Analysis/AnalysisRunManager.cs:552-583`). La fase de cada evento sale del nombre del paso (`detect`, `enrich`, `facets`, `reports`, `synthesis`) y los componentes que no son pasos de primer nivel heredan la del último paso de primer nivel que empezó; los eventos `llm.response` de streaming no se registran, para que un rol con streaming no inunde el log (`Progress/AnalysisEventMapper.cs:15-53`, `:75-83`). Al cerrar una ejecución, la web escribe `_run_meta.json`, valida los informes, fija el estado y emite `run.completed` en ese orden (`WEB/Analysis/AnalysisRunManager.cs:513-583`).
+Los eventos que recibe el cliente se llaman `analysis` y llevan el tipo en `type`: `run.started`, `run.completed` (con `status`, `exitCode`, `failedReports`, `unverifiedReports`, `durationMs`, `executiveReportPath`, `error`, `usage` y los totales de `validation`), `run.regeneration_started`, `run.verification_started`, `pipeline.started`, `pipeline.completed`, `step.started`, `step.completed`, `step.validation`, `step.timeout`, `branch.started`, `branch.completed`, `llm.response`, `tool.started` (con los argumentos), `tool.completed` (con los argumentos y la salida truncada), `log`, `report.written`, `report.verified`, `sharedpass.progress` y `log.truncated`; un evento del framework sin mapeo pasa con su tipo original y sin datos (`Progress/AnalysisEventDto.cs:45-89`; `Progress/AnalysisEventMapper.cs:175-219`; `WEB/Analysis/AnalysisRunManager.cs:546-584`). La fase de cada evento sale del nombre del paso (`detect`, `enrich`, `facets`, `reports`, `synthesis`; los pasos de la preparación y la pasada compartida van en `facets` y las investigaciones en `reports`) y los componentes que no son pasos de primer nivel heredan la del último paso de primer nivel que empezó; los eventos `llm.response` de streaming no se registran, para que un rol con streaming no inunde el log (`Progress/AnalysisEventMapper.cs:31-75`, `:170-172`). Al cerrar una ejecución, la web escribe `_run_meta.json`, valida los informes, fija el estado y emite `run.completed` en ese orden (`WEB/Analysis/AnalysisRunManager.cs:512-599`).
 
 <a id="s-llms"></a>
 ## 3. LLMs y system prompts
 
-Hay un único proveedor configurado, `AzureOpenAI` (`ServiceType` `azure-openai`, `ApiVersion` `2024-08-01-preview`, clave en `${Asistente__ApiKey}`, 300 segundos por intento), con once modelos con precio por millón de tokens, salvo `gpt-oss-120b`, que no lo tiene (`appsettings.analysis.json:116-189`). La clase de servicio y la prioridad de las claves `Asistente:*` se resuelven en `Hosting/LlmRoleFactory.cs`. Los roles del pipeline son doce y los del chat once; ninguno declara `Fallbacks`. Un rol tiene su proveedor, su modelo, el nombre de su plantilla de sistema y su bloque `Inference` (`Temperature`, `MaxTokens`, `UseMaxCompletionTokens`, `UseStreaming` y `Options`, que se envía tal cual en el cuerpo de la petición). La plantilla de sistema de un paso es la que nombra el rol: la factoría y `TemplateLlmStep` hacen que `role.SystemPrompt` mande sobre cualquier valor por defecto (`AnalysisPipelineFactory.cs:125`, `:382`, `:338`, `:267`; `FW/LLM/Steps/TemplateLlmStep.cs:35-37`).
+Hay un único proveedor configurado, `AzureOpenAI` (`ServiceType` `azure-openai`, `ApiVersion` `2024-08-01-preview`, clave en `${Asistente__ApiKey}`, 300 segundos por intento), y `MaxConcurrentRequests` 9 en sus `Options`, con once modelos con precio por millón de tokens, salvo `gpt-oss-120b`, que no lo tiene (`appsettings.analysis.json:177-250`). Los proveedores y roles los enlaza el framework (`AddAITaskAgent`, `LlmEnvironment`); encima, `Hosting/LlmRoleFactory.cs` aplica la prioridad de las claves `Asistente:*` y comprueba los roles requeridos. Los roles del pipeline son doce, más los dos de la pasada compartida (`SharedPassReader`, `SharedPassJudge`), que están declarados en el sample aunque la pasada esté apagada, y los del chat once: 25 en total; ninguno declara `Fallbacks`. Un rol tiene su proveedor, su modelo, el nombre de su plantilla de sistema y su bloque `Inference` (`Temperature`, `MaxTokens`, `UseMaxCompletionTokens`, `UseStreaming` y `Options`, que se envía tal cual en el cuerpo de la petición). La plantilla de sistema de un paso es la que nombra el rol: la factoría y `TemplateLlmStep` hacen que `role.SystemPrompt` mande sobre cualquier valor por defecto (`AnalysisPipelineFactory.cs:167`, `:550`, `:504`, `:321`; `FW/LLM/Steps/TemplateLlmStep.cs:35-37`).
 
 <a id="roles"></a>
 ### 3.1 Roles del pipeline
 
-Todos usan `gpt-6-sol` con `reasoning_effort: none`, `UseMaxCompletionTokens: true` y `MaxTokens` 65536, sin streaming. El modelo, la temperatura y las `Options` salen de `appsettings.analysis.json` (línea de cada rol en la primera columna); las plantillas se citan por su nombre y su texto íntegro está en el apéndice.
+Todos usan `gpt-6-sol` con `UseMaxCompletionTokens: true` y `MaxTokens` 65536, sin streaming, y `reasoning_effort: none` salvo los dos de la pasada compartida (`high` el lector y `medium` el juez, ambos con `Temperature` 1). El modelo, la temperatura y las `Options` salen de `appsettings.analysis.json` (línea de cada rol en la primera columna); las plantillas se citan por su nombre y su texto íntegro está en el apéndice.
 
 | Rol (líneas) | Paso que lo usa | `Temperature` | System prompt | Prompt de usuario | Herramientas | Límite |
 |---|---|---|---|---|---|---|
-| `Enricher` (190-203) | `SemanticEnrichmentStep`, sub-step `SemanticEnricherLlm` | 0,1 (`TopP` 0,95) | `enricher_system` | `enricher_prompt` | ninguna | `EnrichMinutes` (20) del paso padre |
-| `FunctionalAuditor` (204-216) | `Auditor_AnalisisFuncional` | 0,2 | `report_funcional_system` | `report_funcional_prompt` | las 7 del auditor ([3.5.1](#bl-tools-auditor)) | `AuditorMinutes` (15) |
-| `CodeSmellsAuditor` (217-229) | `Auditor_CodeSmells` | 0,1 | `report_codesmells_system` | `report_codesmells_prompt` | las 7 | 15 min |
-| `DeadCodeAuditor` (230-242) | `Auditor_CodigoMuerto` | 0,1 | `report_codigomuerto_system` | `report_codigomuerto_prompt` | las 7 | 15 min |
-| `FlowsAuditor` (243-255) | `Auditor_FlujosEndToEnd` | 0,1 | `report_flujos_system` | `report_flujos_prompt` | las 7, con 16 iteraciones | 15 min |
-| `SecurityBugAuditor` (256-268) | `Auditor_ErroresYBugs` | 0,1 | `report_errores_system` | `report_errores_prompt` | las 7 | 15 min |
-| `ArchitectureAuditor` (269-281) | `Auditor_ArquitecturaAcoplamiento` | 0,1 | `report_arquitectura_system` | `report_arquitectura_prompt` | las 7 | 15 min |
-| `ApiSecurityAuditor` (282-294) | `Auditor_InventarioApisSeguridad` | 0,1 | `report_apis_system` | `report_apis_prompt` | las 7 | 15 min |
-| `TechnicalDebtAuditor` (295-307) | `Auditor_DeudaTecnicaHotspots` | 0,1 | `report_deuda_system` | `report_deuda_prompt` | las 7 | 15 min |
-| `DiAuditor` (308-320) | `Auditor_InyeccionDependenciasExtensiones` | 0,1 | `report_di_system` | `report_di_prompt` | las 7 | 15 min |
-| `ExecutiveSynthesizer` (321-333) | `SynthesizerLlm` dentro de `ExecutiveSynthesizerStep` | 0,2 | `report_sintesis_system` | `report_sintesis_prompt` | ninguna | `SynthesisMinutes` (15) |
-| `ReportVerifier` (334-346) | `Verifier_<Tipo>` dentro de `Verify_<Tipo>` | 0,1 | `report_verifier_system` | `report_verifier_prompt` | 4 ([3.5.2](#bl-tools-verificador)) | `VerifierMinutes` (10) |
+| `Enricher` (279-292) | `SemanticEnrichmentStep`, sub-step `SemanticEnricherLlm` | 0,1 (`TopP` 0,95) | `enricher_system` | `enricher_prompt` | ninguna | `EnrichMinutes` (20) del paso padre |
+| `FunctionalAuditor` (293-305) | `Auditor_AnalisisFuncional`, sus `Investigation_AnalisisFuncional_<subsistema>` (prompt `report_funcional_investigacion_prompt`) y el sub-step `DomainNaming` (con `domain_naming_system` y `domain_naming_prompt`, sin herramientas) | 0,2 | `report_funcional_system` | `report_funcional_prompt` | las 7 del auditor ([3.5.1](#bl-tools-auditor)) | `AuditorMinutes` (15) o el del presupuesto |
+| `CodeSmellsAuditor` (306-318) | `Auditor_CodeSmells` | 0,1 | `report_codesmells_system` | `report_codesmells_prompt` | las 7 | 15 min |
+| `DeadCodeAuditor` (319-331) | `Auditor_CodigoMuerto` | 0,1 | `report_codigomuerto_system` | `report_codigomuerto_prompt` | las 7 | 15 min |
+| `FlowsAuditor` (332-344) | `Auditor_FlujosEndToEnd` y sus investigaciones | 0,1 | `report_flujos_system` | `report_flujos_prompt` | las 7 | 15 min |
+| `SecurityBugAuditor` (345-357) | `Auditor_ErroresYBugs` y sus investigaciones | 0,1 | `report_errores_system` | `report_errores_prompt` | las 7 | 15 min |
+| `ArchitectureAuditor` (358-370) | `Auditor_ArquitecturaAcoplamiento` y sus investigaciones | 0,1 | `report_arquitectura_system` | `report_arquitectura_prompt` | las 7 | 15 min |
+| `ApiSecurityAuditor` (371-383) | `Auditor_InventarioApisSeguridad` | 0,1 | `report_apis_system` | `report_apis_prompt` | las 7 | 15 min |
+| `TechnicalDebtAuditor` (384-396) | `Auditor_DeudaTecnicaHotspots` | 0,1 | `report_deuda_system` | `report_deuda_prompt` | las 7 | 15 min |
+| `DiAuditor` (397-409) | `Auditor_InyeccionDependenciasExtensiones` | 0,1 | `report_di_system` | `report_di_prompt` | las 7 | 15 min |
+| `ExecutiveSynthesizer` (410-422) | `SynthesizerLlm` dentro de `ExecutiveSynthesizerStep` | 0,2 | `report_sintesis_system` | `report_sintesis_prompt` | ninguna | `SynthesisMinutes` (15) |
+| `ReportVerifier` (423-435) | `Verifier_<Tipo>` dentro de `Verify_<Tipo>` | 0,1 | `report_verifier_system` | `report_verifier_prompt` | 4 ([3.5.2](#bl-tools-verificador)) | `VerifierMinutes` (10) |
+| `SharedPassReader` (253-265) | lectura de lotes de `SharedPassStep`, solo con la pasada activada | 1 | `shared_pass_reader_system` | `shared_pass_reader_prompt` y `shared_pass_reader_retry_prompt` | ninguna | `SharedPass:MaxMinutes` (90) para toda la pasada |
+| `SharedPassJudge` (266-278) | juez de `SharedPassStep`, ídem | 1 | `shared_pass_judge_system` | `shared_pass_judge_prompt` | ninguna | ídem |
 
-El `ChatAssistant` y los diez `Chat.*` no están en esta tabla porque comparten plantilla; van en la siguiente. Ningún auditor tiene `UseStreaming`, de modo que sus llamadas son síncronas con el plazo `RequestTimeoutSeconds` del proveedor (300 s). Los auditores y el verificador reciben su system prompt con el [bloque de guías de herramientas](#bl-tools-auditor) añadido por el framework; el enriquecedor y la síntesis, sin herramientas, lo reciben tal cual. `FW/LLM/Steps/BaseLlmStep.cs:404-410` solo añade el bloque cuando el paso tiene herramientas.
+El `ChatAssistant` y los diez `Chat.*` no están en esta tabla porque comparten plantilla; van en la siguiente. Ningún auditor tiene `UseStreaming`, de modo que sus llamadas son síncronas con el plazo `RequestTimeoutSeconds` del proveedor (300 s). Los límites son los valores por defecto del código; el sample los pone a 0 (sin límite). Los auditores y el verificador reciben su system prompt con el [bloque de guías de herramientas](#bl-tools-auditor) añadido por el framework, y los auditores e investigaciones, con el protocolo de notas activo, también el [bloque de etiquetas](#bl-notas); el enriquecedor, el nombrado de subsistemas, la síntesis y los dos roles de la pasada compartida, sin herramientas, lo reciben tal cual. `BaseLlmStep` solo añade cada bloque cuando el paso tiene herramientas o etiquetas (`FW/LLM/Steps/BaseLlmStep.cs:423-425`, `:640-700`).
 
 ### 3.2 Roles del chat
 
-Los once roles comparten el system prompt `chat_system` (se copia una sola vez en el apéndice) y las 17 herramientas del chat ([3.5.3](#bl-tools-chat)); el prompt de usuario es la pregunta literal. Todos llevan `MaxTokens` 32768, `UseMaxCompletionTokens`, `UseStreaming: true` y `StreamingInactivityTimeoutSeconds` 300, salvo los dos últimos de `gpt-5` que no fijan `Temperature` (`appsettings.analysis.json:347-487`).
+Los once roles comparten el system prompt `chat_system` (se copia una sola vez en el apéndice) y las 17 herramientas del chat ([3.5.3](#bl-tools-chat)); el prompt de usuario es la pregunta literal. Todos llevan `MaxTokens` 32768, `UseMaxCompletionTokens`, `UseStreaming: true` y `StreamingInactivityTimeoutSeconds` 300, salvo `gpt-5-mini`, `gpt-5-nano` y `o4-mini`, que no fijan `Temperature` (`appsettings.analysis.json:436-576`).
 
 | Rol (líneas) | Modelo | `Temperature` | `Options` |
 |---|---|---|---|
-| `ChatAssistant` (347-361), por defecto | `gpt-6-sol` | 0,2 | `reasoning_effort: none` |
-| `Chat.gpt-6-luna` (362-376) | `gpt-6-luna` | 0,2 | `reasoning_effort: none` |
-| `Chat.gpt-5.6-terra` (377-391) | `gpt-5.6-terra` | 0,2 | `reasoning_effort: none` |
-| `Chat.gpt-5.4` (392-403) | `gpt-5.4` | 0,2 | ninguna; es también el `VisionRole` de la descripción de imágenes |
-| `Chat.gpt-4.1-mini` (404-415) | `gpt-4.1-mini` | 0,2 | ninguna |
-| `Chat.gpt-6-sol-global` (416-430) | `gpt-6-sol-global` | 0,2 | `reasoning_effort: none` |
-| `Chat.gpt-4.1-nano` (431-442) | `gpt-4.1-nano` | 0,2 | ninguna |
-| `Chat.gpt-5-mini` (443-453) | `gpt-5-mini` | no la fija | ninguna |
-| `Chat.gpt-5-nano` (454-464) | `gpt-5-nano` | no la fija | ninguna |
-| `Chat.o4-mini` (465-475) | `o4-mini` | no la fija | ninguna |
-| `Chat.gpt-oss-120b` (476-487) | `gpt-oss-120b` | 0,2 | ninguna |
+| `ChatAssistant` (436-450), por defecto | `gpt-6-sol` | 0,2 | `reasoning_effort: none` |
+| `Chat.gpt-6-luna` (451-465) | `gpt-6-luna` | 0,2 | `reasoning_effort: none` |
+| `Chat.gpt-5.6-terra` (466-480) | `gpt-5.6-terra` | 0,2 | `reasoning_effort: none` |
+| `Chat.gpt-5.4` (481-492) | `gpt-5.4` | 0,2 | ninguna; es también el `VisionRole` de la descripción de imágenes |
+| `Chat.gpt-4.1-mini` (493-504) | `gpt-4.1-mini` | 0,2 | ninguna |
+| `Chat.gpt-6-sol-global` (505-519) | `gpt-6-sol-global` | 0,2 | `reasoning_effort: none` |
+| `Chat.gpt-4.1-nano` (520-531) | `gpt-4.1-nano` | 0,2 | ninguna |
+| `Chat.gpt-5-mini` (532-542) | `gpt-5-mini` | no la fija | ninguna |
+| `Chat.gpt-5-nano` (543-553) | `gpt-5-nano` | no la fija | ninguna |
+| `Chat.o4-mini` (554-564) | `o4-mini` | no la fija | ninguna |
+| `Chat.gpt-oss-120b` (565-576) | `gpt-oss-120b` | 0,2 | ninguna |
 
-El selector del chat y su `Streaming` informativo salen de `CodebaseAnalysis:Chat:Models` (`appsettings.analysis.json:41-54`), con `gpt-6-sol` por defecto.
+El selector del chat y su `Streaming` informativo salen de `CodebaseAnalysis:Chat:Models` (`appsettings.analysis.json:100-112`), con `gpt-6-sol` por defecto.
 
 ### 3.3 Otros usos de LLM y modelos de embeddings
 
-La **descripción de imágenes** no es un rol del pipeline sino un servicio: `ImageDescriber` usa el rol de `CodebaseAnalysis:Documents:VisionRole` (`Chat.gpt-5.4`), envía una conversación nueva con un único mensaje `user` que lleva la plantilla `document_image_describe` y la imagen en `data:` con `detail: high` (hasta 8 MB), y no fija ningún system prompt, de modo que el `SystemPrompt: chat_system` del rol no se usa en esa llamada (`Documents/ImageDescriber.cs:15-52`, `:94-115`; `appsettings.analysis.json:56-62`). Lo invocan la herramienta `describe_image` del chat y `POST /api/documents/{id}/describe`, y solo si el rol existe y su proveedor tiene clave (`WEB/Hosting/AnalysisHost.cs:33-46`). Con una pregunta, el servicio añade al final el texto del [apartado 3.5.5](#bl-imagen-pregunta).
+La **descripción de imágenes** no es un rol del pipeline sino un servicio: `ImageDescriber` usa el rol de `CodebaseAnalysis:Documents:VisionRole` (`Chat.gpt-5.4`), envía una conversación nueva con un único mensaje `user` que lleva la plantilla `document_image_describe` y la imagen en `data:` con `detail: high` (hasta 8 MB), y no fija ningún system prompt, de modo que el `SystemPrompt: chat_system` del rol no se usa en esa llamada (`Documents/ImageDescriber.cs:15-52`, `:94-115`; `appsettings.analysis.json:114-120`). Lo invocan la herramienta `describe_image` del chat y `POST /api/documents/{id}/describe`, y solo si el rol existe y su proveedor tiene clave (`WEB/Hosting/AnalysisHost.cs:33-46`). Con una pregunta, el servicio añade al final el texto del [apartado 3.5.5](#bl-imagen-pregunta).
 
-Los **embeddings** no pasan por el framework ni por un rol: `OpenAICompatibleEmbeddingClient` llama por HTTP a `POST {BaseUrl}/openai/deployments/{Model}/embeddings` (Azure) o a `{BaseUrl}/embeddings` (OpenAI y OpenRouter) con el proveedor de `CodebaseAnalysis:Embeddings:Provider` (`AzureOpenAI`) y el modelo `text-embedding-3-small`, en lotes de 32 con trozos de 1800 caracteres y solape de 200 (`Knowledge/Embeddings/EmbeddingClient.cs:106-111`, `:175-190`; `appsettings.analysis.json:63-71`). No tienen system prompt. Alimentan la herramienta `semantic_search` y se desactivan solos, con el motivo, si el proveedor no tiene clave o URL (`:86-100`).
+Los **embeddings** no pasan por el framework ni por un rol: `OpenAICompatibleEmbeddingClient` llama por HTTP a `POST {BaseUrl}/openai/deployments/{Model}/embeddings` (Azure) o a `{BaseUrl}/embeddings` (OpenAI y OpenRouter) con el proveedor de `CodebaseAnalysis:Embeddings:Provider` (`AzureOpenAI`) y el modelo `text-embedding-3-small`, en lotes de 32 con trozos de 1800 caracteres y solape de 200 (`Knowledge/Embeddings/EmbeddingClient.cs:106-111`, `:175-190`; `appsettings.analysis.json:121-129`). No tienen system prompt. Alimentan la herramienta `semantic_search` y se desactivan solos, con el motivo, si el proveedor no tiene clave o URL (`:86-100`).
 
 ### 3.4 Cómo se compone el texto que ve el modelo
 
-El motor de plantillas (`TinyTemplateRendered`) procesa un texto en cuatro pasadas: elimina los comentarios `{{# ... #}}`, resuelve `{{ include 'x' }}`, interpola los `{{ placeholder }}` con el modelo de datos del paso y, por último, expande los `@[x]`; cada fichero incluido se renderiza a su vez de forma recursiva, y una ruta que sale de la carpeta de plantillas lanza una excepción (`FW/Support/Template/TinyTemplateRendered.cs:66-115`, `:234-277`). `AnalysisTemplateRenderer` fija el modelo de datos como la unión de `Input`, `Context` y `current_timestamp`, con las propiedades en minúsculas y en `snake_case` (`Support/AnalysisTemplateRenderer.cs:100-170`). El proveedor busca cada plantilla en la carpeta `templates/` junto al ejecutable y lanza una excepción si no existe, para que un nombre erróneo no llegue al modelo como si fuera el prompt (`Support/AnalysisTemplateProvider.cs:40-81`; `AnalysisPipelineFactory.cs:78-87`). Sobre el system prompt resuelto, `BaseLlmStep` añade el bloque `## TOOL USAGE GUIDELINES` cuando hay herramientas (`FW/LLM/Steps/BaseLlmStep.cs:404-410`, `:623-653`). El apéndice reproduce cada fragmento compartido una sola vez, en «Fragmentos compartidos», y deja en cada plantilla la línea de inclusión con una marca ⟨…⟩ que no pertenece al texto original; los `{{ placeholder }}` quedan sin sustituir, porque su valor cambia en cada ejecución. El texto que recibe el modelo es el de la plantilla con cada fragmento en el lugar de su línea de inclusión.
+El motor de plantillas (`TinyTemplateRendered`) procesa un texto en cuatro pasadas: elimina los comentarios `{{# ... #}}`, resuelve `{{ include 'x' }}`, interpola los `{{ placeholder }}` con el modelo de datos del paso y, por último, expande los `@[x]`; cada fichero incluido se renderiza a su vez de forma recursiva, y una ruta que sale de la carpeta de plantillas lanza una excepción (`FW/Support/Template/TinyTemplateRendered.cs:66-115`, `:234-277`). `AnalysisTemplateRenderer` fija el modelo de datos como la unión de `Input`, `Context` y `current_timestamp`, con las propiedades en minúsculas y en `snake_case` (`Support/AnalysisTemplateRenderer.cs:100-170`). El proveedor busca cada plantilla en la carpeta `templates/` junto al ejecutable y lanza una excepción si no existe, para que un nombre erróneo no llegue al modelo como si fuera el prompt (`Support/AnalysisTemplateProvider.cs:40-81`; `AnalysisPipelineFactory.cs:120-129`). Sobre el system prompt resuelto, `BaseLlmStep` añade el bloque `## TOOL USAGE GUIDELINES` cuando hay herramientas y el de etiquetas cuando hay `TagHandlers` (`FW/LLM/Steps/BaseLlmStep.cs:423-425`, `:640-700`). El apéndice reproduce cada fragmento compartido una sola vez, en «Fragmentos compartidos», y deja en cada plantilla la línea de inclusión con una marca ⟨…⟩ que no pertenece al texto original; los `{{ placeholder }}` quedan sin sustituir, porque su valor cambia en cada ejecución. El texto que recibe el modelo es el de la plantilla con cada fragmento en el lugar de su línea de inclusión.
 
 <a id="s-bloques"></a>
 ### 3.5 Texto que el código añade al system prompt
 
-Las plantillas del apéndice no son el system prompt completo. El framework añade a todo paso con herramientas el bloque `## TOOL USAGE GUIDELINES`, con una línea por herramienta, en el orden en que el paso las declara y con `UsageGuidelines` si la herramienta lo define o, si no, su `Description` (`FW/LLM/Steps/BaseLlmStep.cs:404-410`, `:623-653`; `FW/LLM/Tools/Base/LlmTool.cs:28`; `FW/LLM/Tools/Implementation/AvailableTools.cs:56-70`). Los tres bloques siguientes son ese texto para cada conjunto de herramientas, copiado de las propiedades de cada herramienta; las líneas se escriben con el salto de línea de la plataforma.
+Las plantillas del apéndice no son el system prompt completo. El framework añade a todo paso con herramientas el bloque `## TOOL USAGE GUIDELINES`, con una línea por herramienta, en el orden en que el paso las declara y con `UsageGuidelines` si la herramienta lo define o, si no, su `Description` (`FW/LLM/Steps/BaseLlmStep.cs:640-666`; `FW/LLM/Tools/Base/LlmTool.cs:28`; `FW/LLM/Tools/Implementation/AvailableTools.cs:56-70`). Los tres bloques siguientes son ese texto para cada conjunto de herramientas (el bloque de etiquetas del protocolo de notas va en [3.5.6](#bl-notas)), copiado de las propiedades de cada herramienta; las líneas se escriben con el salto de línea de la plataforma.
 
 <a id="bl-tools-auditor"></a>
 #### 3.5.1 Herramientas de los nueve auditores
 
-Orden de `AnalysisPipelineFactory.AuditorToolNames` (`AnalysisPipelineFactory.cs:364-367`).
+Orden de `AnalysisPipelineFactory.AuditorToolNames` (`AnalysisPipelineFactory.cs:530-533`). Las investigaciones por subsistema usan las mismas herramientas. Con el protocolo de notas, el resultado de cada herramienta llega prefijado con `[Rn]` (`Notes/NoteProtocolTool.cs:8-12`).
 
 ~~~~~~~~text
 ## TOOL USAGE GUIDELINES
@@ -494,15 +556,15 @@ Be proactive: use tools directly without asking for confirmation.
 - **view_code_item**: Use after view_file_outline to see specific method/class implementations without loading full file. If a name matches several overloads, the tool lists them: repeat with the NodePath it gives, e.g. 'Class.method(int,String)'.
 - **grep_search**: Use to find text patterns or code references across files. Supports regex. Narrow large searches with SearchPath or Includes globs (e.g. '**/*.java', '**/*.xml').
 - **graph_search**: Busca nodos en el grafo de código por etiqueta ('label'), patrón de nombre ('name_pattern'), o nombre cualificado ('qn_pattern'). Devuelve etiqueta, nombre, Qualified Name, fichero y línea, y las propiedades útiles de cada nodo (firma, jerarquía, ruta de framework, indicadores de JSP, docstring).
-- **graph_neighbors**: Vecinos de un nodo del grafo de código por sus aristas: quién llama a X y a quién llama X (CALLS, con las líneas de cada llamada), qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué métodos define un tipo (DEFINES_METHOD), qué clase atiende una ruta (HANDLES) y, en Struts/JSP, qué JSP o definición Tiles muestra una acción (FORWARDS_TO), a qué acción envía una JSP (SUBMITS_TO), qué incluye (INCLUDES) y qué JSP compone una definición (RENDERS, EXTENDS_DEFINITION). En Java, además, qué tipos usa un método, un campo o un tipo (USES_TYPE, con el contexto: parámetro, retorno, local, cast, new…) y qué campos lee o escribe (READS, WRITES), con sus líneas. Dónde se usa una clase o un campo: direction 'in' sobre la clase (USES_TYPE y CALLS entrantes) o sobre el campo (READS y WRITES entrantes). Qué referencia hay en la línea N de un fichero: 'line' con el método que la contiene y direction 'out'. Cada arista dice su procedencia: resuelta por un enriquecedor (fiable), heurística de cbm (una pista, con su confianza si la trae) o de estructura. Devuelve datos del grafo, no el código: para confirmar un hecho, abre la línea que indica con view_file.
-- **graph_domain**: Explora elementos de dominio, framework y estructura: endpoints HTTP y contratos de seguridad ('routes'), registros del contenedor de inyección de dependencias con su lifetime ('di'), atributos C# materializados ('attributes'), proyectos C# con su acoplamiento, rol y dependencias contrastadas con los ProjectReference ('projects'), y contratos frente a implementaciones ('contracts': las implementaciones y consumidores de una interfaz o clase, o de qué tipos de otros proyectos depende un proyecto y si son contratos o implementaciones concretas).
+- **graph_neighbors**: Vecinos de un nodo del grafo de código por sus aristas: quién llama a X y a quién llama X (CALLS, con las líneas de cada llamada), qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué método sobrescribe o implementa un método y quién lo sobrescribe (OVERRIDES), qué métodos define un tipo (DEFINES_METHOD), qué clase atiende una ruta (HANDLES) y, en Struts/JSP, qué JSP o definición Tiles muestra una acción (FORWARDS_TO), a qué acción envía una JSP (SUBMITS_TO), qué incluye (INCLUDES) y qué JSP compone una definición (RENDERS, EXTENDS_DEFINITION). En Java, además, qué tipos usa un método, un campo o un tipo (USES_TYPE, con el contexto: parámetro, retorno, local, cast, new…) y qué campos lee o escribe (READS, WRITES), con sus líneas. Dónde se usa una clase o un campo: direction 'in' sobre la clase (USES_TYPE y CALLS entrantes) o sobre el campo (READS y WRITES entrantes). Qué referencia hay en la línea N de un fichero: 'line' con el método que la contiene y direction 'out'. Del análisis: qué tablas lee o escribe un método o una clase (QUERIES, MODIFIES, con sus líneas), a qué subsistema pertenece un tipo (CONTAINS entrante), de qué subsistemas depende uno (DEPENDS_ON) y qué notas de investigación citan un nodo (CITES entrante, con la cita y la frase de la nota; la nota la escribió el LLM). Cada arista dice su procedencia: resuelta por un enriquecedor (fiable), heurística de cbm (una pista, con su confianza si la trae) o de estructura. Devuelve datos del grafo, no el código: para confirmar un hecho, abre la línea que indica con view_file.
+- **graph_domain**: Explora elementos de dominio, framework y estructura: endpoints HTTP y contratos de seguridad ('routes'), registros del contenedor de inyección de dependencias con su lifetime ('di'), atributos C# materializados ('attributes'), proyectos C# con su acoplamiento, rol y dependencias contrastadas con los ProjectReference ('projects'), y contratos frente a implementaciones ('contracts': las implementaciones y consumidores de una interfaz o clase, o de qué tipos de otros proyectos depende un proyecto y si son contratos o implementaciones concretas), subsistemas del mapa de dominios del análisis ('subsystems': sin 'name', la lista con su descripción y tamaño; con el nombre o id de uno, sus miembros principales, puntos de entrada, tablas, dependencias y las notas de sus investigaciones) y tablas del SQL escrito en el código ('tables': sin 'name', la lista con lecturas y escrituras; con el nombre de una tabla, qué métodos o clases la leen y cuáles la escriben, con ruta:línea), hallazgos del registro del LLM ('findings': bugs, deuda y seguridad con severidad P0-P3, ancla en el código y estado; filtra por 'severity', 'kind' y 'name' = un símbolo o tipo) y contratos de métodos escritos por el LLM ('llm_contracts': qué hace, qué recibe, qué devuelve, efectos y excepciones de un método o de los de un tipo, con 'name').
 - **read_document**: Lee un documento aportado por el usuario por su id (de list_documents o del índice de documentación). Con 'section' (título u ordinal) solo esa sección; con 'offset', desde ese carácter. Es contexto del usuario, no evidencia sobre el código.
 ~~~~~~~~
 
 <a id="bl-tools-verificador"></a>
 #### 3.5.2 Herramientas del verificador
 
-Orden de `AnalysisPipelineFactory.VerifierToolNames` (`AnalysisPipelineFactory.cs:249-250`).
+Orden de `AnalysisPipelineFactory.VerifierToolNames` (`AnalysisPipelineFactory.cs:303-304`).
 
 ~~~~~~~~text
 ## TOOL USAGE GUIDELINES
@@ -511,7 +573,7 @@ Be proactive: use tools directly without asking for confirmation.
 - **view_file**: Use to read file contents. For file structure overview, use view_file_outline first.
 - **view_code_item**: Use after view_file_outline to see specific method/class implementations without loading full file. If a name matches several overloads, the tool lists them: repeat with the NodePath it gives, e.g. 'Class.method(int,String)'.
 - **grep_search**: Use to find text patterns or code references across files. Supports regex. Narrow large searches with SearchPath or Includes globs (e.g. '**/*.java', '**/*.xml').
-- **graph_neighbors**: Vecinos de un nodo del grafo de código por sus aristas: quién llama a X y a quién llama X (CALLS, con las líneas de cada llamada), qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué métodos define un tipo (DEFINES_METHOD), qué clase atiende una ruta (HANDLES) y, en Struts/JSP, qué JSP o definición Tiles muestra una acción (FORWARDS_TO), a qué acción envía una JSP (SUBMITS_TO), qué incluye (INCLUDES) y qué JSP compone una definición (RENDERS, EXTENDS_DEFINITION). En Java, además, qué tipos usa un método, un campo o un tipo (USES_TYPE, con el contexto: parámetro, retorno, local, cast, new…) y qué campos lee o escribe (READS, WRITES), con sus líneas. Dónde se usa una clase o un campo: direction 'in' sobre la clase (USES_TYPE y CALLS entrantes) o sobre el campo (READS y WRITES entrantes). Qué referencia hay en la línea N de un fichero: 'line' con el método que la contiene y direction 'out'. Cada arista dice su procedencia: resuelta por un enriquecedor (fiable), heurística de cbm (una pista, con su confianza si la trae) o de estructura. Devuelve datos del grafo, no el código: para confirmar un hecho, abre la línea que indica con view_file.
+- **graph_neighbors**: Vecinos de un nodo del grafo de código por sus aristas: quién llama a X y a quién llama X (CALLS, con las líneas de cada llamada), qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué método sobrescribe o implementa un método y quién lo sobrescribe (OVERRIDES), qué métodos define un tipo (DEFINES_METHOD), qué clase atiende una ruta (HANDLES) y, en Struts/JSP, qué JSP o definición Tiles muestra una acción (FORWARDS_TO), a qué acción envía una JSP (SUBMITS_TO), qué incluye (INCLUDES) y qué JSP compone una definición (RENDERS, EXTENDS_DEFINITION). En Java, además, qué tipos usa un método, un campo o un tipo (USES_TYPE, con el contexto: parámetro, retorno, local, cast, new…) y qué campos lee o escribe (READS, WRITES), con sus líneas. Dónde se usa una clase o un campo: direction 'in' sobre la clase (USES_TYPE y CALLS entrantes) o sobre el campo (READS y WRITES entrantes). Qué referencia hay en la línea N de un fichero: 'line' con el método que la contiene y direction 'out'. Del análisis: qué tablas lee o escribe un método o una clase (QUERIES, MODIFIES, con sus líneas), a qué subsistema pertenece un tipo (CONTAINS entrante), de qué subsistemas depende uno (DEPENDS_ON) y qué notas de investigación citan un nodo (CITES entrante, con la cita y la frase de la nota; la nota la escribió el LLM). Cada arista dice su procedencia: resuelta por un enriquecedor (fiable), heurística de cbm (una pista, con su confianza si la trae) o de estructura. Devuelve datos del grafo, no el código: para confirmar un hecho, abre la línea que indica con view_file.
 ~~~~~~~~
 
 <a id="bl-tools-chat"></a>
@@ -524,8 +586,8 @@ Orden de `ChatAgent.ToolNames` (`Chat/ChatAgent.cs`). En `list_dir`, `find_by_na
 Be proactive: use tools directly without asking for confirmation.
 
 - **graph_search**: Busca nodos en el grafo de código por etiqueta ('label'), patrón de nombre ('name_pattern'), o nombre cualificado ('qn_pattern'). Devuelve etiqueta, nombre, Qualified Name, fichero y línea, y las propiedades útiles de cada nodo (firma, jerarquía, ruta de framework, indicadores de JSP, docstring).
-- **graph_neighbors**: Vecinos de un nodo del grafo de código por sus aristas: quién llama a X y a quién llama X (CALLS, con las líneas de cada llamada), qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué métodos define un tipo (DEFINES_METHOD), qué clase atiende una ruta (HANDLES) y, en Struts/JSP, qué JSP o definición Tiles muestra una acción (FORWARDS_TO), a qué acción envía una JSP (SUBMITS_TO), qué incluye (INCLUDES) y qué JSP compone una definición (RENDERS, EXTENDS_DEFINITION). En Java, además, qué tipos usa un método, un campo o un tipo (USES_TYPE, con el contexto: parámetro, retorno, local, cast, new…) y qué campos lee o escribe (READS, WRITES), con sus líneas. Dónde se usa una clase o un campo: direction 'in' sobre la clase (USES_TYPE y CALLS entrantes) o sobre el campo (READS y WRITES entrantes). Qué referencia hay en la línea N de un fichero: 'line' con el método que la contiene y direction 'out'. Cada arista dice su procedencia: resuelta por un enriquecedor (fiable), heurística de cbm (una pista, con su confianza si la trae) o de estructura. Devuelve datos del grafo, no el código: para confirmar un hecho, abre la línea que indica con view_file.
-- **graph_domain**: Explora elementos de dominio, framework y estructura: endpoints HTTP y contratos de seguridad ('routes'), registros del contenedor de inyección de dependencias con su lifetime ('di'), atributos C# materializados ('attributes'), proyectos C# con su acoplamiento, rol y dependencias contrastadas con los ProjectReference ('projects'), y contratos frente a implementaciones ('contracts': las implementaciones y consumidores de una interfaz o clase, o de qué tipos de otros proyectos depende un proyecto y si son contratos o implementaciones concretas).
+- **graph_neighbors**: Vecinos de un nodo del grafo de código por sus aristas: quién llama a X y a quién llama X (CALLS, con las líneas de cada llamada), qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué método sobrescribe o implementa un método y quién lo sobrescribe (OVERRIDES), qué métodos define un tipo (DEFINES_METHOD), qué clase atiende una ruta (HANDLES) y, en Struts/JSP, qué JSP o definición Tiles muestra una acción (FORWARDS_TO), a qué acción envía una JSP (SUBMITS_TO), qué incluye (INCLUDES) y qué JSP compone una definición (RENDERS, EXTENDS_DEFINITION). En Java, además, qué tipos usa un método, un campo o un tipo (USES_TYPE, con el contexto: parámetro, retorno, local, cast, new…) y qué campos lee o escribe (READS, WRITES), con sus líneas. Dónde se usa una clase o un campo: direction 'in' sobre la clase (USES_TYPE y CALLS entrantes) o sobre el campo (READS y WRITES entrantes). Qué referencia hay en la línea N de un fichero: 'line' con el método que la contiene y direction 'out'. Del análisis: qué tablas lee o escribe un método o una clase (QUERIES, MODIFIES, con sus líneas), a qué subsistema pertenece un tipo (CONTAINS entrante), de qué subsistemas depende uno (DEPENDS_ON) y qué notas de investigación citan un nodo (CITES entrante, con la cita y la frase de la nota; la nota la escribió el LLM). Cada arista dice su procedencia: resuelta por un enriquecedor (fiable), heurística de cbm (una pista, con su confianza si la trae) o de estructura. Devuelve datos del grafo, no el código: para confirmar un hecho, abre la línea que indica con view_file.
+- **graph_domain**: Explora elementos de dominio, framework y estructura: endpoints HTTP y contratos de seguridad ('routes'), registros del contenedor de inyección de dependencias con su lifetime ('di'), atributos C# materializados ('attributes'), proyectos C# con su acoplamiento, rol y dependencias contrastadas con los ProjectReference ('projects'), y contratos frente a implementaciones ('contracts': las implementaciones y consumidores de una interfaz o clase, o de qué tipos de otros proyectos depende un proyecto y si son contratos o implementaciones concretas), subsistemas del mapa de dominios del análisis ('subsystems': sin 'name', la lista con su descripción y tamaño; con el nombre o id de uno, sus miembros principales, puntos de entrada, tablas, dependencias y las notas de sus investigaciones) y tablas del SQL escrito en el código ('tables': sin 'name', la lista con lecturas y escrituras; con el nombre de una tabla, qué métodos o clases la leen y cuáles la escriben, con ruta:línea), hallazgos del registro del LLM ('findings': bugs, deuda y seguridad con severidad P0-P3, ancla en el código y estado; filtra por 'severity', 'kind' y 'name' = un símbolo o tipo) y contratos de métodos escritos por el LLM ('llm_contracts': qué hace, qué recibe, qué devuelve, efectos y excepciones de un método o de los de un tipo, con 'name').
 - **view_file**: Use to read file contents. For file structure overview, use view_file_outline first.
 - **view_file_outline**: Start here when exploring code files. Shows classes, methods, properties without full content.
 - **view_code_item**: Use after view_file_outline to see specific method/class implementations without loading full file. If a name matches several overloads, the tool lists them: repeat with the NodePath it gives, e.g. 'Class.method(int,String)'.
@@ -608,6 +670,34 @@ En lugar de la descripción completa, responde solo a esta pregunta sobre la ima
 <pregunta del usuario>
 ~~~~~~~~
 
+<a id="bl-notas"></a>
+#### 3.5.6 Bloque de etiquetas del protocolo de notas
+
+Con el protocolo de notas activo (`CodebaseAnalysis:NoteProtocol`, [2.6](#s-auditores)), el framework añade este bloque detrás del de herramientas en el system prompt de los auditores, las consolidaciones y las investigaciones (`FW/LLM/Steps/BaseLlmStep.cs:418-426`, `:668-697`; `Notes/NoteTagHandler.cs:34-45`):
+
+~~~~~~~~text
+## IN-TEXT ACTION TAGS (NOT TOOLS)
+Besides your tools you have these action tags: <nota>.
+A tag is executed by TYPING it literally in your reply text, exactly as documented below. It is not a function:
+none of these names exists in your tools list, so a tool_call with one of them always fails and wastes a turn.
+
+**How the user sees it:** the text between the opening and closing tag is hidden and replaced by a one-line
+reference (e.g. `[write_file: demo.py (1.2 KB) — Prime numbers script]`). So, right after the closing tag, always
+add one or two sentences saying what you did - never end your reply on the closing tag.
+
+### TAG REFERENCE
+<nota r="Rn">…</nota> — protocolo de notas sobre los resultados de herramientas.
+Cada resultado de herramienta llega marcado con [Rn] (R1, R2...). En cada respuesta en la que recibas resultados nuevos,
+antes de pedir más herramientas, escribe una etiqueta <nota r="Rn">…</nota> por CADA resultado recibido, con todo lo que
+necesites conservar de él: hechos, reglas, valores y sus citas ruta:línea. Al escribir la nota, el contenido original del
+resultado se borra del historial y solo queda tu nota: si después te falta algo, vuelve a pedirlo. Si un resultado no
+aporta nada, escribe <nota r="Rn">sin interés</nota>. Antes de ampliar a otros ficheros, lee completo el punto de entrada
+principal de lo que investigas. Las notas deben ser densas, sin repetir lo ya anotado. Puedes escribir las notas y pedir
+herramientas en la misma respuesta; no hace falta comentar las notas después.
+Ejemplo: <nota r="R3">OrderService.cancel (src/orders/OrderService.java:120-148): solo cancela en estado PENDING; si no, lanza IllegalStateException (:131).</nota>
+---
+~~~~~~~~
+
 <a id="s-config"></a>
 ## 4. Configuración relevante
 
@@ -618,9 +708,13 @@ La configuración es `appsettings.analysis.json`, que viaja con `CORE` y se carg
 | `CodebaseAnalysis:RepositoryPath`, `DatabasePath`, `OutputReportsPath`, `LogsPath` | `.`, `.codebase/codebase.db`, `reports`, `logs` | rutas del repositorio, la copia del grafo, los informes y los logs; las tres últimas, relativas al repositorio (`Hosting/AnalysisRunOptions.cs:81-95`, `:133-138`) |
 | `CodebaseAnalysis:ForceReindex`, `Backups:Keep` | `false`, `5` | reindexación forzada y copias que se conservan ([2.1](#s-detect)) |
 | `CodebaseAnalysis:RequestedReports` | los nueve informes | informes por defecto |
-| `CodebaseAnalysis:Auditors:MaxToolIterations`, `MaxToolIterationsByRole` | `12`, `FlowsAuditor: 16` | iteraciones de herramientas de los auditores y del verificador (`AnalysisPipelineInput.cs:63-64`) |
+| `CodebaseAnalysis:Auditors:MaxToolIterations`, `MaxToolIterationsByRole` | `100`, `FlowsAuditor: 100` (12 por defecto en el código) | iteraciones de herramientas de los auditores, sus investigaciones y del verificador (`Models/AnalysisPipelineInput.cs:33`, `:63-64`; `appsettings.analysis.json:22-27`) |
 | `CodebaseAnalysis:Reports:MaxParallelAuditors` | no está en el JSON; 0 por defecto | concurrencia de los auditores (`Hosting/AnalysisRunOptions.cs:201-210`) |
-| `CodebaseAnalysis:Timeouts` | `PipelineMinutes` 240, `DetectMinutes` 15, `EnrichMinutes` 20, `ReportsMinutes` 60, `AuditorMinutes` 15, `SynthesisMinutes` 15, `VerifierMinutes` 10 | límites de paso en minutos; 0 o negativo los quita (`Hosting/AnalysisTimeouts.cs:10-58`) |
+| `CodebaseAnalysis:Timeouts` | todos a 0, es decir, sin límite; los valores por defecto del código son `PipelineMinutes` 240, `DetectMinutes` 15, `EnrichMinutes` 20, `ReportsMinutes` 60, `AuditorMinutes` 15, `SynthesisMinutes` 15, `VerifierMinutes` 10 | límites de paso en minutos; 0 o negativo los quita (`Hosting/AnalysisTimeouts.cs:10-58`; `appsettings.analysis.json:28-36`) |
+| `CodebaseAnalysis:Preparation` | `Mode` `Subsystems` (también por defecto), `MaxSubsystemsPerReport` 50 (8 por defecto), `MaxParallelInvestigations` 4, `ConsolidationMaxToolIterations` 0, umbrales del mapa de dominios, `Weights`, `ReportProfiles`, `CountedExtensions`, `StopTokens` | preparación por subsistema e informes en modo B ([2.5.1](#s-preparacion); `Preparation/PreparationOptions.cs:113-224`) |
+| `CodebaseAnalysis:TimeBudget` | las tres curvas (`Investigation`, `Consolidation`, `Auditor`) a 0, sin límite; por defecto 4+0,1/kLOC (4-20 min), 5+1/subsistema (5-30) y 10+0,03/kLOC (10-40) | presupuesto de tiempo de los informes (`Preparation/TimeBudgetOptions.cs:42-51`) |
+| `CodebaseAnalysis:NoteProtocol` | no está en el JSON; `Investigations` y `Auditors` `true`, `ReminderFromPending` 1, `WithholdFromPending` 12, `StopAfterWithheldTurns` 5 | protocolo de notas ([2.6](#s-auditores); `Notes/NoteProtocolOptions.cs:11-35`) |
+| `CodebaseAnalysis:SharedPass` | `Enabled` `false`, `MaxBatchTokens` 50 000, roles `SharedPassReader` y `SharedPassJudge`, juez (tandas de 20, 15 líneas de contexto, umbral 0,6), `MaxParallelBatches` 4, topes de coste 2/10/25 USD por lote, etapa y ejecución, `MaxMinutes` 90, `MaxCallsPerRun` 1000, `MaxTokensPerRun` 50 000 000, `MaxReaderRetries` 2, `MaxFileChars` 200 000, `MaxRelationsPerDirection` 80 | pasada compartida ([2.5.2](#s-pasada-compartida); `SharedPass/SharedPassOptions.cs`) |
 | `CodebaseAnalysis:Chat` | `MaxToolIterations` 12, `MaxHistoryTurns` 20, `TurnTimeoutMinutes` 5, `DefaultModel` `gpt-6-sol`, `Models` (11), `AllowedReadRoots` (vacío), `AllowUncPaths` `false` | turno de chat y selector de modelo ([2.12](#s-chat)); rutas de lectura globales además de las que añade el usuario y permiso de rutas de red UNC para ellas |
 | `CodebaseAnalysis:Documents` | `MaxDocuments` 300, `MaxTotalMegabytes` 500, `VisionRole` `Chat.gpt-5.4`, `IncludeInAnalysisByDefault` `true`, `AnalysisIndexMaxChars` 8000 | documentos aportados y descripción de imágenes |
 | `CodebaseAnalysis:Embeddings` | `Enabled` `true`, `AzureOpenAI`, `text-embedding-3-small`, lote 32, trozo 1800, solape 200 | embeddings |
@@ -629,38 +723,40 @@ La configuración es `appsettings.analysis.json`, que viaja con `CORE` y se carg
 | `DotNetEnricher` | `Enabled` `true`, `Required` `false`, `TimeoutSeconds` 900, `Restore` `auto`, `RestoreTimeoutSeconds` 300 | CLI de C# y su restauración ([2.3](#s-dotnet)); `CliPath`, `SolutionPath` y `ProjectName` son opcionales (`Enrichment/DotNetEnricherOptions.cs`) |
 | `JavaAnalyzer` | `Enabled` `true`, `JdkPath` `""`, `JvmOptions` `-Xmx8g -XX:+UseG1GC`, `BatchSize` 0, `MaxParallelBatches` 1, `ProvidedClasspath` y `TestRoots` vacíos, `DefaultEncoding` `""`, `TimeoutSeconds` 900, `StepTimeoutSeconds` 3600, `KeepIntermediate` `false` | analizador Java ([2.2](#s-lenguajes)); sin `JdkPath` no corre (`Enrichment/Java/JavaAnalyzerRunner.cs:126-130`) |
 | `StrutsJsp` | `Enabled` `true`, patrones de imports sospechosos y de negocio | plugin Struts/JSP |
-| `AITaskAgent:LlmProviders` | un proveedor y 23 roles ([3](#s-llms)) | modelos, plantillas de sistema e `Inference` de cada rol |
+| `AITaskAgent:LlmProviders` | un proveedor y 25 roles ([3](#s-llms)) | modelos, plantillas de sistema e `Inference` de cada rol |
 | `AITaskAgent:Conversation` | `UseSlidingWindow` `true`, `SlidingWindowMaxTokens` 262144 | ventana deslizante de las conversaciones |
 | `AITaskAgent:Timeouts` | no está en el JSON | plazos por defecto del framework para los pasos sin límite explícito (`FW/Configuration/ServiceCollectionExtensions.cs:49-50`) |
 
-Los plazos de las llamadas al modelo están por debajo de los de paso. Sin streaming, cada intento tiene `RequestTimeoutSeconds` (300 s en el proveedor del sample; 600 s si nadie lo fija) y con streaming rige el plazo de inactividad `StreamingInactivityTimeoutSeconds` (300 s en los roles de chat; 120 s si nadie lo fija) (`appsettings.analysis.json:125-129`; `OpenAILLmService/OpenAILlmService.cs:145-165`). Al arrancar cada análisis o regeneración, `AnalysisRunner` vuelca los límites efectivos al reporter, una línea por grupo (`Hosting/AnalysisRunner.cs:131-139`; `Hosting/EffectiveLimits.cs`), y la CLI los escribe también en el fichero de log (`CLI/Program.cs:182-186`).
+Los plazos de las llamadas al modelo están por debajo de los de paso. Sin streaming, cada intento tiene `RequestTimeoutSeconds` (300 s en el proveedor del sample; 600 s si nadie lo fija) y con streaming rige el plazo de inactividad `StreamingInactivityTimeoutSeconds` (300 s en los roles de chat; 120 s si nadie lo fija) (`appsettings.analysis.json:183-189`; `OpenAILLmService/OpenAILlmService.cs`). Además, el proveedor limita las llamadas simultáneas a `MaxConcurrentRequests` (9 en el sample; `OpenAILLmService/LlmCallGate.cs`), que `TimeBudgetStep` tiene en cuenta. Al arrancar cada análisis o regeneración, `AnalysisRunner` vuelca los límites efectivos al reporter, una línea por grupo (`Hosting/AnalysisRunner.cs:131-139`; `Hosting/EffectiveLimits.cs`), y la CLI los escribe también en el fichero de log (`CLI/Program.cs:182-186`).
 
 **Dónde van los logs.** La CLI escribe en consola y en `<LogsPath>/analysis-pipeline-<fecha>.log`, con rotación diaria, por defecto `<repositorio>/logs`; cada línea lleva la hora y, entre corchetes, el paso o el auditor que la emite (`CLI/Program.cs:53-54`, `:67-78`; `CLI/StepOriginEnricher.cs:9-24`). El nivel es global y sale de `--log-level`, `--trace`, `--debug` o `Logging:LogLevel:Default` (`Hosting/AnalysisRunOptions.cs:31-48`); con `Debug` o `Trace` el log guarda el cuerpo de cada petición al modelo, con código y fragmentos del repositorio, y el runner lo avisa al arrancar (`:144-148`). Los niveles por espacio de nombres están en la web: `WEB/appsettings.json` fija `Default` en `Information`, `Microsoft.AspNetCore` en `Warning` y `AITaskAgent`, `CodebaseAnalysis` y `OpenAILLmService` en `Trace` (`Verbose` en Serilog), de modo que la web registra en el nivel más detallado las capas del framework, del núcleo y del servicio OpenAI (`WEB/appsettings.json:5-24`). La web abre además un fichero `analysis-pipeline-<fecha>.log` por carpeta de logs del análisis en curso, con una propiedad de contexto que viaja a las ramas paralelas (`WEB/Program.cs:31-45`; `WEB/Analysis/AnalysisRunManager.cs:272-273`). El analizador Java deja su propio `java-analyzer.log` en `.codebase/enrichment/java/` y el CLI de C# reenvía su salida al canal `indexer` del log del pipeline.
 
 <a id="s-limites"></a>
 ## 5. Limitaciones conocidas
 
-**Azure no reparte el streaming de la mayoría de los deployments.** Todos los roles del chat llevan `UseStreaming: true`, pero el README de la web documenta, con una medición del 2 de octubre de 2026 contra el recurso del sample, que `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-terra`, `gpt-5.4`, `gpt-6-sol-global`, `gpt-5-mini` y `gpt-5-nano` entregan la respuesta entera de golpe y solo `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini` y `gpt-oss-120b` van goteando (`WEB/README.md:90`); por eso el catálogo marca `Streaming: false` en esos siete (`appsettings.analysis.json:43-51`). Con un deployment que entrega todo al final, una respuesta que tarde más que `StreamingInactivityTimeoutSeconds` corta el turno (`WEB/README.md:54`). Esa medición no la he reproducido `[I]`.
+**Azure no reparte el streaming de la mayoría de los deployments.** Todos los roles del chat llevan `UseStreaming: true`, pero el README de la web documenta, con una medición del 2 de octubre de 2026 contra el recurso del sample, que `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-terra`, `gpt-5.4`, `gpt-6-sol-global`, `gpt-5-mini` y `gpt-5-nano` entregan la respuesta entera de golpe y solo `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini` y `gpt-oss-120b` van goteando (`WEB/README.md:90`); por eso el catálogo marca `Streaming: false` en esos siete (`appsettings.analysis.json:101-109`). Con un deployment que entrega todo al final, una respuesta que tarde más que `StreamingInactivityTimeoutSeconds` corta el turno (`WEB/README.md:54`). Esa medición no la he reproducido `[I]`.
 
-**`reasoning_effort: none` con herramientas en `gpt-6-*`.** Los deployments `gpt-6-*`, incluido `gpt-6-sol-global`, y `gpt-5.6-terra` solo aceptan herramientas por chat/completions con `reasoning_effort: none`; `gpt-4.1-*` no admiten `reasoning_effort`; `gpt-5-mini`, `gpt-5-nano` y `o4-mini` no admiten una `temperature` distinta de la por defecto, y `o4-mini` tampoco `none` (`WEB/README.md:92`). El sample lo cumple en los roles afectados: `Options: { reasoning_effort: none }` en los doce roles del pipeline y en cuatro del chat (`appsettings.analysis.json:199-201`, `:357-359`, `:372-374`, `:387-389`, `:426-428`).
+**`reasoning_effort: none` con herramientas en `gpt-6-*`.** Los deployments `gpt-6-*`, incluido `gpt-6-sol-global`, y `gpt-5.6-terra` solo aceptan herramientas por chat/completions con `reasoning_effort: none`; `gpt-4.1-*` no admiten `reasoning_effort`; `gpt-5-mini`, `gpt-5-nano` y `o4-mini` no admiten una `temperature` distinta de la por defecto, y `o4-mini` tampoco `none` (`WEB/README.md:92`). El sample lo cumple en los roles afectados con herramientas: `Options: { reasoning_effort: none }` en los doce roles del pipeline y en cuatro del chat (`appsettings.analysis.json:288-290`, `:446-448`, `:461-463`, `:476-478`, `:515-517`); los dos roles de la pasada compartida, que no usan herramientas, llevan `high` y `medium` (`:262`, `:275`).
 
 **Sin Responses API.** Los deployments `gpt-5.1-codex` y `gpt-5.1-codex-mini` solo hablan la Responses API y el framework no tiene un proveedor sobre ella, de modo que no están en la lista (`WEB/README.md:94`). Cualquier modelo que solo exponga esa API queda fuera.
 
-**cbm resuelve las aristas por nombre.** Las `CALLS`, `INHERITS` e `IMPLEMENTS` de cbm se deciden por nombre, no por tipos; por eso el analizador Java sustituye las de los ficheros que analiza y `ReachabilityEnricher` solo usa las aristas de cbm desde nodos que Roslyn no resolvió (`DNE/Enrichers/ReachabilityEnricher.cs:9-11`; `Enrichment/Java/JavaGraphWriter.cs:677-685`). En un lenguaje sin enriquecedor nativo (Python, TypeScript, Go) las aristas siguen siendo heurísticas, y las reglas de `_graph_rules.md` mandan tratarlas como pistas (`templates/_graph_rules.md`). El grafo no ve reflexión, configuración XML, JSP ni scriptlets (`templates/_graph_rules.md`, punto 4).
+**cbm resuelve las aristas por nombre.** Las `CALLS`, `INHERITS` e `IMPLEMENTS` de cbm se deciden por nombre, no por tipos; por eso el analizador Java sustituye las de los ficheros que analiza, `CallEnricher` y `ThrowsEnricher` hacen lo mismo con las `CALLS` y `THROWS` de los ficheros C# (salvo las de ficheros con símbolos sin resolver que no tienen equivalente exacto) y `ReachabilityEnricher` solo usa las aristas de cbm desde nodos que Roslyn no resolvió (`DNE/Enrichers/ReachabilityEnricher.cs:9-11`; `DNE/Enrichers/CallEnricher.cs:21-28`; `DNE/Enrichers/ThrowsEnricher.cs:21-23`; `Enrichment/Java/JavaGraphWriter.cs:671-675`). En un lenguaje sin enriquecedor nativo (Python, TypeScript, Go) las aristas siguen siendo heurísticas, y las reglas de `_graph_rules.md` mandan tratarlas como pistas (`templates/_graph_rules.md`). El grafo no ve reflexión, configuración XML, JSP ni scriptlets (`templates/_graph_rules.md`, punto 4).
 
 **MAX_PATH.** cbm no indexa los ficheros cuya ruta absoluta llega a 260 caracteres, no deja ningún nodo suyo y no lo avisa; el analizador Java los lee igualmente y crea sus declaraciones como nodos nuevos. El paso avisa cuando eso supera el 5 % de lo escrito y da la pista de copiar el repositorio a una ruta más corta (`Enrichment/Java/JavaGraphWriter.cs:336-340`; `Steps/LanguageEnricherStep.cs:340-383`).
 
-**Repositorios mixtos y un solo proyecto.** `DotNetEnricherStep` solo se salta el CLI y el fallback cuando el repositorio es Java sin C# (`Steps/DotNetEnricherStep.cs:54-64`); en un repositorio con Java y C# corren ambos enriquecedores, y la detección de «grafo enriquecido» ignora a propósito lo que escribe el analizador Java (`Steps/DetectAndIndexGraphStep.cs:610-633`). El CLI de C# trabaja sobre un único proyecto de cbm, el mayoritario en `nodes` (`DNE/EnrichmentPipeline.cs:125-131`), y la solución se elige con el primer `.slnx` o `.sln` de la raíz o de sus subcarpetas inmediatas (`Steps/DotNetEnricherStep.cs:255-268`).
+**Repositorios mixtos y un solo proyecto.** `DotNetEnricherStep` solo se salta el CLI y el fallback cuando el repositorio es Java sin C# (`Steps/DotNetEnricherStep.cs:54-64`); en un repositorio con Java y C# corren ambos enriquecedores, y la detección de «grafo enriquecido» ignora a propósito lo que escribe el analizador Java (`Steps/DetectAndIndexGraphStep.cs:610-633`). El CLI de C# trabaja sobre un único proyecto de cbm, `DotNetEnricher:ProjectName` o, si está vacío, el mayoritario en `nodes` (`DNE/EnrichmentPipeline.cs:130-136`), y la solución, salvo `DotNetEnricher:SolutionPath`, es el primer `.slnx` (o, si no hay, `.sln`) de la raíz o, en orden alfabético, de sus subcarpetas inmediatas (`Steps/DotNetEnricherStep.cs:80-82`, `:255-268`).
 
 **Sin JDK configurado no hay analizador Java.** `JavaAnalyzer:JdkPath` está vacío en el sample y `ResolveJdk` no consulta `JAVA_HOME`; sin él el paso deja el grafo de cbm, retira el código de test y registra una fila `skipped` (`Enrichment/Java/JavaAnalyzerRunner.cs:126-130`; `Steps/LanguageEnricherStep.cs:150-162`).
 
 **El fallback LLM es pequeño y se limita a rutas, DI y configuración.** Envía como mucho 15 ficheros de 4000 caracteres elegidos por nombre y no puede escribir métricas (`Steps/SemanticEnrichmentStep.cs:36-47`, `:194-221`).
 
-**Regeneración y verificación pierden parte de la configuración.** La copia de la entrada que construye `AnalysisRunner.ForRegeneration` no lleva `MaxParallelAuditors` ni `SourceDefaultEncoding`, de modo que con esas operaciones los auditores corren con la concurrencia por defecto y las herramientas leen con la codificación por defecto (`Hosting/AnalysisRunner.cs:142-151`).
+**Regeneración y verificación pierden parte de la configuración.** La copia de la entrada que construye `AnalysisRunner.ForRegeneration` no lleva `MaxParallelAuditors` ni `SourceDefaultEncoding`, de modo que con esas operaciones los auditores y verificadores corren sin tope de concurrencia propio y `TimeBudgetStep` calcula la concurrencia sin él (`Hosting/AnalysisRunner.cs:142-151`; `Steps/TimeBudgetStep.cs:115-116`); las herramientas conservan la codificación porque se registran con la entrada original.
 
-**Sin reintento de paso.** Todos los pasos tienen `MaxRetries => 1` y el motor reintenta mientras `attempt <= MaxRetries` (`FW/Core/Execution/Middlewares/RetryMiddleware.cs:21-23`); un fallo transitorio del modelo solo se recupera con un `Fallbacks` de rol, que el sample no declara, y con el modo de respuesta final de los auditores que agotan las herramientas.
+**Sin reintento de paso.** Todos los pasos tienen `MaxRetries => 1` y el motor reintenta mientras `attempt <= MaxRetries` (`FW/Core/Execution/Middlewares/RetryMiddleware.cs:21-23`); un fallo transitorio del modelo solo se recupera con un `Fallbacks` de rol, que el sample no declara, y con el modo de respuesta final de los auditores que agotan las herramientas o a los que se corta el bucle.
 
-**Los textos de las plantillas tienen aristas.** La guía de uso de `view_code_item` que el framework añade al system prompt de los auditores manda usar `view_file_outline`, herramienta que ningún auditor tiene (`FileTools/Tools/ViewCodeItemTool.cs:43`; `AnalysisPipelineFactory.cs:364-367`). `report_sintesis_system` pide «al menos 2 diagramas» y enumera tres (plantilla `report_sintesis_system`, en el apéndice). Son observaciones sobre el texto, que este documento no corrige.
+**Los textos de las plantillas tienen aristas.** La guía de uso de `view_code_item` que el framework añade al system prompt de los auditores manda usar `view_file_outline`, herramienta que ningún auditor tiene (`FileTools/Tools/ViewCodeItemTool.cs:43`; `AnalysisPipelineFactory.cs:530-533`). El bloque de etiquetas del framework pide escribir «una o dos frases» tras cada etiqueta, cuando el protocolo de notas dice que no hace falta comentar las notas ([3.5.6](#bl-notas)). `report_sintesis_system` pide «al menos 2 diagramas» y enumera tres (plantilla `report_sintesis_system`, en el apéndice). Son observaciones sobre el texto, que este documento no corrige.
+
+**La preparación y sus límites son provisionales.** Los coeficientes de `TimeBudget` son provisionales según su propio código (`Preparation/TimeBudgetOptions.cs`, resumen de la clase) y el sample los anula (0). Con la preparación activa, cada informe en modo B hace una investigación por subsistema elegido (hasta 50 por informe en el sample) más la consolidación, de modo que el número de llamadas LLM crece con el tamaño del repositorio; no hay tope de coste fuera de la pasada compartida.
 
 **La validación mide forma, no verdad.** `ReportValidator` comprueba que las citas existen y están en rango, no que la línea diga lo que el informe afirma, y los identificadores `NN-CAT-nnn` solo se comprueban por formato y unicidad (`Reports/ReportValidation.cs:11-39`). Para contrastar hechos hay que usar la verificación a demanda ([2.10](#s-verificar)) o la lista de hallazgos esperados, que escribe quien evalúa.
 
@@ -678,10 +774,10 @@ Estas son las diferencias entre la guía complementaria [`codebase-analysis-fluj
 | §1.4 no describe la alcanzabilidad y el código muerto de Java | `LanguageEnricherStep` ejecuta `JavaReachabilityWriter` tras el analizador y el plugin y escribe `is_reachable` y `dead_code_candidate` | `Steps/LanguageEnricherStep.cs:100-102`, `:439-460`; `Enrichment/Java/JavaReachabilityWriter.cs:36-58` |
 | §2.1 (líneas 619, 630, 640): `dead_code_candidates`, `critical_hotspots_exceptions`, `suspect_patterns` y `hotspots_ranking` llegan «vacías» en Java porque «nadie escribe» `dead_code_candidate`, `hotspot` ni `detected_issues` | el escritor Java escribe `hotspot`, `fan_in`, `fan_out`, `detected_issues` e `issue_rules`, y la alcanzabilidad escribe `dead_code_candidate` | `Enrichment/Java/JavaGraphWriter.cs:323-328`, `:1633-1662`; `Enrichment/Java/JavaReachabilityWriter.cs:66-67` |
 | §1.5 no menciona la restauración NuGet del CLI de C# | el CLI restaura los paquetes fuera del repositorio con `DotNetEnricher:Restore` y `RestoreTimeoutSeconds`, y el paso le pasa `--cache-dir` | `Steps/DotNetEnricherStep.cs:85-90`, `:193-209`; `Enrichment/DotNetEnricherOptions.cs:41-60`; `DNE/NuGetRestore.cs:20-33` |
-| Resumen (línea 17): «seis tools» por auditor; §1.7 dice siete | son siete | `AnalysisPipelineFactory.cs:364-367` |
+| Resumen (línea 17): «seis tools» por auditor; §1.7 dice siete | son siete | `AnalysisPipelineFactory.cs:530-533` |
 | §1.6 (líneas 16 y 235): «unas cuarenta» facetas | `ReportFacetInput` tiene 64 propiedades de texto | `Models/ReportFacetInput.cs:12-175` |
-| Las citas de línea de la guía a `AnalysisPipelineFactory.cs`, `SqlFacetExtractorStep.cs` y `DetectAndIndexGraphStep.cs` (por ejemplo `:113-123`, `:68-76`, `:162-224`) | los ficheros han crecido y esas líneas ya no apuntan a lo que la guía dice: el pipeline se monta ahora en `:143-153` y la primera consulta de facetas está en `:78-86` | `AnalysisPipelineFactory.cs:143-153`; `Steps/SqlFacetExtractorStep.cs:78-86` |
-| §1.10 (líneas 392-395): un intento colgado consume 10 de los 15 minutos del auditor, con los valores por defecto | es cierto con los valores por defecto del servicio (600 s), pero el sample fija 300 s por intento en el proveedor | `appsettings.analysis.json:128`; `OpenAILLmService/OpenAILlmService.cs:147` |
+| Las citas de línea de la guía a `AnalysisPipelineFactory.cs`, `SqlFacetExtractorStep.cs` y `DetectAndIndexGraphStep.cs` (por ejemplo `:113-123`, `:68-76`, `:162-224`) | los ficheros han crecido y esas líneas ya no apuntan a lo que la guía dice: el pipeline se monta ahora en `:144-199` y la primera consulta de facetas está en `:77-86` | `AnalysisPipelineFactory.cs:144-199`; `Steps/SqlFacetExtractorStep.cs:77-86` |
+| §1.10 (líneas 392-395): un intento colgado consume 10 de los 15 minutos del auditor, con los valores por defecto | es cierto con los valores por defecto del servicio (600 s), pero el sample fija 300 s por intento en el proveedor | `appsettings.analysis.json:186`; `OpenAILLmService/OpenAILlmService.cs` |
 
 Lo que sigue vigente sin cambios y puede leerse en la guía: las mediciones de la prueba M y de las referencias de tipos y campos sobre el repositorio objetivo, la política de análisis de cada informe (parte 2) en lo que no depende de las propiedades que escribe el analizador Java, la verificación a demanda (§1.8.1), el chat y su auditoría de marcas (§1.12) y la evaluación determinista de los informes (§1.15).
 
@@ -723,8 +819,8 @@ Fichero: `Samples/CodebaseAnalysis.Core/templates/_common_rules.md`
    - No afirmes que algo no existe (factorías, validaciones, manejo de errores, pruebas, etc.) basándote solo en un conjunto vacío. Contrástalo con el resto de datos y, si dispones de herramientas de consulta, con el código. Si no puedes verificarlo, decláralo como **no evaluable con la evidencia disponible**, no como ausente.
 
 5. **Redacción Técnica**:
-   - **Extensión proporcional a los hallazgos:** cada sección tiene la extensión que piden sus hallazgos, no la que sugiere la plantilla. Una sección sin hallazgos propios se reduce a una línea ("Sin hallazgos con la evidencia disponible") en lugar de rellenarse.
-   - **Cada cosa en un solo sitio:** un hallazgo se desarrolla una vez; el resumen, las tablas y el plan de acción lo citan por su identificador, sin volver a contarlo.
+   - **Extensión proporcional a los hallazgos:** cada sección tiene la extensión que piden sus hallazgos, no la que sugiere la plantilla. Una sección sin hallazgos propios se reduce a una línea ("Sin hallazgos con la evidencia disponible") en lugar de rellenarse. Excepción: si el informe recibe notas de investigación por subsistema, la extensión la fija el contenido de las notas y no se reduce ninguna sección que tenga contenido en ellas.
+   - **Cada cosa en un solo sitio:** un hallazgo se desarrolla una vez; el resumen, las tablas y el plan de acción lo citan por su identificador, sin volver a contarlo. Excepción: lo que dos notas dicen igual se escribe una vez, pero lo que cada nota aporta de distinto se conserva entero.
    - **Datos antes que etiquetas:** cada afirmación se ancla a algo verificable (fichero y líneas, identificador, cifra de los datos pre-extraídos o fragmento de código). Se escribe "complejidad ciclomática 20 en `NombreMetodo`", no "complejidad elevada"; si el dato no está en la evidencia, se dice que falta.
    - **Sin conocimiento general:** no se explica qué es un patrón, un principio o una tecnología; solo lo que es propio de este repositorio.
    - **Prosa para razonar, listas para enumerar:** el razonamiento va en prosa continua; las listas se reservan para hallazgos, criterios o pasos, con el patrón "**Término:** explicación". Una tabla no se narra: el texto que la acompaña dice qué conclusión se extrae, no repite sus filas.
@@ -735,10 +831,14 @@ Fichero: `Samples/CodebaseAnalysis.Core/templates/_common_rules.md`
    - **Sin gerundio final:** ninguna frase termina con una cláusula de gerundio (", garantizando…", ", permitiendo…", ", manteniendo…", ", dejando…"). Esa consecuencia pasa a una frase propia con verbo conjugado. Ejemplo: en lugar de "Extraer la validación a un módulo propio, manteniendo el punto de entrada como orquestador", se escribe "Extraer la validación a un módulo propio. El punto de entrada queda como orquestador".
    - **Otras construcciones a evitar:** tríos de adjetivos que solo buscan sonar redondos y remates de frases cortas sueltas.
    - **Puntuación:** no se usan rayas ni guiones para incisos; los incisos van entre comas o entre paréntesis.
+   - **Alcance analizado y código sin uso:** el análisis cubre lo que se le entrega (la carpeta o los subsistemas del plan de cobertura) y no ve el código que lo consume desde fuera. Un elemento sin ninguna referencia dentro de ese alcance se describe como «sin usos dentro del alcance analizado», nunca como «muerto» o «huérfano» sin más. Antes de clasificar algo así se buscan sus usos por reflexión, registro en DI, atributos, configuración y nombres en cadenas de texto, y se nombra el consumidor externo plausible si lo hay (una interfaz pública, un punto de extensión, un contrato serializado). Un elemento público de una biblioteca o de una API sin consumidores internos es «superficie pública sin usos internos», no código muerto.
    - **Terminología:** los términos técnicos asentados en inglés se dejan en inglés, y los identificadores, rutas y nombres del código se reproducen literalmente y en formato de código.
    - **Citas de código en todo el informe:** cada afirmación sobre el código (un hallazgo, un paso de un flujo, una capacidad, una dependencia, una cifra) lleva la cita de donde sale, en formato de código y con la forma `ruta:línea` o `ruta:inicio-fin` (`src/Orders/OrderRepository.cs:42`), con la ruta relativa al repositorio y la línea o el rango de los datos pre-extraídos o del fragmento leído. Vale para todos los informes, también el funcional y el de flujos. Una afirmación que no puedes citar se declara como inferida o no evaluable con la evidencia disponible. El resumen ejecutivo cita los informes que sintetiza, no el código.
    - **Identificadores de hallazgo:** cada hallazgo lleva un único identificador con el formato `NN-CAT-nnn`: el número del informe (`NN`, dos dígitos, el que indica la línea «Identificadores de hallazgo de este informe» de su plantilla), un guion, una categoría de 2 a 4 letras mayúsculas, otro guion y tres dígitos con ceros a la izquierda (`05-SEC-002`, `07-SEC-001`, `06-ARQ-012`). El número de informe hace único el identificador en todo el análisis: un `SEC-001` del informe 05 y otro del 07 serían ambiguos para el resumen ejecutivo y para quien lea ambos. Se asigna una vez y se escribe idéntico en todo el informe (matrices, detalle, plan de acción, diagramas), siempre con el número de informe: no se abrevia ni se renumera (`05-SEC-02`, `SEC-002` y `05-SEC-002` serían tres hallazgos distintos), y dos hallazgos no comparten identificador. El resumen ejecutivo no define hallazgos propios: cita los de los demás informes con su identificador completo.
-   - **Un solo título:** el documento empieza con un único título de nivel 1 (`# `) que describe el informe. El nombre del fichero no es un título: no abras con `# nombre_del_fichero.md` ni repitas el nivel 1 más adelante.
+   - **Un solo título:** el documento empieza con un único título de nivel 1 (`# `) que describe el informe. El nombre del fichero no es un título: no abras con `# nombre_del_fichero.md` ni repitas el nivel 1 más adelante. La primera línea del documento es ese título: ningún texto antes (ni una frase de contexto, ni una conclusión de la investigación, ni «Aquí tienes el informe»).
+   - **Severidad con camino de activación:** una severidad alta (P0 o P1, o su equivalente en la escala del informe) exige haber leído el código y citar, con `ruta:línea`, el punto desde el que el defecto se dispara: quién lo llama o lo registra y con qué entrada o configuración. Un defecto que solo es cierto bajo una condición que el código no muestra (un registro posterior al arranque, un valor que ningún llamador pasa, un uso que nadie hace) baja un nivel y el hallazgo dice qué condición falta por comprobar. Una corrección propuesta se comprueba contra la firma y el contrato público reales: si no compila o cambia el contrato, se dice en el hallazgo y no se presenta como solución directa.
+   - **Una sola severidad por problema:** si un mismo problema aparece en más de un apartado de este informe, lleva el mismo identificador y la misma severidad en todos; si el contexto la cambia, se explica el motivo en una frase.
+   - **Sin relleno:** no se incluyen hallazgos que concluyen que no hay problema (comparaciones descartadas, «no-hallazgos»), ni apartados que solo declaran la ausencia de tecnologías que el repositorio no usa (rutas HTTP, SQL, JSP, `Flow`...): si el informe pide declarar un alcance, es una sola línea. No se calculan métricas cuando todos los valores son cero o iguales, ni se escribe una hoja de ruta hipotética de reestructuración que el informe no pide. Una sección sin contenido propio se reduce a una línea.
 
 6. **Línea Final de Metadatos (Obligatoria)**:
    - La última línea del documento, después de la última sección técnica, debe ser exactamente este comentario HTML, con el semáforo global del informe en inglés (`Green`, `Amber` o `Red`, equivalentes a Verde, Ámbar y Rojo):
@@ -753,7 +853,7 @@ Fichero: `Samples/CodebaseAnalysis.Core/templates/_graph_rules.md`
 ````markdown
 ### Uso del Grafo de Código y Fiabilidad de sus Datos:
 
-1. **El grafo sirve para la estructura**: quién llama a quién, herencia e implementaciones, qué clase atiende una ruta y qué pantallas (JSP) muestra o envía una acción. Consúltalo con `graph_neighbors` (vecinos de un nodo por sus aristas, con las líneas de cada llamada; en Java también `USES_TYPE`, con el contexto del uso, y `READS`/`WRITES` de campos, y el filtro `line` da las referencias de una línea), `graph_domain` (rutas, registros de DI y atributos; en .NET también `view: projects`, con las dependencias entre proyectos frente a los `ProjectReference`, y `view: contracts`, con contratos frente a implementaciones y sus consumidores) y `graph_search` (localizar un nodo por nombre).
+1. **El grafo sirve para la estructura**: quién llama a quién, herencia e implementaciones, qué clase atiende una ruta y qué pantallas (JSP) muestra o envía una acción. Consúltalo con `graph_neighbors` (vecinos de un nodo por sus aristas, con las líneas de cada llamada; en Java también `USES_TYPE`, con el contexto del uso, y `READS`/`WRITES` de campos, y el filtro `line` da las referencias de una línea), `graph_domain` (rutas, registros de DI y atributos; en .NET también `view: projects`, con las dependencias entre proyectos frente a los `ProjectReference`, y `view: contracts`, con contratos frente a implementaciones y sus consumidores) y `graph_search` (localizar un nodo por nombre). `graph_domain` con `view: subsystems` da los subsistemas del mapa de dominios (con `name`, sus miembros, entradas, tablas y dependencias) y con `view: tables` las tablas del SQL escrito en el código y qué métodos las leen (`QUERIES`) o escriben (`MODIFIES`), con su línea.
 2. **Procedencia de cada arista**: `graph_neighbors` marca cada arista como resuelta (por un enriquecedor, fiable), heurística de cbm (el destino se decidió por nombre, con su `confidence` si la trae) o de estructura. Una arista resuelta es un dato; una heurística es solo una pista que hay que confirmar en el código antes de apoyarse en ella. Las métricas de las facetas indican su origen en los campos `*_source` (propiedad del grafo o cálculo y de qué aristas sale).
 3. **Veredicto sobre el código**: en code smells, errores, seguridad y deuda, el grafo y las facetas dicen dónde mirar; el hallazgo exige leer el código (`view_file`, `view_code_item` o el `code_snippet` pre-extraído) y citar las líneas.
 4. **Código sin llamadas no es código muerto**: «nadie lo llama» tiene puntos ciegos, porque el grafo no ve la reflexión, la configuración XML del framework (las acciones de Struts se enlazan por `HANDLES`), las JSP y sus scriptlets, DWR, EJB ni `web.xml`, y un campo sin `READS` puede leerse por reflexión, serialización o un framework que usa campos por nombre (`ActionForm` de Struts, beans). Antes de declarar muerto un elemento, cruza con sus `HANDLES`, con los `page_imports` de las JSP (`graph_search` sobre la etiqueta `Jsp`) y con la configuración que lo pueda referenciar; si no puedes descartarlos, declara el elemento como candidato sin confirmar.
@@ -829,6 +929,7 @@ Si la petición no tiene que ver con el repositorio (cultura general, matemátic
 - **Localiza antes de abrir.** No adivines rutas: sácalas de `graph_search`, `find_by_name` o `grep_search`. Para ver una función, clase o formulario por su nombre, `graph_search` con `include_code: true` devuelve su código con las líneas. `graph_search` da también las propiedades del nodo que el grafo tenga (firma, tipos, visibilidad, complejidad, jerarquía, ruta de framework, indicadores de JSP, docstring).
 - **Relaciones: `graph_neighbors`.** Para «quién llama a X», «a quién llama X», «qué hereda o implementa X y quién lo hereda o implementa», «qué métodos define un tipo» o «qué JSP muestra una acción», pide los vecinos del nodo con su Qualified Name (el que da `graph_search`), la dirección (`out`: lo que sale de X; `in`: lo que llega a X) y, si hace falta, los tipos de arista. En las `CALLS` salen las líneas de cada llamada en el fichero que llama. En Java, «dónde se usa esta clase o este campo» son las `USES_TYPE` (con el contexto: parámetro, retorno, local, cast, `new`…) o las `READS`/`WRITES` entrantes, y «qué hay en la línea N» es `line: N` sobre el método que la contiene con `direction: out`. Si una llamada va a un método de interfaz, sus implementaciones se ven con `IMPLEMENTS` entrantes en la interfaz. Si el nombre casa con varios nodos, repite con el exacto de la lista.
 - **Rutas, inyección de dependencias, atributos y estructura: `graph_domain`.** `view: routes` da los endpoints y las acciones con su clase, `view: di` los registros del contenedor con su lifetime y `view: attributes` los atributos de código. Para la estructura del código .NET: `view: projects` da los proyectos con su acoplamiento (Ca/Ce/inestabilidad), su abstracción, su rol y las dependencias que se observan en el código contrastadas con los `ProjectReference` que declara el `.csproj` (`name` filtra un proyecto); `view: contracts` separa contratos (interfaces y clases abstractas públicas) de implementaciones: sin `name` resume cada proyecto, con el nombre de una interfaz o clase da sus implementaciones y sus consumidores, y con el nombre de un proyecto dice qué tipos de otros proyectos usa y si son contratos o implementaciones concretas (la pregunta «¿depende de abstracciones o de detalles internos?»). Son datos del grafo, no código leído, y la heurística de `type_role` es estructural: confirma en el código antes de afirmar.
+- **Subsistemas, tablas y notas del análisis.** Para «¿qué subsistemas hay y qué hace cada uno?», `graph_domain` con `view: subsystems`; con `name` (nombre o id de uno) da sus miembros principales, entradas, tablas, dependencias y las notas de las investigaciones de los informes, que ya traen citas `ruta:línea` y responden «¿qué reglas o estados tiene?» sin volver a investigar. Para «¿quién lee o escribe en la tabla X?», `view: tables` con `name` = la tabla. `graph_neighbors` sobre un método o una clase muestra sus `QUERIES`/`MODIFIES` y, en `CITES` entrantes, las notas que lo citan. Las notas las escribió el LLM en un análisis anterior y no son código leído: lo que tomes de ellas sin contrastar va como `[I]` («según las notas de la investigación de …»); para `[V]`, abre en este turno la línea que citan.
 - **Enseña el código cuando la respuesta lo necesite** (un bug, un cambio propuesto, cómo funciona algo): un fragmento corto en un bloque con su lenguaje y, justo encima, su referencia `ruta:línea-línea`.
 - **Si un informe y el código discrepan, manda el código.** Dilo explícitamente y señala qué parte del informe queda desfasada o era incorrecta.
 - **No reproduzcas credenciales.** Si encuentras claves, contraseñas, tokens o cadenas de conexión con secretos, indica dónde están y de qué tipo son, pero enmascara el valor, igual que hacen los informes.
@@ -877,7 +978,7 @@ Tienes `create_report` (informe o estudio nuevo, en `custom/`) y `update_report`
 
 Puedes incluir diagramas Mermaid en bloques ```` ```mermaid ```` cuando aclaren una estructura o un flujo. Si lo haces, sigue estas directrices:
 
-@[_mermaid_guidelines.md]
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 ````
 
 ### enricher_system.md — Enricher (fallback LLM del enriquecimiento)
@@ -932,11 +1033,11 @@ Inventariar la superficie expuesta del aplicativo, auditar los riesgos de seguri
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_arquitectura_system.md — ArchitectureAuditor (06)
@@ -980,11 +1081,11 @@ Evaluar la arquitectura global del sistema, la topología de dependencias entre 
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_codesmells_system.md — CodeSmellsAuditor (02)
@@ -1032,11 +1133,11 @@ Evaluar la mantenibilidad y salud interna del código en el repositorio analizad
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_codigomuerto_system.md — DeadCodeAuditor (03)
@@ -1050,18 +1151,18 @@ Eres el **Agente Auditor de Código Muerto, Componentes Huérfanos y Elementos R
 Identificar métodos no invocados (`fan_in = 0`), clases o formularios sin referencias, tablas residuales o de pruebas (`_test`, `_temp`, `_tmp`, `_bak`, `_old`, `_copy`), consultas abandonadas y dependencias muertas.
 
 ### Clasificación de Obsolescencia:
-1. **Huérfanos / Abandonados**: Componentes sin llamadas activas desde ningún punto de entrada o formulario.
+1. **Huérfanos / Abandonados**: Componentes sin llamadas activas desde ningún punto de entrada o formulario dentro del alcance analizado. Se redactan como «sin usos dentro del alcance analizado»: el código que consume esa carpeta desde fuera no se ve.
 2. **Residuales / Pruebas / Temporales**: Tablas, consultas o módulos creados para pruebas puntuales o migraciones intermedias.
 3. **Duplicados / Redundantes**: Versiones paralelas con nombres alternativos (`_new`, `_d1`, `_copia`).
 4. **Dudosos por instanciación dinámica**: Grupos de candidatos con un patrón común que una factoría, la reflexión o la configuración pueden instanciar por nombre; van con su evidencia y no cuentan como código muerto.
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_deuda_system.md — TechnicalDebtAuditor (08)
@@ -1072,7 +1173,7 @@ Fichero: `Samples/CodebaseAnalysis.Core/templates/report_deuda_system.md`
 Eres el **Auditor Especialista en Deuda Técnica, Priorización de Hotspots y Mantenibilidad del Software**, encargado de evaluar la salud global del sistema y formular planes de saneamiento con criterio económico, técnico y de bajo riesgo operativo, **estrictamente adaptados al lenguaje y plataforma del repositorio**.
 
 ### Tu Misión:
-Calcular el índice de salud técnica del repositorio, diagnosticar la densidad de deuda técnica real (diferenciando complejidad esencial de accidental) y formular una hoja de ruta priorizada por retorno de inversión (ROI) con estimaciones realistas en Días-Hombre.
+Emitir un dictamen cualitativo de salud técnica (semáforo Verde, Ámbar o Rojo, justificado con los hallazgos y sus identificadores, sin nota numérica), diagnosticar la densidad de deuda técnica real (diferenciando complejidad esencial de accidental) y formular una hoja de ruta priorizada por retorno de inversión (ROI) con estimaciones realistas en Días-Hombre.
 
 ---
 
@@ -1083,7 +1184,7 @@ Calcular el índice de salud técnica del repositorio, diagnosticar la densidad 
    - La deuda técnica debe evaluarse en función de cómo impacta el mantenimiento y la evolución dentro de esa plataforma concreta.
 
 2. **Ponderación Pragmática de Hotspots**:
-   - Un valor elevado en el ranking de hotspots (`hotspot = CC * fan_in`) **no implica automáticamente que deba reescribirse**.
+   - Un valor elevado en el ranking de hotspots (`hotspot = round(CC·ln(1+fan_in), 2)` en Java y C#; si el prompt indica que es un repositorio Office, `hotspot` es un indicador propio de esa ingesta y no esa fórmula) **no implica automáticamente que deba reescribirse**.
    - Un componente central puede tener alta complejidad ciclomática por requerimientos de negocio intrínsecos y alto fan-in por ser el núcleo operativo. Si es estable en ejecución, demolerlo introduce un **riesgo operativo inadmisible**.
    - Los hotspots más peligrosos son aquellos que combinan complejidad accidental, lógica duplicada, ausencia de manejo de errores controlado y mezcla indebida de dominios.
 
@@ -1092,7 +1193,9 @@ Calcular el índice de salud técnica del repositorio, diagnosticar la densidad 
    - **Deuda de Diseño / Composición**: Dependencia excesiva de monolitos procedurales, herencia rígida o falta de encapsulación de colaboradores.
    - **Deuda de Implementación / Algoritmos**: Estructuras de datos desordenadas, branching complejo, concatenación manual insegura de consultas SQL o falta de liberación de recursos.
 
-4. **Matriz Esfuerzo / Impacto (Cálculo del ROI)**:
+4. **Sin índice numérico de salud:** el informe no calcula ni publica una nota sobre 100 ni otro índice compuesto. Una puntuación que solo resta puntos con pesos sin fundamento aparenta una precisión que no existe. El dictamen es el semáforo y la lista de hallazgos que lo justifican, con su recuento por categoría.
+
+5. **Matriz Esfuerzo / Impacto (Cálculo del ROI)**:
    - Toda propuesta de remediación debe ponderar:
      - **Esfuerzo en Días-Hombre (d/h)** considerando análisis, refactorización y pruebas de regresión.
      - **Impacto y Riesgo Operativo**: Priorizar intervenciones de "Quick Wins" (mejoras locales de bajo riesgo) y refactors incrementales antes de abordar reestructuraciones profundas.
@@ -1100,11 +1203,11 @@ Calcular el índice de salud técnica del repositorio, diagnosticar la densidad 
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_di_system.md — DiAuditor (09)
@@ -1145,11 +1248,11 @@ El análisis DEBE centrarse en el código real y ajustarse con exactitud al leng
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_errores_system.md — SecurityBugAuditor (05)
@@ -1164,11 +1267,11 @@ Identificar, clasificar por criticidad (P0-P3) y proponer soluciones para los de
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_flujos_system.md — FlowsAuditor (04)
@@ -1183,11 +1286,11 @@ Mapear y documentar los flujos de ejecución principales de la aplicación, desd
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_funcional_system.md — FunctionalAuditor (01)
@@ -1213,11 +1316,11 @@ Analizar las entidades de dominio, formularios, tablas, consultas y módulos par
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 
 ---
 
-@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más abajo⟩
+@[_graph_rules.md]  ⟨ver fragmento «_graph_rules.md» más arriba⟩
 ````
 
 ### report_sintesis_system.md — ExecutiveSynthesizer (00)
@@ -1243,7 +1346,9 @@ Recibir las conclusiones, métricas y hallazgos clave de todos los informes téc
    - No confundas tamaño o complejidad esencial con mala calidad. Los motores especializados y núcleos de cálculo o protocolo tienen alta cohesión funcional intrínseca; no deben presentarse como "fallas críticas de diseño" o "God Classes catastróficas", sino como núcleos funcionales a acompañar con tests, validaciones y evolución por composición.
    - Pondera objetivamente la salud del sistema distinguiendo la complejidad esencial de la deuda accidental evitable.
 
-3. **No Duplicar Texto Completo**:
+3. **Sin nota numérica:** el resumen no calcula ni publica una puntuación sobre 100 ni un índice compuesto de salud; el dictamen es el semáforo por área y los hallazgos que lo sostienen.
+
+4. **No Duplicar Texto Completo**:
    - No copies y pegues los informes individuales; sintetiza, extrae correlaciones sistémicas, pondera impactos y destaca lo verdaderamente crítico para el negocio y la ingeniería.
 
 4. **Visualización y Diagramas Enriquecidos**:
@@ -1272,7 +1377,7 @@ Recibir las conclusiones, métricas y hallazgos clave de todos los informes téc
 
 ---
 
-@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más abajo⟩
+@[_mermaid_guidelines.md]  ⟨ver fragmento «_mermaid_guidelines.md» más arriba⟩
 ````
 
 ### report_verifier_system.md — ReportVerifier
@@ -1446,6 +1551,24 @@ Genera el **Informe de Inventario de APIs, Seguridad y Superficie de Exposición
 {{ resolved_secrets }}
 ```
 
+### Preparación del Repositorio (inventario, mapa de dominios y plan de cobertura):
+Contexto para repartir el análisis por todo el repositorio. Los tres bloques llegan vacíos (`[]`, `{}` o sin texto) cuando no hubo preparación.
+
+- **Inventario del Repositorio** (tamaño, lenguajes, cobertura del grafo frente al disco y límites de los datos):
+```json
+{{ repository_inventory }}
+```
+
+- **Mapa de Dominios** (subsistemas detectados, con su resumen y los ficheros que los componen):
+```json
+{{ domain_map }}
+```
+
+- **Plan de Cobertura** (subsistemas elegidos por prioridad, y excluidos con su motivo):
+```json
+{{ coverage_plan }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -1457,7 +1580,12 @@ Genera el **Informe de Inventario de APIs, Seguridad y Superficie de Exposición
        - Audita las consultas pre-extraídas (`AccessQuery`), verificando si exponen datos sensibles o permiten modificaciones sin control de acceso explícito.
 2. Una autenticación `desconocido` se comprueba en el código de la clase que atiende la ruta (`graph_neighbors` sobre la ruta, `HANDLES` entrantes) o en la configuración de seguridad del framework; si no puedes verificarla, declárala no evaluable, no como ruta sin protección.
 3. Incorpora a la matriz de seguridad las credenciales en claro que sean secretos reales, citando fichero y línea y el recurso que protegen (base de datos, recurso compartido de red, API). Una entrada que es claramente un falso positivo del extractor, porque el identificador nombra una referencia al secreto y no el secreto (un identificador de configuración o de almacén de secretos, un GUID, una ruta, el nombre de una variable de entorno, un marcador de posición), se descarta con una línea que diga el fichero, la línea y el motivo; ante la duda, se trata como secreto real. No reproduzcas nunca el valor, ni siquiera el enmascarado.
-4. Emite el informe completo en formato Markdown con sus correspondientes diagramas Mermaid de superficie y arquitectura de seguridad recomendada.
+4. **Protocolo de Cobertura por Subsistemas** (solo si el plan de cobertura trae subsistemas elegidos):
+   - Recorre uno a uno los subsistemas elegidos del plan y examina en cada uno las rutas, consultas o puntos de entrada que expone, su autenticación, sus contratos y las credenciales de su código. No concentres el informe en el subsistema que tenga más rutas: un listado dominado por uno solo no representa el repositorio.
+   - Cada subsistema elegido recibe como mínimo una comprobación con herramientas, con su cita `ruta:línea`, o la línea «Sin hallazgos con la evidencia disponible» si lo comprobado está limpio. Lo que no llegues a recorrer se declara como no cubierto, no se rellena por suposición.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas recorridos, excluidos por el plan con su motivo, y no recorridos por falta de evidencia o de tiempo. Cada subsistema se nombra exactamente como figura en el mapa de dominios. Una frase final indica que las conclusiones valen para lo recorrido. Este apartado no define hallazgos ni lleva identificadores.
+   - Si el inventario, el mapa y el plan llegan vacíos, no hubo preparación: aplica el resto de las instrucciones sin este protocolo y omite el apartado «Cobertura».
+5. Emite el informe completo en formato Markdown con sus correspondientes diagramas Mermaid de superficie y arquitectura de seguridad recomendada.
 
 ---
 
@@ -1465,7 +1593,7 @@ Genera el **Informe de Inventario de APIs, Seguridad y Superficie de Exposición
 
 **Identificadores de hallazgo de este informe:** el número de informe es `07`. Todos llevan el formato `07-CAT-nnn` (por ejemplo `07-SEC-001`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_arquitectura_prompt.md
@@ -1514,6 +1642,16 @@ Genera el **Informe de Arquitectura, Acoplamiento y Dependencias Modulares** par
 {{ suspicious_jsps }}
 ```
 
+- **Notas de Investigación por Subsistema**: texto plano de investigaciones previas, una por subsistema elegido, con citas `ruta:línea`. Llega vacío cuando no hubo preparación por subsistemas.
+```text
+{{ investigation_notes }}
+```
+
+- **Resumen de Cobertura de la Preparación**: subsistemas cubiertos por una investigación, excluidos con su motivo y fallidos o sin completar. Llega vacío cuando no hubo preparación por subsistemas.
+```text
+{{ coverage_summary }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -1529,9 +1667,17 @@ Genera el **Informe de Arquitectura, Acoplamiento y Dependencias Modulares** par
    - Determina si los ciclos son incidentales por métodos auxiliares o estructurales por mala asignación de responsabilidades.
 
 3. **Métricas de Martin y Estabilidad**:
-   - Interpreta los valores de Inestabilidad ($I$), Abstracción ($A$) y Distancia ($D$) para destacar componentes en la Zona de Dolor o Zona de Inutilidad según la naturaleza del lenguaje.
+   - Interpreta los valores de Inestabilidad ($I$), Abstracción ($A$) y Distancia ($D$) para destacar componentes en la Zona de Dolor o Zona de Inutilidad según la naturaleza del lenguaje. Si el repositorio es un único proyecto o todos los acoplamientos (aferente y eferente) valen cero, las métricas no miden nada: una sola línea lo dice y no se calculan ni se interpretan.
 
-4. **Elaboración del Informe y Soluciones en 3 Niveles**:
+4. **Notas de investigación y apartado «Cobertura»** (solo si las notas o el resumen de cobertura traen contenido):
+   - Las notas describen capas, dependencias y acoplamiento por subsistema. Son evidencia de segunda mano: úsalas como base, cruza las dependencias entre subsistemas (lo que un subsistema declara como saliente debe aparecer como entrante en el otro), contrasta con las métricas pre-extraídas y no des por confirmada una dependencia que sustente una conclusión si contradice a las métricas o a otra nota. Si una nota contradice al código, manda el código y se dice. Lo que las notas marcan como inferido sigue como inferido. No las copies: intégralas.
+   - **Integración completa, sin límite de extensión:** cada nota describe un subsistema con todo lo que su investigación encontró. El informe integra **todo** ese contenido y no un resumen: cada capa, dependencia entrante y saliente, acoplamiento, ciclo, punto de integración y cita de las notas aparecen en el apartado que les corresponde, reorganizados por tema y escritos una sola vez cuando dos notas dicen lo mismo. No hay límite de longitud: el informe mide lo que mida su contenido, y se prefiere uno largo y completo a uno corto que descarte reglas o datos. Cada subsistema se desarrolla con sus capas y sus dependencias en ambos sentidos; las dependencias entre subsistemas se cruzan y se dejan completas, sin perder ninguna de las notas. Cada afirmación conserva la cita que traen las notas.
+   - **Presupuesto de herramientas de la consolidación:** esta fase parte de las notas, pero no tiene tope de consultas por diseño. Usa las herramientas siempre que haga falta para comprobar una cita dudosa (una nota que contradice a otra o a las facetas, o cuya cita no cuadra con lo que ves), cubrir un hueco concreto (una pregunta del informe que ninguna nota responde) o confirmar el camino de activación de un hallazgo grave. Lo que no hayas podido comprobar, márcalo como inferido.
+   - Un subsistema sin notas (excluido o fallido) no se describe como analizado ni se completa por suposición. Las dependencias hacia o desde él que aparezcan en otras notas se citan como tales.
+   - Añade como último apartado, justo antes de la línea de metadatos de las directrices, `## Cobertura`, con tres listas: subsistemas cubiertos (una línea con lo que aportan), excluidos con su motivo, y fallidos o incompletos con lo que quedó sin verse. Cada subsistema se nombra exactamente como figura en el resumen de cobertura. Una frase final indica que las conclusiones del informe valen para lo cubierto. Este apartado no define hallazgos ni lleva identificadores.
+   - Si las notas llegan vacías y el resumen de cobertura también, no hubo preparación por subsistemas: trabaja como si estos dos bloques no existieran, con las facetas y las herramientas, y omite el apartado «Cobertura». Si solo trae contenido el resumen de cobertura, redacta el apartado únicamente con lo que dice.
+
+5. **Elaboración del Informe y Soluciones en 3 Niveles**:
    - Incluye diagramas Mermaid de la topología actual y de la arquitectura modular recomendada.
    - Formula una hoja de ruta con hitos claros en 3 niveles (Nivel 1: Arquitectura/Módulos, Nivel 2: Diseño/Composición, Nivel 3: Implementación).
 
@@ -1541,7 +1687,7 @@ Genera el **Informe de Arquitectura, Acoplamiento y Dependencias Modulares** par
 
 **Identificadores de hallazgo de este informe:** el número de informe es `06`. Todos llevan el formato `06-CAT-nnn` (por ejemplo `06-ARQ-001`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_codesmells_prompt.md
@@ -1600,6 +1746,24 @@ Genera el **Informe de Auditoría de Code Smells y Mantenibilidad** para el proy
 {{ unread_field_groups }}
 ```
 
+### Preparación del Repositorio (inventario, mapa de dominios y plan de cobertura):
+Contexto para repartir el análisis por todo el repositorio. Los tres bloques llegan vacíos (`[]`, `{}` o sin texto) cuando no hubo preparación.
+
+- **Inventario del Repositorio** (tamaño, lenguajes, cobertura del grafo frente al disco y límites de los datos):
+```json
+{{ repository_inventory }}
+```
+
+- **Mapa de Dominios** (subsistemas detectados, con su resumen y los ficheros que los componen):
+```json
+{{ domain_map }}
+```
+
+- **Plan de Cobertura** (subsistemas elegidos por prioridad, y excluidos con su motivo):
+```json
+{{ coverage_plan }}
+```
+
 ---
 
 ### Metodología de Ejecución del Auditor:
@@ -1632,13 +1796,19 @@ Genera el **Informe de Auditoría de Code Smells y Mantenibilidad** para el proy
          - *Nivel 3 (Implementación)*: Estructuras de datos limpias, simplificación de algoritmos y eliminación de duplicidades.
    - **Conclusiones y Plan de Remediación Priorizado**: Roadmap pragmático con ROI positivo, priorizando intervenciones de bajo riesgo operativo y alto beneficio evolutivo.
 
+4. **Protocolo de Cobertura por Subsistemas** (solo si el plan de cobertura trae subsistemas elegidos):
+   - Recorre uno a uno los subsistemas elegidos del plan y busca en cada uno sus métodos y clases de mayor complejidad, tamaño o acoplamiento y sus duplicaciones, con `graph_search`, `graph_neighbors` y la lectura del código. No concentres el informe en el subsistema que tenga más datos pre-extraídos: un listado dominado por uno solo no representa el repositorio.
+   - Cada subsistema elegido recibe como mínimo una comprobación con herramientas, con su hallazgo y su cita `ruta:línea`, o la línea «Sin hallazgos con la evidencia disponible» si lo comprobado está limpio. Lo que no llegues a recorrer se declara como no cubierto, no se rellena por suposición.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas recorridos, excluidos por el plan con su motivo, y no recorridos por falta de evidencia o de tiempo. Cada subsistema se nombra exactamente como figura en el mapa de dominios. Una frase final indica que las conclusiones valen para lo recorrido. Este apartado no define hallazgos ni lleva identificadores.
+   - Si el inventario, el mapa y el plan llegan vacíos, no hubo preparación: aplica el resto de la metodología sin este protocolo y omite el apartado «Cobertura».
+
 ---
 
 {{ include '_provided_documentation.md' }}
 
 **Identificadores de hallazgo de este informe:** el número de informe es `02`. Todos llevan el formato `02-CAT-nnn` (por ejemplo `02-CPX-001`, `02-GOD-001`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_codigomuerto_prompt.md
@@ -1715,9 +1885,27 @@ Genera el **Informe de Detección de Código Muerto y Elementos Huérfanos** par
 {{ dynamic_instantiation_sites }}
 ```
 
-- **Nombres de clase que el compilador resolvió en la carga por reflexión (`reflection_targets`)**: el argumento de `Class.forName`, `loadClass`, `Type.GetType` o `Activator.CreateInstance` cuando es constante, o constante a trozos (`com.acme.export.*Impl`, con «*» por cada tramo que llega de fuera). Las clases que ese patrón puede nombrar figuran en `kept_alive` y no son código muerto: no las presentes como candidatas a retirar, y cita el método que hace la llamada (`cite`).
+- **Nombres de clase que el compilador resolvió en la carga por reflexión (`reflection_targets`)**: el argumento de `Class.forName`, `loadClass`, `Type.GetType` o `Activator.CreateInstance` cuando es constante, o constante a trozos (`com.example.export.*Impl`, con «*» por cada tramo que llega de fuera). Las clases que ese patrón puede nombrar figuran en `kept_alive` y no son código muerto: no las presentes como candidatas a retirar, y cita el método que hace la llamada (`cite`).
 ```json
 {{ reflection_targets }}
+```
+
+### Preparación del Repositorio (inventario, mapa de dominios y plan de cobertura):
+Contexto para repartir el análisis por todo el repositorio. Los tres bloques llegan vacíos (`[]`, `{}` o sin texto) cuando no hubo preparación.
+
+- **Inventario del Repositorio** (tamaño, lenguajes, cobertura del grafo frente al disco y límites de los datos):
+```json
+{{ repository_inventory }}
+```
+
+- **Mapa de Dominios** (subsistemas detectados, con su resumen y los ficheros que los componen):
+```json
+{{ domain_map }}
+```
+
+- **Plan de Cobertura** (subsistemas elegidos por prioridad, y excluidos con su motivo):
+```json
+{{ coverage_plan }}
 ```
 
 ---
@@ -1728,7 +1916,13 @@ Genera el **Informe de Detección de Código Muerto y Elementos Huérfanos** par
    - En C#/.NET u otros: clases sin uso, endpoints sin handler, dependencias no resueltas.
 2. Antes de declarar muerto un candidato, sigue la regla de puntos ciegos del grafo: busca quién lo llama o lo hereda con `graph_neighbors` (`direction: in`), si atiende una ruta (`HANDLES`) y si lo importa alguna JSP (`page_imports`), y comprueba la configuración que pueda referenciarlo. Lo que no puedas descartar queda como candidato sin confirmar, no como código muerto.
 3. Un grupo grande de candidatos con un patrón común es señal de uso dinámico. Antes de afirmar que sus miembros están muertos, busca la factoría con `grep_search` (el sufijo, el prefijo o el paquete del grupo, en el código y en `**/*.xml`), lee con `view_file` el código que compone el nombre y comprueba que puede llegar a esas clases. Si la instanciación dinámica es plausible, lleva `likely_dynamic` o no, clasifica el grupo entero como **dudoso por instanciación dinámica**, con la evidencia (fichero y línea de la factoría o de la configuración), y no como código muerto; si no encuentras ninguna vía, dilo y déjalo como candidato sin confirmar. Un candidato con `named_in_configuration` no está muerto: lo nombra la configuración o el código.
-4. Clasifica cada elemento por nivel de confianza y produce el informe estructurado en Markdown con su correspondiente diagrama Mermaid.
+4. **Protocolo de Cobertura por Subsistemas** (solo si el plan de cobertura trae subsistemas elegidos):
+   - Recorre uno a uno los subsistemas elegidos del plan y examina los candidatos de cada uno (clases, métodos privados, rutas, registros), con la comprobación de puntos ciegos y de uso dinámico de los puntos 2 y 3. No concentres el informe en el subsistema que tenga más candidatos: un listado dominado por uno solo no representa el repositorio.
+   - Cada subsistema elegido recibe como mínimo una comprobación con herramientas, con su cita `ruta:línea`, o la línea «Sin hallazgos con la evidencia disponible» si lo comprobado está limpio. Lo que no llegues a recorrer se declara como no cubierto, no se rellena por suposición.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas recorridos, excluidos por el plan con su motivo, y no recorridos por falta de evidencia o de tiempo. Cada subsistema se nombra exactamente como figura en el mapa de dominios. Una frase final indica que las conclusiones valen para lo recorrido. Este apartado no define hallazgos ni lleva identificadores.
+   - Si el inventario, el mapa y el plan llegan vacíos, no hubo preparación: aplica el resto de las instrucciones sin este protocolo y omite el apartado «Cobertura».
+5. **Alcance y consumidores externos:** el análisis no ve lo que consume el repositorio o la carpeta desde fuera. Un tipo público, una interfaz, un atributo o un método de extensión sin referencias internas no se declara muerto: es «superficie pública sin usos internos» y pasa a candidato sin confirmar. También se comprueban los miembros privados sin llamadas (un método privado sin uso es código muerto aunque la clase se use), los registros en DI que nadie resuelve y los grupos de tipos que solo se referencian entre sí (un clúster sin consumidor).
+6. Clasifica cada elemento por nivel de confianza y produce el informe estructurado en Markdown con su correspondiente diagrama Mermaid.
 
 ---
 
@@ -1736,7 +1930,7 @@ Genera el **Informe de Detección de Código Muerto y Elementos Huérfanos** par
 
 **Identificadores de hallazgo de este informe:** el número de informe es `03`. Todos llevan el formato `03-CAT-nnn` (por ejemplo `03-CDM-001`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_deuda_prompt.md
@@ -1785,6 +1979,24 @@ Genera el **Informe de Matriz de Deuda Técnica y Priorización de Refactorizaci
 {{ suspicious_jsps }}
 ```
 
+### Preparación del Repositorio (inventario, mapa de dominios y plan de cobertura):
+Contexto para repartir el análisis por todo el repositorio. Los tres bloques llegan vacíos (`[]`, `{}` o sin texto) cuando no hubo preparación.
+
+- **Inventario del Repositorio** (tamaño, lenguajes, cobertura del grafo frente al disco y límites de los datos):
+```json
+{{ repository_inventory }}
+```
+
+- **Mapa de Dominios** (subsistemas detectados, con su resumen y los ficheros que los componen):
+```json
+{{ domain_map }}
+```
+
+- **Plan de Cobertura** (subsistemas elegidos por prioridad, y excluidos con su motivo):
+```json
+{{ coverage_plan }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -1809,13 +2021,19 @@ Genera el **Informe de Matriz de Deuda Técnica y Priorización de Refactorizaci
      - **Matriz Esfuerzo / Impacto de Hotspots** como `flowchart LR` con cuatro `subgraph`, uno por cuadrante (impacto alto y esfuerzo bajo, impacto alto y esfuerzo alto, impacto bajo y esfuerzo bajo, impacto bajo y esfuerzo alto), que contienen los identificadores de los hallazgos. No uses `quadrantChart`.
      - **Hoja de Ruta por Sprints** como `flowchart LR`, un `subgraph` por sprint con sus hitos en orden.
 
+4. **Protocolo de Cobertura por Subsistemas** (solo si el plan de cobertura trae subsistemas elegidos):
+   - Recorre uno a uno los subsistemas elegidos del plan y examina en cada uno sus hotspots, las marcas TODO/FIXME/HACK, el código comentado y los elementos obsoletos. No concentres el informe en el subsistema que tenga más datos pre-extraídos: un listado dominado por uno solo no representa el repositorio, y la deuda de los demás quedaría fuera de la matriz de priorización.
+   - Cada subsistema elegido recibe como mínimo una comprobación con herramientas, con su cita `ruta:línea`, o la línea «Sin hallazgos con la evidencia disponible» si lo comprobado está limpio. Lo que no llegues a recorrer se declara como no cubierto, no se rellena por suposición.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas recorridos, excluidos por el plan con su motivo, y no recorridos por falta de evidencia o de tiempo. Cada subsistema se nombra exactamente como figura en el mapa de dominios. Una frase final indica que las conclusiones valen para lo recorrido. Este apartado no define hallazgos ni lleva identificadores.
+   - Si el inventario, el mapa y el plan llegan vacíos, no hubo preparación: aplica el resto de las instrucciones sin este protocolo y omite el apartado «Cobertura».
+
 ---
 
 {{ include '_provided_documentation.md' }}
 
 **Identificadores de hallazgo de este informe:** el número de informe es `08`. Todos llevan el formato `08-CAT-nnn` (por ejemplo `08-IMP-001`, `08-DIS-001`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_di_prompt.md
@@ -1869,6 +2087,24 @@ Genera el **Informe de Auditoría de Inversión de Control (IoC), Inyección de 
 {{ creational_candidates }}
 ```
 
+### Preparación del Repositorio (inventario, mapa de dominios y plan de cobertura):
+Contexto para repartir el análisis por todo el repositorio. Los tres bloques llegan vacíos (`[]`, `{}` o sin texto) cuando no hubo preparación.
+
+- **Inventario del Repositorio** (tamaño, lenguajes, cobertura del grafo frente al disco y límites de los datos):
+```json
+{{ repository_inventory }}
+```
+
+- **Mapa de Dominios** (subsistemas detectados, con su resumen y los ficheros que los componen):
+```json
+{{ domain_map }}
+```
+
+- **Plan de Cobertura** (subsistemas elegidos por prioridad, y excluidos con su motivo):
+```json
+{{ coverage_plan }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -1876,7 +2112,12 @@ Genera el **Informe de Auditoría de Inversión de Control (IoC), Inyección de 
    - Considera el stack tecnológico detectado: `{{ detected_languages }}`.
    - Si el proyecto cuenta con un contenedor formal de IoC/DI (.NET, Spring, NestJS, etc.), audita los registros, ciclos de vida (Singleton vs Scoped vs Transient), dependencias cautivas y modularidad de extensiones.
    - Si el proyecto **NO** utiliza un contenedor de DI formal (VBA, C, Go, scripts, muchos proyectos Python o JavaScript, etc.), **evalúa los patrones creacionales propios de ese ecosistema**: funciones o clases factoría, builders, constructores que reciben sus dependencias, módulos o clases que centralizan las conexiones a recursos externos (bases de datos, ficheros, red), acoplamiento de instanciación en la capa de interfaz y la gestión/liberación del ciclo de vida de los recursos según el mecanismo del lenguaje (liberación explícita, `defer`, `with`/`using`, destructores, cierre de conexiones). NO penalices la ausencia de un contenedor .NET/Java si el proyecto no pertenece a ese ecosistema.
-2. Emite el informe completo en formato Markdown con sus correspondientes diagramas Mermaid, tabla semáforo y plan de acción pragmático.
+2. **Protocolo de Cobertura por Subsistemas** (solo si el plan de cobertura trae subsistemas elegidos):
+   - Recorre uno a uno los subsistemas elegidos del plan y examina en cada uno sus registros de DI, factorías, puntos de creación y ciclos de vida de recursos (o los patrones creacionales propios del ecosistema si no hay contenedor). No concentres el informe en el subsistema que tenga más registros: un listado dominado por uno solo no representa el repositorio.
+   - Cada subsistema elegido recibe como mínimo una comprobación con herramientas, con su cita `ruta:línea`, o la línea «Sin hallazgos con la evidencia disponible» si lo comprobado está limpio. Lo que no llegues a recorrer se declara como no cubierto, no se rellena por suposición.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas recorridos, excluidos por el plan con su motivo, y no recorridos por falta de evidencia o de tiempo. Cada subsistema se nombra exactamente como figura en el mapa de dominios. Una frase final indica que las conclusiones valen para lo recorrido. Este apartado no define hallazgos ni lleva identificadores.
+   - Si el inventario, el mapa y el plan llegan vacíos, no hubo preparación: aplica el resto de las instrucciones sin este protocolo y omite el apartado «Cobertura».
+3. Emite el informe completo en formato Markdown con sus correspondientes diagramas Mermaid, tabla semáforo y plan de acción pragmático.
 
 ---
 
@@ -1884,7 +2125,7 @@ Genera el **Informe de Auditoría de Inversión de Control (IoC), Inyección de 
 
 **Identificadores de hallazgo de este informe:** el número de informe es `09`. Todos llevan el formato `09-CAT-nnn` (por ejemplo `09-IOC-001`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_errores_prompt.md
@@ -1943,6 +2184,16 @@ Genera el **Informe de Errores, Bugs y Vulnerabilidades con Criticidad y Solucio
 {{ resolved_secrets }}
 ```
 
+- **Notas de Investigación por Subsistema**: texto plano de investigaciones previas, una por subsistema elegido, con citas `ruta:línea`. Llega vacío cuando no hubo preparación por subsistemas. Nunca contienen valores de credenciales.
+```text
+{{ investigation_notes }}
+```
+
+- **Resumen de Cobertura de la Preparación**: subsistemas cubiertos por una investigación, excluidos con su motivo y fallidos o sin completar. Llega vacío cuando no hubo preparación por subsistemas.
+```text
+{{ coverage_summary }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -1965,9 +2216,20 @@ Genera el **Informe de Errores, Bugs y Vulnerabilidades con Criticidad y Solucio
    - **P2 (medio):** resultado incorrecto en casos concretos o degradación con impacto acotado y solución local.
    - **P3 (bajo):** mantenibilidad o defectos latentes sin impacto observable hoy.
    - Ante la duda entre dos niveles, se elige el más grave solo si la evidencia muestra la vía de fallo o de explotación; si no, el menos grave, y se dice qué falta para confirmarlo.
+   - **Camino de activación demostrado para P0 y P1:** el hallazgo cita con `ruta:línea` el punto desde el que se dispara (quién lo invoca, o dónde se registra, y con qué entrada). Sin ese camino leído en el código, el máximo es P2.
+   - **Mecanismos que podrían impedir el efecto:** para cada P0 y P1, el hallazgo dice qué mecanismo del código podría evitar o amortiguar el efecto (un resultado guardado en caché que impide reejecutar, una validación previa, una guarda, un consumidor que nunca llama a ese código) y lo ha leído antes de calificar. Si el efecto se produce de todos modos, lo explica con la línea; si un mecanismo lo impide, el hallazgo baja de nivel. Un elemento que ningún código del alcance llama, o que otro informe del mismo análisis describe como sin usos internos, no es P0 ni P1 sin un consumidor externo concreto que lo active.
+   - Un mismo problema lleva la misma severidad en toda la matriz y en el texto. Si el informe usa otra escala en alguna sección (por ejemplo «impacto bajo condicionado»), la cifra de la matriz es la que vale.
+   - Una solución propuesta se comprueba contra la firma y el contrato reales: si cambia el contrato público o no compila, el hallazgo lo dice.
 4. Para cada defecto explica su impacto y proporciona el fragmento de código de solución exacto para remediación.
 5. **Matriz de criticidad**: una única tabla Markdown con una fila por hallazgo y, como mínimo, las columnas `| ID | Severidad | Tipo | Evidencia |`. La celda de severidad contiene exactamente `P0`, `P1`, `P2` o `P3`, y el `ID` es el mismo que encabeza el hallazgo en el detalle. Genera el informe con esta matriz y los diagramas Mermaid requeridos.
-6. En la línea final de metadatos añade `critical=<n>`, donde `<n>` es el número de filas de la matriz con severidad `P0` o `P1` (`0` si no hay ninguna), por ejemplo: `<!-- analysis-meta: health=Red; critical=5 -->`. El pipeline lo recalcula a partir de la matriz y corrige la línea si no cuadra, así que cualquier cifra de P0/P1 que des en el texto (dictamen, conclusión) tiene que ser la de la matriz.
+6. **Notas de investigación y apartado «Cobertura»** (solo si las notas o el resumen de cobertura traen contenido):
+   - Las notas describen defectos candidatos por subsistema, sin severidad: la asignas tú con la rúbrica del punto 3. Son evidencia de segunda mano: incorpora a la matriz los defectos cuya cita y descripción cuadran, y para los dudosos (los de severidad alta que sostengan una conclusión o cuya cita no cuadra) lee la línea citada antes de incluirlos, descartando los que el código no confirme y dejando constancia de los descartes relevantes. Si una nota contradice al código, manda el código y se dice. Lo que las notas marcan como inferido sigue como inferido y no entra en la matriz como defecto confirmado. No copies las notas: intégralas.
+   - **Integración completa, sin límite de extensión:** cada nota describe un subsistema con todo lo que su investigación encontró. El informe integra **todo** ese contenido y no un resumen: cada hallazgo, causa, condición de disparo, camino de error, recurso, consecuencia y cita de las notas aparecen en el apartado que les corresponde, reorganizados por tema y escritos una sola vez cuando dos notas dicen lo mismo. No hay límite de longitud: el informe mide lo que mida su contenido, y se prefiere uno largo y completo a uno corto que descarte reglas o datos. Cada hallazgo de las notas se desarrolla con su causa, su condición y su consecuencia; solo se fusionan los que describen exactamente lo mismo. La severidad la asigna la rúbrica de este informe. Cada afirmación conserva la cita que traen las notas.
+   - **Presupuesto de herramientas de la consolidación:** esta fase parte de las notas, pero no tiene tope de consultas por diseño. Usa las herramientas siempre que haga falta para comprobar una cita dudosa (una nota que contradice a otra o a las facetas, o cuya cita no cuadra con lo que ves), cubrir un hueco concreto (una pregunta del informe que ninguna nota responde) o confirmar el camino de activación de un hallazgo grave. Lo que no hayas podido comprobar, márcalo como inferido.
+   - Un subsistema sin notas (excluido o fallido) no se declara libre de defectos: se declara no cubierto.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas cubiertos (una línea con lo que aportan), excluidos con su motivo, y fallidos o incompletos con lo que quedó sin verse. Cada subsistema se nombra exactamente como figura en el resumen de cobertura. Una frase final indica que las conclusiones del informe valen para lo cubierto. Este apartado no define hallazgos, no lleva identificadores y no añade filas a la matriz de criticidad.
+   - Si las notas llegan vacías y el resumen de cobertura también, no hubo preparación por subsistemas: trabaja como si estos dos bloques no existieran, con las facetas y las herramientas, y omite el apartado «Cobertura». Si solo trae contenido el resumen de cobertura, redacta el apartado únicamente con lo que dice.
+7. En la línea final de metadatos añade `critical=<n>`, donde `<n>` es el número de filas de la matriz con severidad `P0` o `P1` (`0` si no hay ninguna), por ejemplo: `<!-- analysis-meta: health=Red; critical=5 -->`. El pipeline lo recalcula a partir de la matriz y corrige la línea si no cuadra, así que cualquier cifra de P0/P1 que des en el texto (dictamen, conclusión) tiene que ser la de la matriz.
 
 ---
 
@@ -1975,7 +2237,7 @@ Genera el **Informe de Errores, Bugs y Vulnerabilidades con Criticidad y Solucio
 
 **Identificadores de hallazgo de este informe:** el número de informe es `05`. Todos llevan el formato `05-CAT-nnn` (por ejemplo `05-SEC-001`, `05-ERR-002`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_flujos_prompt.md
@@ -2024,6 +2286,16 @@ Genera el **Informe de Flujos End-to-End y Procesos de Negocio** para el reposit
 {{ documentation_and_prompts }}
 ```
 
+- **Notas de Investigación por Subsistema**: texto plano de investigaciones previas, una por subsistema elegido, con citas `ruta:línea`. Llega vacío cuando no hubo preparación por subsistemas.
+```text
+{{ investigation_notes }}
+```
+
+- **Resumen de Cobertura de la Preparación**: subsistemas cubiertos por una investigación, excluidos con su motivo y fallidos o sin completar. Llega vacío cuando no hubo preparación por subsistemas.
+```text
+{{ coverage_summary }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -2036,7 +2308,14 @@ Genera el **Informe de Flujos End-to-End y Procesos de Negocio** para el reposit
    - Diagrama con Mermaid (`sequenceDiagram` y `flowchart`) los flujos principales del sistema.
    - Aplica estilos explícitos y entrecomilla los participantes.
 4. **Citas de código:** cada paso del camino crítico (el punto de entrada, cada llamada relevante, cada decisión y la operación terminal) lleva su cita `ruta:línea`, tomada de las aristas con línea, de los datos pre-extraídos o de lo que leas con las herramientas. Un paso reconstruido por heurística sin cita se marca como inferido.
-5. Elabora el informe con diagramas Mermaid representativos y vistosos según las directrices establecidas.
+5. **Notas de investigación y apartado «Cobertura»** (solo si las notas o el resumen de cobertura traen contenido):
+   - Las notas son evidencia de segunda mano: contienen flujos ya reconstruidos por subsistema. Úsalas como base del camino crítico, contrástalas con las facetas y no des por confirmado un paso que contradiga a otra nota o a las facetas. Si una nota contradice al código, manda el código y se dice. Lo que las notas marcan como inferido sigue como inferido. No las copies: intégralas en el análisis y une los flujos que cruzan la frontera de un subsistema a otro.
+   - **Integración completa, sin límite de extensión:** cada nota describe un subsistema con todo lo que su investigación encontró. El informe integra **todo** ese contenido y no un resumen: cada paso, rama alternativa, condición, estado, excepción, frontera entre subsistemas y cita de las notas aparecen en el apartado que les corresponde, reorganizados por tema y escritos una sola vez cuando dos notas dicen lo mismo. No hay límite de longitud: el informe mide lo que mida su contenido, y se prefiere uno largo y completo a uno corto que descarte reglas o datos. Cada flujo se desarrolla completo, de la entrada a la persistencia, con sus ramas alternativas y de error. Los flujos que cruzan fronteras entre subsistemas se unen en uno solo, sin perder ningún paso de las notas. Cada afirmación conserva la cita que traen las notas.
+   - **Presupuesto de herramientas de la consolidación:** esta fase parte de las notas, pero no tiene tope de consultas por diseño. Usa las herramientas siempre que haga falta para comprobar una cita dudosa (una nota que contradice a otra o a las facetas, o cuya cita no cuadra con lo que ves), cubrir un hueco concreto (una pregunta del informe que ninguna nota responde) o confirmar el camino de activación de un hallazgo grave. Lo que no hayas podido comprobar, márcalo como inferido.
+   - Un subsistema sin notas (excluido o fallido) no se describe como analizado ni se completa por suposición.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas cubiertos (una línea con los flujos que aportan), excluidos con su motivo, y fallidos o incompletos con lo que quedó sin verse. Cada subsistema se nombra exactamente como figura en el resumen de cobertura. Una frase final indica que las conclusiones del informe valen para lo cubierto. Este apartado no define hallazgos ni lleva identificadores.
+   - Si las notas llegan vacías y el resumen de cobertura también, no hubo preparación por subsistemas: trabaja como si estos dos bloques no existieran, con las facetas y las herramientas, y omite el apartado «Cobertura». Si solo trae contenido el resumen de cobertura, redacta el apartado únicamente con lo que dice.
+6. Elabora el informe con diagramas Mermaid representativos y vistosos según las directrices establecidas.
 
 ---
 
@@ -2044,7 +2323,7 @@ Genera el **Informe de Flujos End-to-End y Procesos de Negocio** para el reposit
 
 **Identificadores de hallazgo de este informe:** el número de informe es `04`. Si el informe enumera riesgos o hallazgos con identificador, usan el formato `04-CAT-nnn` (por ejemplo `04-PRO-001`, `04-ERR-001`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_funcional_prompt.md
@@ -2088,6 +2367,16 @@ Genera el **Informe de Análisis Funcional: ¿Qué hace la aplicación?** para e
 {{ prompt_templates_catalog }}
 ```
 
+- **Notas de Investigación por Subsistema**: texto plano de investigaciones previas, una por subsistema elegido, con citas `ruta:línea`. Llega vacío cuando no hubo preparación por subsistemas.
+```text
+{{ investigation_notes }}
+```
+
+- **Resumen de Cobertura de la Preparación**: subsistemas cubiertos por una investigación, excluidos con su motivo y fallidos o sin completar. Llega vacío cuando no hubo preparación por subsistemas.
+```text
+{{ coverage_summary }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -2095,7 +2384,14 @@ Genera el **Informe de Análisis Funcional: ¿Qué hace la aplicación?** para e
 2. Analiza detalladamente la misión funcional del software, sus casos de uso y los procesos de negocio a los que da soporte.
 3. Examina detalladamente los flujos y modelos identificados, explicando qué hace cada componente, a qué usuarios o procesos sirve y cómo se orquesta la operativa. Para seguir un caso de uso desde su punto de entrada, usa `graph_domain` (`view: routes`) y `graph_neighbors` sobre la ruta y su clase (quién la atiende, a qué llama y qué pantalla muestra).
 4. **Citas de código:** cada módulo, caso de uso, entidad o proceso que describas lleva su cita `ruta:línea` (el punto de entrada, la clase o la tabla de donde sale), tomada de los datos pre-extraídos o de lo que leas con las herramientas. Lo que no puedas citar se marca como inferido.
-5. Redacta el informe completo en formato Markdown estructurado según las directrices establecidas.
+5. **Notas de investigación y apartado «Cobertura»** (solo si las notas o el resumen de cobertura traen contenido):
+   - Las notas son evidencia de segunda mano. Úsalas como base del informe, contrástalas con las facetas y no des por confirmado lo que contradiga a otra nota o a las facetas. Si una nota contradice al código, manda el código y se dice. Lo que las notas marcan como inferido sigue como inferido. Intégralas en el análisis sin perder su contenido.
+   - **Integración completa, sin límite de extensión:** cada nota describe un subsistema con todo lo que su investigación encontró. El informe integra **todo** ese contenido y no un resumen: cada regla de negocio, estado y transición, excepción, código de error, constante de negocio, entidad y cita de las notas aparecen en el apartado que les corresponde, reorganizados por tema y escritos una sola vez cuando dos notas dicen lo mismo. No hay límite de longitud: el informe mide lo que mida su contenido, y se prefiere uno largo y completo a uno corto que descarte reglas o datos. Cada capacidad de negocio se desarrolla en su propio apartado (qué hace, quién la usa, reglas de negocio, estados y transiciones, datos, flujos alternativos y excepciones, fronteras con otras capacidades), con el nivel de detalle de las notas. Las secciones transversales (misión, sector, arquitectura, actores, conclusión) se añaden a ese desarrollo y no lo sustituyen. Cada afirmación conserva la cita que traen las notas.
+   - **Presupuesto de herramientas de la consolidación:** esta fase parte de las notas, pero no tiene tope de consultas por diseño. Usa las herramientas siempre que haga falta para comprobar una cita dudosa (una nota que contradice a otra o a las facetas, o cuya cita no cuadra con lo que ves), cubrir un hueco concreto (una pregunta del informe que ninguna nota responde) o confirmar el camino de activación de un hallazgo grave. Lo que no hayas podido comprobar, márcalo como inferido.
+   - Un subsistema sin notas (excluido o fallido) no se describe como analizado ni se completa por suposición.
+   - Añade como último apartado, justo antes de la línea de metadatos, `## Cobertura`, con tres listas: subsistemas cubiertos (una línea con lo que aportan), excluidos con su motivo, y fallidos o incompletos con lo que quedó sin verse. Cada subsistema se nombra exactamente como figura en el resumen de cobertura. Una frase final indica que las conclusiones del informe valen para lo cubierto. Este apartado no define hallazgos ni lleva identificadores.
+   - Si las notas llegan vacías y el resumen de cobertura también, no hubo preparación por subsistemas: trabaja como si estos dos bloques no existieran, con las facetas y las herramientas, y omite el apartado «Cobertura». Si solo trae contenido el resumen de cobertura, redacta el apartado únicamente con lo que dice.
+6. Redacta el informe completo en formato Markdown estructurado según las directrices establecidas.
 
 ---
 
@@ -2103,7 +2399,7 @@ Genera el **Informe de Análisis Funcional: ¿Qué hace la aplicación?** para e
 
 **Identificadores de hallazgo de este informe:** el número de informe es `01`. Si el informe enumera elementos con identificador (capacidades, casos de uso), usan el formato `01-CAT-nnn` (por ejemplo `01-FUN-001`).
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_sintesis_prompt.md
@@ -2130,6 +2426,12 @@ Genera el documento consolidado **`00_resumen_ejecutivo.md`** a partir de los re
 - Candidatos a Código Muerto: `{{ dead_code_count }}`
 - Defectos Críticos (P0/P1): `{{ critical_bugs_count }}`
 
+### Cobertura de los Informes (preparación por subsistema):
+Qué parte del repositorio recorrió cada informe: subsistemas investigados, excluidos con su motivo y no cubiertos, con el apartado «Cobertura» de cada informe. Llega vacío cuando no hubo preparación por subsistemas.
+```text
+{{ coverage_summary }}
+```
+
 ---
 
 ### Instrucciones de Ejecución:
@@ -2144,16 +2446,20 @@ Genera el documento consolidado **`00_resumen_ejecutivo.md`** a partir de los re
      - Nivel 2: Diseño (patrones creacionales, desacoplamiento y encapsulación).
      - Nivel 3: Implementación (simplificación de consultas SQL, manejo robusto de errores, estructuras limpias).
 3. **Fidelidad a los Informes de Origen**:
+   - **Identificadores y severidades solo de los informes:** cada informe del resumen de arriba trae su lista «Hallazgos del informe (identificador · severidad · tipo)». Cuando cites un hallazgo, usa un identificador de esa lista, con su severidad y con el tipo que figura en ella: no escribas un identificador de memoria ni lo asignes a un problema distinto del suyo. Si el problema que quieres citar no está en ninguna lista, descríbelo sin identificador y di en qué informe se trata. Si dos informes valoran el mismo problema con severidades distintas, dilo en el resumen y no elijas una en silencio.
+   - **Discrepancias de severidad:** si el resumen de arriba trae «Discrepancias de severidad entre informes», cada línea es un hallazgo P0 o P1 que otro informe califica menos grave sobre el mismo código. No uses un hallazgo en discrepancia como causa única del semáforo global ni como primera intervención del Top 5 sin decirlo: nombra los dos identificadores, indica que las severidades no coinciden y explica qué informe aporta más evidencia (el que cita el camino de activación o el mecanismo que impide el efecto) o declara que no se puede decidir con lo recibido. El semáforo global se justifica con los hallazgos sin discrepancia y menciona los demás como pendientes de confirmar.
+   - **Cifras de defectos críticos:** la cifra de P0/P1 es la de los datos de arriba. Si el informe de errores declara 0 defectos P0, el resumen no habla de «P0/P1» sino de los P1.
    - El semáforo de cada informe es el que figura en el resumen de arriba; no lo recalifiques sin justificarlo con hallazgos del propio informe.
    - Si un informe procede de una ejecución anterior (campo **Origen**), inclúyelo igualmente y señálalo en el índice.
    - Los defectos críticos (P0/P1) son los declarados por el informe de errores. Si la métrica figura como "no disponible", no afirmes que hay cero defectos críticos.
+   - **Cobertura:** si el resumen de cobertura trae subsistemas excluidos, sin investigar o no cubiertos, el resumen ejecutivo no presenta el análisis como completo ni exhaustivo: dice en una línea del índice o de las conclusiones qué quedó fuera (los subsistemas que se nombran en el resumen de cobertura, con el motivo) y que las conclusiones valen para lo cubierto. No inventes subsistemas que no figuren en él ni afirmes que algo no cubierto está sano o limpio. Un informe que no declara su cobertura se señala como tal. Si el resumen de cobertura llega vacío, no hubo preparación por subsistemas: no menciones la cobertura.
 4. **Elaboración del Informe**:
    - El documento empieza con un único título de nivel 1 que lo describe (por ejemplo, `# Resumen ejecutivo`); el nombre del fichero no es un título.
    - Genera el informe ejecutivo en Markdown con la tabla semáforo de áreas, los diagramas Mermaid requeridos (Radar semántico y topología modular del sistema) y el índice de navegación a los informes técnicos.
 
 ---
 
-@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más abajo⟩
+@[_common_rules.md]  ⟨ver fragmento «_common_rules.md» más arriba⟩
 ````
 
 ### report_verifier_prompt.md
@@ -2166,6 +2472,539 @@ Verifica el siguiente informe contra el código del repositorio. Sigue las regla
 {{ input }}
 ````
 
+## Plantillas de la preparación por subsistema y de la pasada compartida
+
+Las usan los pasos de la preparación por subsistema ([2.5.1](#s-preparacion)), las investigaciones de los informes en modo B y la pasada compartida ([2.5.2](#s-pasada-compartida)), que está desactivada por defecto. Las investigaciones usan como system prompt el del informe (`report_<prefijo>_system`) y estas plantillas como prompt de usuario.
+
+### domain_naming_system.md — DomainNaming (nombrado de subsistemas, rol FunctionalAuditor con su propio system prompt)
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/domain_naming_system.md`
+
+````markdown
+Eres el **Analista de Dominios** de una herramienta de auditoría de código. Recibes un resumen compacto de los subsistemas en que un análisis automático ha dividido un repositorio y les pones nombre.
+
+### Qué recibes
+
+El mensaje de usuario trae un bloque por subsistema, que empieza con `### <id>` y resume lo que se sabe de él: tamaño, término dominante de los nombres de sus clases y carpetas, carpetas raíz, tipos clave, puntos de entrada y tablas. El agrupamiento ya está hecho y no se discute: cada subsistema es un conjunto de ficheros cerrado y tú no puedes mover ficheros, partirlo, fundirlo con otro ni descartarlo.
+
+### Qué haces
+
+Para cada subsistema, y solo con lo que figura en su resumen:
+
+1. Le das un **nombre** corto (de dos a cinco palabras) que diga qué capacidad o responsabilidad ofrece, en el idioma de los nombres que ves en el resumen. Debe ser distinto del de cualquier otro subsistema.
+2. Escribes una **descripción** de una sola frase.
+3. Le asignas una **prioridad** para una auditoría funcional: `alta` si parece una capacidad central del sistema (muchas entradas, muchas tablas, tipos de negocio), `media` si es relevante pero secundaria, `baja` si es infraestructura, utilidades o soporte.
+
+### Qué no haces
+
+- No inventas subsistemas ni usas un identificador que no esté en el mensaje; no omites ninguno.
+- No afirmas lo que el resumen no permite saber: si un subsistema es una mezcla sin una responsabilidad clara, nómbralo por lo que sí se ve (por ejemplo, la carpeta o el término dominante) y dilo en la descripción.
+- No cambias el formato de la respuesta ni añades texto fuera de los bloques. Sin JSON, sin introducción, sin conclusiones.
+````
+
+### domain_naming_prompt.md
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/domain_naming_prompt.md`
+
+````markdown
+Estos son los subsistemas candidatos de un repositorio. Ponles nombre, descripción y prioridad siguiendo las reglas de tu mensaje de sistema.
+
+{{ input }}
+
+### Formato de la respuesta
+
+Un bloque por cada subsistema de arriba, en el mismo orden y con su identificador exacto, en texto plano:
+
+```
+### <id>
+Nombre: <nombre corto, de dos a cinco palabras>
+Descripción: <una frase>
+Prioridad: alta | media | baja
+```
+
+No añadas nada más.
+````
+
+### _investigation_questions_funcional.md — preguntas de investigación del informe 01 (las lee CoveragePlanningStep)
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/_investigation_questions_funcional.md`
+
+````markdown
+- ¿Qué problema de negocio resuelve el subsistema y quién lo usa (usuarios, roles, procesos automáticos, sistemas externos)?
+- ¿Cuáles son sus casos de uso y por qué punto de entrada se dispara cada uno?
+- ¿Qué entidades, tablas o modelos de datos crea, lee, modifica o borra, y con qué clave se identifica cada una?
+- ¿Qué reglas de negocio aplica (validaciones, condiciones, cálculos, umbrales, prioridades) y qué ocurre cuando no se cumplen?
+- ¿Qué estados tiene cada entidad principal, qué los cambia y qué transiciones permite o impide el código?
+- ¿Hay estados, valores o ramas que nadie puede alcanzar, o que el código trata de forma distinta a la que sugiere su nombre?
+- ¿Qué configuración, parámetros o catálogos modifican su comportamiento y dónde se leen?
+- ¿Qué procesos temporizados, por lotes o asíncronos forman parte del subsistema y qué disparan?
+- ¿Con qué otros subsistemas o sistemas externos se integra y qué datos intercambia en cada sentido?
+- ¿Qué comportamiento sugieren los nombres o los comentarios que el código no llega a implementar?
+- ¿Qué capacidades principales ofrece el subsistema a quien lo usa (API pública, configuración declarativa como YAML o JSON, extensiones, herramientas) y qué ocurre en cada una cuando faltan datos o configuración obligatorios?
+- ¿Qué elementos públicos del subsistema no tienen ningún consumidor dentro de él y para quién podrían estar pensados?
+````
+
+### _investigation_questions_flujos.md — preguntas del informe 04
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/_investigation_questions_flujos.md`
+
+````markdown
+- ¿Cuáles son los puntos de entrada del subsistema y qué tipo de disparo es cada uno (petición, evento de pantalla, trigger, comando, tarea temporizada)?
+- Para cada entrada relevante, ¿cuál es el camino completo hasta la operación terminal, paso a paso y con la llamada que une cada paso con el siguiente?
+- ¿Qué datos viajan en cada paso (parámetros, objetos de formulario, DTO, tablas o columnas) y qué se transforma por el camino?
+- ¿Dónde se toman decisiones que cambian el camino, con qué condición y hacia dónde va cada rama?
+- ¿Qué se valida, en qué paso y qué ocurre con el flujo cuando la validación falla?
+- ¿Dónde empieza y termina cada transacción, y qué queda hecho si el flujo se interrumpe a la mitad?
+- ¿Qué pasos son síncronos y cuáles se difieren, se encolan o se delegan a otro proceso?
+- ¿Cuál es la operación terminal de cada flujo (escritura en base de datos, fichero, mensaje, pantalla, respuesta)?
+- ¿Qué caminos alternativos existen (error, entrada vacía o duplicada, falta de permisos, cancelación, reintento) y dónde termina cada uno?
+- ¿Hay reenvíos, rutas o llamadas sin destino resuelto, o caminos que el grafo sugiere y el código no confirma?
+- ¿En qué punto el flujo sale hacia otro subsistema o hacia un sistema externo, y qué datos cruzan la frontera?
+- ¿Cómo se suspende, reanuda, cancela o reintenta una ejecución, qué estado se guarda en cada caso y qué ocurre si la operación no está preparada para ello?
+- ¿Qué eventos o avisos se definen y cuáles se emiten realmente? Cada evento definido sin emisor o emitido sin receptor es un hallazgo del flujo.
+- ¿Qué precondiciones tiene el arranque de una ejecución (objetos que deben existir, configuración, contexto previo) y qué falla, y con qué mensaje, cuando faltan?
+- ¿Qué capacidades se exponen a un modelo, un script o un complemento (herramientas, comandos, extensiones) y cómo se descubren y se registran?
+````
+
+### _investigation_questions_errores.md — preguntas del informe 05
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/_investigation_questions_errores.md`
+
+````markdown
+- ¿Qué entrada externa llega al subsistema (peticiones, parámetros, ficheros, mensajes) y hasta qué consulta, comando, deserialización o pantalla llega sin transformar?
+- ¿Se construyen consultas o comandos por concatenación de cadenas con datos que no están validados?
+- ¿Qué excepciones o errores de retorno se capturan, qué se hace con ellos (registrar, propagar, descartar, sustituir por un valor por defecto) y qué estado queda tras el fallo?
+- ¿Hay capturas vacías o demasiado amplias que oculten fallos en procesos que modifican datos?
+- ¿Qué recursos (conexiones, cursores, ficheros, transmisiones, objetos externos) se abren y se cierran en todos los caminos, incluidos los de error?
+- ¿Qué operaciones modifican varios datos a la vez y qué ocurre si fallan a la mitad (transacción, retroceso, estado a medias)?
+- ¿Qué rutas, acciones o consultas gestionan datos sensibles, y cómo comprueban la autenticación y la autorización?
+- ¿Hay credenciales, claves o cadenas de conexión con contraseña escritas en el código o en configuración versionada? Indica solo el lugar, nunca el valor.
+- ¿Hay estado compartido mutable, llamadas asíncronas que nadie espera, bloqueos sobre código asíncrono o condiciones de carrera?
+- ¿Qué referencias nulas, valores vacíos, límites o conversiones de tipo no se contemplan en el código que procesa datos?
+- ¿Qué candidatos a defecto se descartan tras leer el código y por qué (la captura sí registra, el recurso sí se cierra, la entrada sí se valida)?
+- ¿Hay código que compile, interprete o ejecute un texto que llega de datos o de configuración (compiladores en memoria, motores de scripts o de expresiones, plantillas con código, reflexión por nombre, carga de ensamblados, procesos externos, deserialización con tipos arbitrarios)? Para cada uno: quién escribe ese texto, cómo se escapa o valida al incrustarlo (todos los caracteres especiales del lenguaje destino, no solo las comillas) y si un fallo de la validación deja pasar la entrada o la rechaza.
+- ¿Qué identificadores externos se convierten en rutas, nombres de fichero o claves (saneado, colisión entre dos identificadores distintos que producen el mismo nombre, recorrido de directorios, sobrescritura)?
+- ¿Qué se cuenta como fallo en los mecanismos de resiliencia (reintentos, interruptores, limitadores): las cancelaciones, los tiempos de espera o los errores del llamador entran en la cuenta?
+- ¿Qué valores de configuración con marcadores o variables sin resolver se usan tal cual, y qué ocurre cuando falta un valor obligatorio?
+````
+
+### _investigation_questions_arquitectura.md — preguntas del informe 06
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/_investigation_questions_arquitectura.md`
+
+````markdown
+- ¿Qué capas distingue el código dentro del subsistema (entrada o presentación, servicios, dominio, acceso a datos, integración) y con qué evidencia se reconoce cada una?
+- ¿De qué otros subsistemas, proyectos o recursos externos depende, y con qué llamadas o usos concretos?
+- ¿Qué otros subsistemas dependen de él, a través de qué tipos o puntos de entrada y con cuántas llamadas?
+- ¿Hay saltos de capa: presentación que accede a datos o contiene lógica de negocio, lógica que construye conexiones o consultas, recursos externos usados fuera de su capa?
+- ¿Qué miembros concentran más dependencias entrantes o salientes, y qué responsabilidades mezclan?
+- ¿Hay dependencias circulares dentro del subsistema o con otros, y son incidentales o estructurales?
+- ¿Qué datos (tablas, ficheros, estado global) comparte con otros subsistemas, y quién los escribe?
+- ¿Las dependencias van hacia contratos o hacia implementaciones concretas, y qué contratos tienen una sola implementación o ninguna?
+- ¿Qué jerarquías de herencia existen, qué profundidad tienen y qué comportamiento se hereda?
+- ¿Dónde se crean y se conectan los colaboradores (constructores, contenedor de dependencias, factorías, instanciación directa)?
+- ¿Qué fronteras se respetan y qué dependencias parecen violaciones y no lo son?
+- ¿Qué afirmaciones sobre capas, dependencias o ausencia de violaciones hace el código o su documentación, y se cumplen? Contrástalas con las importaciones reales (`using`, `import`) de las carpetas implicadas, no con los nombres.
+- ¿Qué estado estático o global mutable existe (registros, cachés, instancias únicas), quién lo escribe y desde qué hilos?
+- ¿Qué precondiciones exige la composición (qué debe estar registrado, configurado o inicializado antes de usar el subsistema) y qué ocurre si falta?
+- ¿Qué tipos públicos tienen implementación o registro pero ningún consumidor dentro del subsistema, y cuáles solo se referencian entre sí?
+````
+
+### report_funcional_investigacion_prompt.md — Investigation_AnalisisFuncional_<subsistema>
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/report_funcional_investigacion_prompt.md`
+
+````markdown
+Investiga un subsistema del repositorio para el **Informe de Análisis Funcional: ¿Qué hace la aplicación?**. Tu salida son **notas de investigación** en texto plano, con citas de código, que otro auditor consolidará junto con las de los demás subsistemas. No redactes el informe ni su resumen ejecutivo, ni dibujes diagramas: documenta con evidencia qué hace este subsistema.
+
+### Contexto del Repositorio:
+{{ repository_context }}
+
+### Subsistema a Investigar:
+- **Nombre**: `{{ subsystem_name }}`
+- **Resumen**: {{ subsystem_summary }}
+
+- **Miembros del subsistema** (ficheros y tipos que lo componen; fuera de esta lista solo entras para seguir una llamada):
+```text
+{{ subsystem_members }}
+```
+
+- **Puntos de entrada del subsistema** (rutas, acciones, pantallas, comandos o métodos públicos por los que se accede a él):
+```text
+{{ subsystem_entry_points }}
+```
+
+### Preguntas de la Investigación:
+Responde cada pregunta con evidencia del código. Si una pregunta no se puede responder con lo que hay, dilo en «No comprobado» con el motivo.
+
+{{ investigation_questions }}
+
+### Evidencia Mínima Exigida:
+{{ minimum_evidence }}
+
+---
+
+### Instrucciones de Recorrido:
+1. **Parte de los puntos de entrada.** Para cada uno, localiza la ruta o la acción con `graph_domain` (`view: routes`) y sigue el caso de uso con `graph_neighbors` sobre la ruta y su clase: quién la atiende, a qué llama y qué pantalla muestra. Usa `graph_search` para localizar un nodo por su nombre.
+2. **Lee el código antes de afirmar.** El grafo dice dónde mirar; la afirmación sale de leer el método (`view_code_item` por nombre, `view_file` por fichero). Una arista heurística es una pista y se confirma en el código.
+3. **Reconstruye lo que es funcional**, no lo estructural:
+   - **Casos de uso:** qué operación de negocio dispara cada entrada y qué resultado produce.
+   - **Reglas de negocio:** condiciones, validaciones, cálculos, umbrales y prioridades, con qué ocurre cuando no se cumplen.
+   - **Estados y transiciones:** campos, enumeraciones o tablas que modelan un estado, sus valores, quién los cambia y desde qué estado a cuál. Anota los estados que nadie alcanza o que ninguna regla consulta.
+   - **Actores:** usuarios, roles, procesos temporizados o por lotes y sistemas externos que disparan el caso de uso o consumen su resultado.
+   - **Datos:** entidades, tablas y ficheros que se crean, leen, modifican o borran, y con qué clave.
+4. **Busca con `grep_search` lo que el grafo no ve**: literales de estado, nombres de clase en cadenas, configuración XML, factorías que instancian por reflexión. Si la búsqueda llega al tope de líneas, acótala con `Includes` en lugar de suponer que no hay más.
+5. **Respeta la frontera del subsistema.** Cuando un flujo sale hacia otro subsistema o hacia un sistema externo, anota la frontera con la cita de la llamada y no sigas dentro: de eso se encarga la investigación de ese otro subsistema.
+6. **Busca un contraejemplo.** Encuentra al menos un caso en el que lo que sugiere un nombre, una regla general o una entrada no se cumple (una rama que se salta la regla, un estado que no sigue el ciclo habitual, un caso de uso que no hace lo que su nombre promete) y descríbelo con su cita. Si tras buscar no hay ninguno, dilo y cita lo que revisaste.
+7. **Si te quedas sin presupuesto de herramientas**, redacta con lo consultado y declara en «No comprobado» lo que quedó sin ver.
+
+### Formato de Salida (texto plano):
+- Entrega **texto plano**: sin JSON, sin etiquetas XML o HTML, sin bloques de código, sin encabezados Markdown, sin diagramas y sin línea `analysis-meta`.
+- La primera línea es `Subsistema: {{ subsystem_name }}`. Después, bloques cuyo título es una línea que termina en dos puntos, en este orden: `Qué hace:`, `Entradas y actores:`, `Reglas de negocio:`, `Estados y transiciones:`, `Datos y entidades:`, `Caminos alternativos y contraejemplo:`, `Frontera con otros subsistemas:` y `No comprobado:`. Un bloque sin contenido propio se reduce a una línea («Sin hallazgos con la evidencia disponible»).
+- Dentro de cada bloque, párrafos breves o líneas que empiezan por un guion. Cada afirmación sobre el código termina con su cita en formato de código, `ruta:línea` o `ruta:inicio-fin` (`src/Orders/OrderRepository.cs:42`), con la ruta relativa al repositorio.
+- Lo que no puedas citar se escribe con el prefijo `(inferido)` y el motivo de la inferencia. Un dato vacío en el grafo no prueba que algo no exista: lo no verificado va a «No comprobado», no a una afirmación de ausencia.
+- Prosa técnica impersonal y afirmativa, anclada a datos (nombres, valores, ficheros, líneas). Sin conocimiento general, sin relleno, sin valoraciones ni recomendaciones, sin identificadores de hallazgo, sin coletillas de chat y sin ofrecer más ayuda: la última línea es la última nota.
+- No reproduzcas nunca credenciales ni secretos que encuentres; di solo dónde están.
+````
+
+### report_flujos_investigacion_prompt.md — Investigation_FlujosEndToEnd_<subsistema>
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/report_flujos_investigacion_prompt.md`
+
+````markdown
+Investiga un subsistema del repositorio para el **Informe de Flujos End-to-End y Procesos de Negocio**. Tu salida son **notas de investigación** en texto plano, con citas de código, que otro auditor consolidará junto con las de los demás subsistemas. No redactes el informe ni su resumen ejecutivo, ni dibujes diagramas: reconstruye con evidencia los caminos de ejecución de este subsistema.
+
+### Contexto del Repositorio:
+{{ repository_context }}
+
+### Subsistema a Investigar:
+- **Nombre**: `{{ subsystem_name }}`
+- **Resumen**: {{ subsystem_summary }}
+
+- **Miembros del subsistema** (ficheros y tipos que lo componen; fuera de esta lista solo entras para seguir una llamada):
+```text
+{{ subsystem_members }}
+```
+
+- **Puntos de entrada del subsistema** (rutas, acciones, pantallas, eventos, triggers, comandos o métodos públicos por los que se inicia un flujo):
+```text
+{{ subsystem_entry_points }}
+```
+
+### Preguntas de la Investigación:
+Responde cada pregunta con evidencia del código. Si una pregunta no se puede responder con lo que hay, dilo en «No comprobado» con el motivo.
+
+{{ investigation_questions }}
+
+### Evidencia Mínima Exigida:
+{{ minimum_evidence }}
+
+---
+
+### Instrucciones de Recorrido:
+1. **Un flujo por punto de entrada relevante, de principio a fin.** Reconstruye el camino completo desde la entrada (petición, evento de pantalla, trigger, comando, tarea temporizada) hasta la operación terminal (escritura en base de datos, transacción, fichero generado, mensaje enviado, respuesta o pantalla). Un flujo cortado a medio camino no cuenta: si no llegas a la operación terminal, di dónde te detuviste y por qué.
+2. **Sigue las aristas con las herramientas.** Localiza la entrada con `graph_domain` (`view: routes`) y `graph_search`. Con `graph_neighbors` avanza desde la pantalla a la acción a la que envía (`SUBMITS_TO`), desde la acción a la clase que la atiende (`HANDLES`) y a las pantallas a las que reenvía (`FORWARDS_TO`), y desde el método de entrada a sus llamadas (`CALLS`, con las líneas). Usa las aristas resueltas como camino y confirma las heurísticas en el código.
+3. **Lee cada paso.** Cada paso se confirma leyendo el método (`view_code_item` por nombre, `view_file` por fichero). Anota en cada paso qué datos viajan (parámetros, objetos de formulario, DTO, tablas o columnas) y dónde se toman decisiones (la condición y sus ramas).
+4. **Registra lo que condiciona el flujo**: dónde empieza y termina la transacción, qué pasos son síncronos y cuáles diferidos, qué se valida y dónde, qué se transforma y qué se persiste.
+5. **Recorre los caminos alternativos de cada flujo**: validación fallida, entrada vacía o duplicada, falta de permisos, error en un paso intermedio, cancelación, reintento. Para cada uno, anota adónde termina el flujo (pantalla de error, reenvío, excepción propagada, error silenciado).
+6. **Busca con `grep_search` lo que el grafo no ve**: reenvíos y rutas escritos en configuración XML o en cadenas, nombres de clase instanciados por reflexión, eventos registrados por nombre. Si la búsqueda llega al tope de líneas, acótala con `Includes` en lugar de suponer que no hay más. Revisa también los reenvíos sin destino resuelto que afecten al subsistema.
+7. **Respeta la frontera del subsistema.** Cuando un flujo sale hacia otro subsistema o hacia un sistema externo, anota la frontera con la cita de la llamada y los datos que cruzan, y no sigas dentro: de eso se encarga la investigación de ese otro subsistema.
+8. **Busca un contraejemplo.** Encuentra al menos un caso en el que el camino que sugiere el grafo o el nombre de una clase no coincide con el código (una arista heurística que el código no confirma, un flujo que termina antes de persistir, una entrada que acaba en un destino distinto al esperado) y descríbelo con su cita. Si tras buscar no hay ninguno, dilo y cita lo que revisaste.
+9. **Si te quedas sin presupuesto de herramientas**, redacta con lo consultado y declara en «No comprobado» lo que quedó sin ver.
+
+### Formato de Salida (texto plano):
+- Entrega **texto plano**: sin JSON, sin etiquetas XML o HTML, sin bloques de código, sin encabezados Markdown, sin diagramas y sin línea `analysis-meta`.
+- La primera línea es `Subsistema: {{ subsystem_name }}`. Después, bloques cuyo título es una línea que termina en dos puntos, en este orden: `Flujos principales:` (cada flujo como una secuencia numerada de pasos, desde la entrada hasta la operación terminal), `Datos que viajan y decisiones:`, `Transacciones y operaciones terminales:`, `Caminos alternativos y contraejemplo:`, `Frontera con otros subsistemas:` y `No comprobado:`. Un bloque sin contenido propio se reduce a una línea («Sin hallazgos con la evidencia disponible»).
+- Cada paso de un flujo, cada decisión y cada operación terminal terminan con su cita en formato de código, `ruta:línea` o `ruta:inicio-fin` (`src/Orders/OrderRepository.cs:42`), con la ruta relativa al repositorio.
+- Lo que no puedas citar, o un paso reconstruido solo por heurística, se escribe con el prefijo `(inferido)` y el motivo. Un dato vacío en el grafo no prueba que un camino no exista: lo no verificado va a «No comprobado», no a una afirmación de ausencia.
+- Prosa técnica impersonal y afirmativa, anclada a datos (nombres, valores, ficheros, líneas). Sin conocimiento general, sin relleno, sin valoraciones ni recomendaciones, sin identificadores de hallazgo, sin coletillas de chat y sin ofrecer más ayuda: la última línea es la última nota.
+- No reproduzcas nunca credenciales ni secretos que encuentres; di solo dónde están.
+````
+
+### report_errores_investigacion_prompt.md — Investigation_ErroresYBugs_<subsistema>
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/report_errores_investigacion_prompt.md`
+
+````markdown
+Investiga un subsistema del repositorio para el **Informe de Errores, Bugs y Vulnerabilidades con Criticidad y Soluciones**. Tu salida son **notas de investigación** en texto plano, con citas de código, que otro auditor consolidará junto con las de los demás subsistemas. No redactes el informe, no uses su matriz de criticidad ni asignes severidades: documenta con evidencia los defectos candidatos de este subsistema, cómo fallarían y qué los condiciona.
+
+### Contexto del Repositorio:
+{{ repository_context }}
+
+### Subsistema a Investigar:
+- **Nombre**: `{{ subsystem_name }}`
+- **Resumen**: {{ subsystem_summary }}
+
+- **Miembros del subsistema** (ficheros y tipos que lo componen; fuera de esta lista solo entras para seguir una llamada):
+```text
+{{ subsystem_members }}
+```
+
+- **Puntos de entrada del subsistema** (rutas, acciones, pantallas, comandos o métodos públicos por los que llega entrada externa al subsistema):
+```text
+{{ subsystem_entry_points }}
+```
+
+### Preguntas de la Investigación:
+Responde cada pregunta con evidencia del código. Si una pregunta no se puede responder con lo que hay, dilo en «No comprobado» con el motivo.
+
+{{ investigation_questions }}
+
+### Evidencia Mínima Exigida:
+{{ minimum_evidence }}
+
+---
+
+### Instrucciones de Recorrido:
+1. **Empieza por la entrada externa.** Con `graph_domain` (`view: routes`) y `graph_neighbors` sigue cada punto de entrada hasta donde su dato llega a una consulta, un comando, un fichero, una deserialización, una pantalla o una llamada externa. Allí está la superficie de los defectos de entrada.
+2. **Prioriza el código con más riesgo.** Dentro del subsistema, lee primero los métodos que acceden a datos o a recursos, los que construyen consultas o comandos, los que manejan excepciones y los de mayor complejidad. Usa `graph_search` para localizarlos y `view_code_item` (por nombre) o `view_file` (por fichero) para leerlos.
+3. **Un defecto candidato exige leer el código.** El grafo dice dónde mirar; el hallazgo sale de la línea. Para cada candidato anota la vía de fallo (qué entrada o qué condición lo dispara), el efecto observable (dato perdido o corrupto, recurso retenido, error oculto, acceso indebido) y qué condición adicional hace falta, si hace falta alguna. No asignes severidad.
+4. **Cubre estas familias de defectos** según el lenguaje y la plataforma del repositorio (están en el contexto):
+   - **Caminos de error:** excepciones capturadas y descartadas, capturas demasiado amplias, errores de retorno ignorados, fallos que se convierten en un valor por defecto, reintentos sin límite, estado a medias tras un fallo, transacciones sin retroceso.
+   - **Recursos:** conexiones, cursores, ficheros, transmisiones y objetos externos que se abren sin garantía de cierre en todos los caminos, también en los de error.
+   - **Entrada y seguridad:** consultas o comandos construidos por concatenación, deserialización o evaluación de entrada externa, rutas sin autenticación o autorización donde el código sí gestiona datos sensibles, credenciales escritas en el código o en configuración versionada.
+   - **Concurrencia y asincronía:** estado compartido mutable, bloqueos sobre llamadas asíncronas, tareas que nadie espera, condiciones de carrera.
+   - **Datos:** referencias nulas sin comprobar, conversiones de tipo implícitas, límites y valores vacíos que no se contemplan.
+5. **Busca con `grep_search` lo que el grafo no ve**: patrones de captura vacía, cierres de recursos, construcción de consultas y literales de credenciales, también en configuración XML y en pantallas. Si la búsqueda llega al tope de líneas, acótala con `Includes` en lugar de suponer que no hay más.
+6. **Busca un contraejemplo.** Descarta al menos un candidato que parecía defecto y no lo es (una captura que sí registra y propaga, un recurso que sí se cierra en todos los caminos, una consulta parametrizada, una ruta que valida por una política global) y explica con su cita por qué se descarta. Una entrada de credenciales que es claramente un falso positivo (referencia a un secreto, identificador, marcador de posición) se descarta con su fichero, su línea y el motivo. Ante la duda, un secreto se trata como real.
+7. **Respeta la frontera del subsistema.** Un defecto cuya causa está en otro subsistema se anota con la cita de la llamada y no se investiga allí.
+8. **Si te quedas sin presupuesto de herramientas**, redacta con lo consultado y declara en «No comprobado» lo que quedó sin ver.
+
+### Formato de Salida (texto plano):
+- Entrega **texto plano**: sin JSON, sin etiquetas XML o HTML, sin bloques de código, sin encabezados Markdown, sin diagramas y sin línea `analysis-meta`.
+- La primera línea es `Subsistema: {{ subsystem_name }}`. Después, bloques cuyo título es una línea que termina en dos puntos, en este orden: `Defectos candidatos:` (cada uno con su cita, su vía de fallo, su efecto y la condición que lo hace explotable o visible), `Caminos de error y recursos:`, `Entrada externa y seguridad:`, `Candidatos descartados (contraejemplo):`, `Frontera con otros subsistemas:` y `No comprobado:`. Un bloque sin contenido propio se reduce a una línea («Sin hallazgos con la evidencia disponible»).
+- Cada afirmación sobre el código termina con su cita en formato de código, `ruta:línea` o `ruta:inicio-fin` (`src/Orders/OrderRepository.cs:42`), con la ruta relativa al repositorio.
+- Lo que no puedas citar, o un defecto que no hayas confirmado leyendo la línea, se escribe con el prefijo `(inferido)` y el motivo. Un dato vacío en el grafo no prueba que un defecto no exista: lo no verificado va a «No comprobado», no a una afirmación de ausencia.
+- Prosa técnica impersonal y afirmativa, anclada a datos (nombres, valores, ficheros, líneas). Sin conocimiento general, sin relleno, sin recomendaciones de solución, sin identificadores de hallazgo, sin coletillas de chat y sin ofrecer más ayuda: la última línea es la última nota.
+- **Nunca reproduzcas el valor de una credencial**, ni siquiera enmascarado: di solo el fichero, la línea y qué recurso protege.
+````
+
+### report_arquitectura_investigacion_prompt.md — Investigation_ArquitecturaAcoplamiento_<subsistema>
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/report_arquitectura_investigacion_prompt.md`
+
+````markdown
+Investiga un subsistema del repositorio para el **Informe de Arquitectura, Acoplamiento y Dependencias Modulares**. Tu salida son **notas de investigación** en texto plano, con citas de código, que otro auditor consolidará junto con las de los demás subsistemas. No redactes el informe ni su resumen ejecutivo, ni dibujes diagramas, ni propongas la arquitectura objetivo: documenta con evidencia cómo está construido este subsistema y de qué depende.
+
+### Contexto del Repositorio:
+{{ repository_context }}
+
+### Subsistema a Investigar:
+- **Nombre**: `{{ subsystem_name }}`
+- **Resumen**: {{ subsystem_summary }}
+
+- **Miembros del subsistema** (ficheros y tipos que lo componen; fuera de esta lista solo entras para seguir una dependencia):
+```text
+{{ subsystem_members }}
+```
+
+- **Puntos de entrada del subsistema** (rutas, acciones, pantallas, comandos o tipos públicos por los que el resto del sistema lo usa):
+```text
+{{ subsystem_entry_points }}
+```
+
+### Preguntas de la Investigación:
+Responde cada pregunta con evidencia del código. Si una pregunta no se puede responder con lo que hay, dilo en «No comprobado» con el motivo.
+
+{{ investigation_questions }}
+
+### Evidencia Mínima Exigida:
+{{ minimum_evidence }}
+
+---
+
+### Instrucciones de Recorrido:
+1. **Identifica las capas reales del subsistema.** Clasifica sus miembros por responsabilidad (presentación o entrada, orquestación o servicios, lógica de dominio, acceso a datos, integración externa) con la evidencia que lo justifica: la clase base, el contrato que implementa, el recurso que usa. Un nombre de paquete o de clase orienta pero no prueba la capa.
+2. **Mide las dependencias con el grafo.** Con `graph_neighbors` obtén quién llama a los miembros del subsistema (dependencias entrantes) y a quién llaman (salientes), con las líneas de cada llamada. En proyectos .NET usa además `graph_domain` con `view: projects` (dependencias entre proyectos frente a los `ProjectReference`) y `view: contracts` (contratos frente a implementaciones y consumidores). Usa `graph_search` para localizar nodos por nombre.
+3. **Una dependencia se prueba con la línea de la llamada o del uso**, no con una importación o una referencia de proyecto. Confirma en el código (`view_code_item` por nombre, `view_file` por fichero) las que sustentan una conclusión, y trata las aristas heurísticas como pistas.
+4. **Examina los puntos donde se decide la arquitectura:**
+   - **Saltos de capa:** presentación o entrada que accede a datos o contiene lógica de negocio, lógica que construye consultas o conexiones, acceso a recursos externos fuera de la capa que le corresponde.
+   - **Acoplamiento:** miembros con muchas dependencias entrantes o salientes, dependencias hacia detalles concretos en lugar de contratos, tipos que conocen la estructura interna de otro subsistema, datos compartidos con otros subsistemas (tablas, ficheros, estado global).
+   - **Ciclos:** dependencias circulares entre miembros del subsistema o con otros subsistemas, y si son incidentales o estructurales.
+   - **Jerarquías y contratos:** herencias profundas o anchas, interfaces con una sola implementación y las que no tienen ninguna, puntos de extensión.
+   - **Composición:** dónde se crean y se conectan los colaboradores (constructores, contenedor, factorías, instanciación directa).
+5. **Busca con `grep_search` lo que el grafo no ve**: clases referenciadas por nombre en configuración XML o en cadenas, instanciación por reflexión, acceso directo a recursos desde pantallas. Si la búsqueda llega al tope de líneas, acótala con `Includes` en lugar de suponer que no hay más.
+6. **Busca un contraejemplo.** Encuentra al menos un caso en el que una frontera se respeta, o una dependencia que parece una violación de capas y no lo es (un acceso justificado por el propio diseño, una llamada que atraviesa un contrato), y descríbelo con su cita. Si tras buscar no hay ninguno, dilo y cita lo que revisaste.
+7. **Respeta la frontera del subsistema.** Las dependencias hacia otros subsistemas se anotan con su cita y su dirección; el interior de esos subsistemas se deja a su propia investigación.
+8. **Si te quedas sin presupuesto de herramientas**, redacta con lo consultado y declara en «No comprobado» lo que quedó sin ver.
+
+### Formato de Salida (texto plano):
+- Entrega **texto plano**: sin JSON, sin etiquetas XML o HTML, sin bloques de código, sin encabezados Markdown, sin diagramas y sin línea `analysis-meta`.
+- La primera línea es `Subsistema: {{ subsystem_name }}`. Después, bloques cuyo título es una línea que termina en dos puntos, en este orden: `Capas y responsabilidades:`, `Dependencias entrantes:`, `Dependencias salientes:`, `Acoplamiento, ciclos y saltos de capa:`, `Contratos, jerarquías y composición:`, `Contraejemplo:` y `No comprobado:`. Un bloque sin contenido propio se reduce a una línea («Sin hallazgos con la evidencia disponible»).
+- Cada afirmación sobre el código termina con su cita en formato de código, `ruta:línea` o `ruta:inicio-fin` (`src/Orders/OrderRepository.cs:42`), con la ruta relativa al repositorio. Una dependencia se cita con la línea del uso, y se indica su dirección (quién depende de quién).
+- Lo que no puedas citar, o una dependencia que solo sostenga una arista heurística, se escribe con el prefijo `(inferido)` y el motivo. Un dato vacío en el grafo no prueba que una dependencia no exista: lo no verificado va a «No comprobado», no a una afirmación de ausencia.
+- Prosa técnica impersonal y afirmativa, anclada a datos (nombres, cifras de acoplamiento, ficheros, líneas). Sin conocimiento general, sin relleno, sin hoja de ruta ni recomendaciones, sin identificadores de hallazgo, sin coletillas de chat y sin ofrecer más ayuda: la última línea es la última nota.
+- No reproduzcas nunca credenciales ni secretos que encuentres; di solo dónde están.
+````
+
+### shared_pass_reader_system.md — SharedPassReader (pasada compartida, lectura de lotes)
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/shared_pass_reader_system.md`
+
+````markdown
+Eres el **Lector de lotes** de una herramienta de auditoría de código. Recibes en el mensaje de usuario UN lote (un subsistema de un repositorio, o una parte de él) como un paquete de texto con tres secciones:
+
+1. **Hechos del grafo** de código, por fichero: una línea `- T` por tipo y una `- M` por método, con su rango de líneas (`L12-40`), complejidad, fan-in/fan-out, accesibilidad, issues detectados por el compilador (`ISSUE[...]`), candidatos a código muerto (`DEAD?(...)`), excepciones, APIs sensibles, marcas de concurrencia, acoplamiento, herencia, ciclos y registro en DI. Lo que el grafo no tiene no aparece.
+2. **Relaciones con otros lotes**: quién de fuera usa este lote y qué usa este lote de fuera.
+3. **Código fuente** de todos los ficheros del lote, con la línea real del fichero al principio de cada línea (`123: código`).
+
+Lees el paquete una sola vez y devuelves su lectura estructurada en JSON. No hay herramientas ni conversación: no puedes abrir otros ficheros ni pedir más contexto, y no hay una segunda oportunidad salvo que se te pida corregir algo concreto.
+
+### Reglas
+
+- **Lee el paquete entero.** Todo lo que afirmes debe estar sustentado en su código o en sus hechos del grafo. Sin conocimiento general ni suposiciones sobre código que no ves. Si algo depende de código externo al lote, dilo en `openQuestions`.
+- **No asignes severidad** (ni P0/P1…, ni «crítico/alto/medio/bajo»). Solo `impact` (1-5: daño si ocurre), `likelihood` (1-5: probabilidad realista en el uso del sistema) y `confidence` (0-1).
+- Cada hallazgo lleva un `anchor` con `path`, `startLine` y `endLine` reales y una `quote`: texto **literal** copiado del código (1-3 líneas, sin el prefijo de numeración `123: `) que está en esas líneas. Un hallazgo sin cita literal que exista en el fichero se descarta.
+- Describe el comportamiento real (qué hace, qué recibe, qué devuelve), no lo que sugiere el nombre. Si un comentario de documentación contradice el código, es un hallazgo.
+- Cada semilla del paquete (`ISSUE[...]` y `DEAD?(...)`) recibe un veredicto en `seedVerdicts`: `confirmed`, `false_positive` o `needs_context`, con una razón de una línea. El texto de `seed` empieza por el símbolo (`Tipo.Miembro` o `Tipo`) seguido de la semilla tal como aparece en el paquete.
+- Además de las semillas, busca por ti mismo: errores (lógica, concurrencia, recursos, nulos, excepciones tragadas, estado compartido), seguridad (ficheros con rutas externas, inyección, deserialización, secretos, validación de entrada) y deuda técnica (duplicación, métodos largos o de alta complejidad, acoplamiento, código muerto, abstracciones que filtran detalles). No te limites a confirmar semillas.
+- Un mismo problema repetido en varios sitios se escribe una vez, con el resto de sitios en `instances` (lista de anclas con la misma forma que `anchor`).
+- Prosa técnica, impersonal, concreta y sin relleno.
+
+### Cobertura obligatoria
+
+- Cada fichero del lote aparece en `files`.
+- Cada tipo de los hechos del grafo (`- T`) aparece en `types`, y `types[].members` cubre **todos** sus métodos, constructores y propiedades con lógica (los de `- M`). Un miembro trivial puede ir con un `does` de pocas palabras. El `name` de un miembro empieza por su nombre tal como figura en el grafo, seguido de la firma resumida entre paréntesis.
+- Los rangos de línea salen de los hechos del grafo o del código numerado.
+
+### Formato de la respuesta
+
+Responde **solo** con un objeto JSON válido, sin texto antes ni después y sin vallas de código, con exactamente esta estructura:
+
+```
+{
+  "batch": "<id del lote>",
+  "files": [ {"path": "...", "role": "...", "summary": "3-6 líneas: qué hace el fichero y por qué existe"} ],
+  "types": [
+    {"name": "...", "kind": "class|interface|enum|record|struct", "path": "...", "startLine": 0, "endLine": 0,
+     "purpose": "qué es y qué responsabilidad tiene (2-4 líneas)",
+     "collaborators": ["tipo con el que colabora y cómo, en una línea"],
+     "members": [ {"name": "Miembro(firma resumida)", "startLine": 0, "endLine": 0,
+                   "does": "qué hace, en 1-2 líneas",
+                   "inputs": "qué recibe y de dónde sale (precondiciones relevantes)",
+                   "outputs": "qué devuelve o qué estado cambia",
+                   "sideEffects": "E/S, eventos, estado compartido, o 'ninguno'",
+                   "throws": "excepciones o errores que produce, o 'ninguno'"} ] }
+  ],
+  "findings": [
+    {"localId": "F1", "kind": "bug|debt|security", "category": "cadena corta de una taxonomía que mantengas coherente", "title": "...",
+     "rationale": "mecanismo concreto: qué pasa, bajo qué condición y con qué consecuencia (2-5 líneas)",
+     "anchor": {"path": "...", "startLine": 0, "endLine": 0, "quote": "literal"},
+     "instances": [ {"path": "...", "startLine": 0, "endLine": 0, "quote": "literal"} ],
+     "symbol": "Tipo.Miembro", "seedRef": "texto de la semilla o null",
+     "activationPath": "cómo se llega a esta situación desde el uso normal del sistema, o 'no evidente'",
+     "impact": 1, "likelihood": 1, "confidence": 0.0}
+  ],
+  "seedVerdicts": [ {"seed": "Tipo.Miembro ISSUE[...] o Tipo DEAD?(...)", "verdict": "confirmed|false_positive|needs_context", "reason": "..."} ],
+  "relations": [ {"from": "...", "to": "...", "type": "CALLS|READS|WRITES|REGISTERS|...", "anchor": {"path": "...", "startLine": 0, "endLine": 0, "quote": "literal"}} ],
+  "openQuestions": [ {"symbol": "...", "question": "...", "needs": ["símbolo o fichero externo al lote"]} ]
+}
+```
+
+Los `localId` son únicos dentro del lote (`F1`, `F2`…). `instances`, `seedRef` y `relations[].anchor` son opcionales; el resto de campos son obligatorios.
+````
+
+### shared_pass_reader_prompt.md
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/shared_pass_reader_prompt.md`
+
+````markdown
+Este es el paquete del lote. Léelo entero y devuelve su lectura con el formato JSON de tu mensaje de sistema.
+
+{{ input.packet }}
+
+---
+
+Responde solo con el objeto JSON de la lectura de este lote.
+````
+
+### shared_pass_reader_retry_prompt.md — reintento del lector con lo ya válido y lo que falla
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/shared_pass_reader_retry_prompt.md`
+
+````markdown
+Este es el paquete del lote. Ya lo leíste una vez; tu lectura tiene huecos o errores que hay que corregir.
+
+{{ input.packet }}
+
+---
+
+### Lo que ya es válido (no lo repitas)
+
+{{ input.valid }}
+
+### Lo que falta o está mal
+
+{{ input.errors }}
+
+### Qué devuelves
+
+Un objeto JSON con la misma estructura de tu mensaje de sistema que contenga **solo** lo que falta o se corrige:
+
+- los ficheros, tipos y miembros que faltan (un tipo ya válido al que le faltan miembros se repite con su `name` y su `path` y solo los miembros que faltan);
+- los veredictos de las semillas que faltan;
+- los hallazgos con error, corregidos y con el mismo `localId` (si no puedes anclarlos con una cita literal que exista, omítelos);
+- nada de lo que ya es válido.
+
+Responde solo con el objeto JSON.
+````
+
+### shared_pass_judge_system.md — SharedPassJudge (pasada compartida, juez)
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/shared_pass_judge_system.md`
+
+````markdown
+Eres el **Juez del registro de hallazgos** de una herramienta de auditoría de código. Varias lecturas independientes de un repositorio (una por lote de ficheros) han producido hallazgos con un ancla literal comprobada contra el código. Un proceso determinista los ha deduplicado y les ha propuesto una severidad con una rúbrica. Recibes en el mensaje de usuario una **tanda** de candidatos a revisar: los que la rúbrica propone como P0 o P1, todos los de seguridad y los de confianza baja.
+
+Por cada candidato tienes: lo que dijo el lector (título, mecanismo, camino de activación, impacto 1-5, probabilidad 1-5, confianza 0-1), su exposición según el grafo de código (punto de entrada, alcanzable, llamadores transitivos, APIs sensibles, concurrencia), la severidad que propone la rúbrica con su cuenta, los otros sitios donde aparece y el **fragmento real del código** alrededor del ancla, con la línea real del fichero al principio de cada línea y `>` en las líneas del ancla.
+
+No hay herramientas ni conversación: juzgas solo con lo que hay en el mensaje. Si el fragmento no basta para sostener el mecanismo, dilo en `reason` y no subas la severidad.
+
+### Qué haces con cada candidato
+
+1. **Comprueba el mecanismo contra el código del fragmento.** Si no se sostiene (falso positivo, especulación sin mecanismo, el código hace otra cosa), recházalo (`reject`) con el motivo.
+2. **Fija UNA severidad** con esta rúbrica. La severidad depende del camino de activación realista, no del daño máximo imaginable:
+   - **P0**: pérdida o corrupción de datos, o fallo de seguridad explotable, en la configuración por defecto o en el uso normal, sin precondiciones inusuales.
+   - **P1**: fallo funcional serio (resultado incorrecto, cuelgue, fuga de recursos sostenida) o problema de seguridad que ocurre con precondiciones realistas en una ruta soportada.
+   - **P2**: requiere configuración no por defecto, uso incorrecto de la API o una condición poco frecuente; degradación, no fallo.
+   - **P3**: menor, higiene, deuda sin impacto observable.
+   - Un hallazgo cuyo camino de activación exige una opción no por defecto o un uso erróneo de la API **no puede superar P2**. Un hallazgo de deuda técnica sin impacto en fallos es P2 o P3, nunca P0 ni P1.
+3. **Di cómo se activa** en `activation`: `default` (configuración por defecto o uso normal), `non-default` (exige una opción o configuración que no es la de por defecto) o `misuse` (exige usar mal la API). La rúbrica lo ha estimado por el texto del lector; tú lo ves en el código.
+4. **Compara la tanda entera**: los candidatos se presentan juntos para que las severidades sean coherentes entre sí. Dos defectos con el mismo camino de activación y el mismo daño llevan la misma severidad.
+5. Escribe en `severityBasis` una línea: el camino de activación y el factor que fija el nivel.
+
+`verdict` es `confirm` (la severidad de la rúbrica es la correcta), `downgrade` (menos grave), `upgrade` (más grave) o `reject`. No cambies anclas ni citas.
+
+### Formato de la respuesta
+
+Responde **solo** con un objeto JSON válido, sin texto antes ni después y sin vallas de código, con un veredicto por candidato de la tanda:
+
+```
+{
+  "verdicts": [
+    {"id": "C1", "verdict": "confirm|downgrade|upgrade|reject", "severity": "P0|P1|P2|P3", "activation": "default|non-default|misuse",
+     "severityBasis": "camino de activación y factor que fija el nivel, en una línea",
+     "reason": "por qué confirmas, cambias o rechazas, con referencia a las líneas del fragmento"}
+  ]
+}
+```
+
+En un `reject`, `severity` puede ir a null. Prosa técnica, impersonal, concreta y sin relleno.
+````
+
+### shared_pass_judge_prompt.md
+
+Fichero: `Samples/CodebaseAnalysis.Core/templates/shared_pass_judge_prompt.md`
+
+````markdown
+Esta es la tanda de candidatos a revisar ({{ input.count }}). Compáralos entre sí y devuelve un veredicto por cada uno con el formato JSON de tu mensaje de sistema.
+
+{{ input.candidates }}
+
+---
+
+Responde solo con el objeto JSON de los veredictos de esta tanda.
+````
 ## Otras plantillas
 
 ### document_image_describe.md — Descripción de imágenes de documentos (VisionRole)

@@ -19,9 +19,14 @@ standard contract works with these models unchanged.
 | Named wrapper | `<tool_call>get_weather\n<city>Madrid</city></tool_call>` |
 | Plain XML | `<get_weather><city>Madrid</city></get_weather>`, attributes and child elements alike |
 | JSON in a wrapper | `<tool_call>{"name":"get_weather","arguments":{...}}</tool_call>` |
-| Bare JSON | `{"name":...,"arguments":...}` in the content, object or array |
+| Bare JSON | `{"name":...,"arguments":...}` as the whole (trimmed) content, object or array |
 
-Names are matched across `-` and `_`, so `<get-weather>` finds `get_weather`.
+The notations are tried in that order and the first one that yields a call wins. In the named
+wrapper the body is read as JSON or as `<arg_key>k<arg_value>v` pairs; any other body (such as the
+child elements in the example) arrives as a single `content` argument. JSON calls also accept
+`tool_name`, `parameters`/`input` and the OpenAI `function` shape.
+
+Names are matched case-insensitively across `-` and `_`, so `<get-weather>` finds `get_weather`.
 
 Matching is deliberately exact, never by substring: `<file>` does **not** resolve to `view_file`.
 Prose containing angle brackets would otherwise turn into phantom tool calls, which is a far worse
@@ -65,7 +70,11 @@ OpenAiPluginRegistry.RegisterNormalizer(new MyToolCallNormalizer());  // IRespon
 - `IReasoningExtractor` works during streaming: `ProcessChunk` per delta, `Flush` at the end, and
   `NormalizeAssembled` for the non-streaming path. Extractors chain — one's output content is the
   next one's input.
-- `IResponseNormalizer` runs once the response is assembled, and receives the available tool names.
+- `IResponseNormalizer` runs once the response is assembled, and receives the available tool names
+  (`NormalizationContext`).
+
+Both lists are `ConcurrentBag`s, so the order in which several registered plugins run is not the
+registration order.
 
 Two are registered out of the box: `ThinkTagReasoningExtractor` and `XmlToolCallNormalizer`.
 
@@ -101,8 +110,8 @@ window and was truncated at the front.
 ## Repetition
 
 Models that are struggling tend to call the same tool with the same arguments over and over. The
-tool-calling loop compares each round against the previous one and stops when nothing is changing,
-telling the model why so it can answer with what it has.
+tool-calling loop tracks the calls of the last 10 rounds and stops when nothing is changing,
+telling the model why so it can answer with what it has (see [Tools](tools.md#read-only-tools)).
 
 Read-only tools get more rope than mutating ones — re-reading a file can be legitimate exploration,
 repeating a write cannot — which is why a tool that only reads should say so:

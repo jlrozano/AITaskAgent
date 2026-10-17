@@ -185,7 +185,7 @@ public interface IStepActivator
 
 public interface IFallbackable
 {
-    bool SwitchToNextFallback(IStepResult error, int attempt);
+    bool SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt);
 }
 
 public interface IResume
@@ -352,16 +352,28 @@ Base interface for events.
 ```csharp
 public interface IProgressEvent
 {
+    const string CommonLogFormat = "{EventType} from {StepName} | CorrelationId: {CorrelationId}";
+
     string StepName { get; }
     string EventType { get; }
     DateTimeOffset Timestamp { get; }
     string? CorrelationId { get; }
     bool SuppressFromUser { get; }
     string SchemaVersion { get; }
+
+    void WriteLog(ILogger logger, LogLevel level) =>
+        logger.Log(level, CommonLogFormat, EventType, StepName, CorrelationId);
 }
 ```
 
 `SuppressFromUser` events are logged but never routed to subscribers. `SchemaVersion` supports
 backward-compatible evolution of the event payloads; the framework emits `"1.0"`.
+
+`WriteLog` is called by `EventChannel` for every event when its log level is not `LogLevel.None`:
+the channel picks whether and at which level, the event picks which fields appear. The default
+interface implementation writes only the common fields; `ProgressEventBase` redeclares it as
+`public virtual` so derived records can override it (`LlmResponseEvent` adds its `Content`). Note
+that a default interface member is only reachable through the interface, so a custom event that
+implements `IProgressEvent` directly and wants its own log line must declare `WriteLog` itself.
 
 **Source:** [IProgressEvent.cs](../../Framework/Observability/IProgressEvent.cs)

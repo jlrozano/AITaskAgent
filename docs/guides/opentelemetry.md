@@ -18,7 +18,7 @@ The framework already emits:
 
 | Source | What's Tracked |
 |--------|----------------|
-| `Telemetry.Source` | Activities for Pipeline and Step execution |
+| `Telemetry.Source` | Activities `Pipeline.<name>`, `Step.<name>`, `LLM.Invoke` (one per LLM call) and `Tool.<name>` (`LlmTool` only) |
 | `Metrics` | Counters and histograms for steps, LLM calls, tokens |
 | `EventChannel` | Real-time events (can be bridged to traces) |
 
@@ -46,7 +46,7 @@ dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 
 ```csharp
 using AITaskAgent.Configuration;
-using AITaskAgent.Core.Base;
+using AITaskAgent.Core;          // AITaskAgentConstants
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
@@ -258,7 +258,7 @@ AITaskAgent adds these tags to traces:
 | `step.type` | Step class name |
 | `step.success` | Execution success |
 | `step.duration_ms` | Execution time |
-| `correlation_id` | Request correlation |
+| `correlation.id` | Request correlation |
 | `llm.model` | LLM model used |
 | `llm.provider` | Provider name |
 | `llm.tokens_used` | Total tokens |
@@ -266,8 +266,11 @@ AITaskAgent adds these tags to traces:
 | `llm.has_tools` | Whether the request offered tools |
 | `llm.finish_reason` | Normalized finish reason |
 | `tool.name` | Tool identifier |
-| `tool.count` | Tools offered to the model |
-| `step.attempt` / `step.max_retries` | Retry position |
+| `tool.duration_ms` | Tool execution time |
+| `tool.success` | Tool execution success |
+
+`AITaskAgentConstants.TelemetryTags` also declares `tool.count`, `step.attempt` and
+`step.max_retries`, but no activity currently sets them.
 
 > [!NOTE]
 > `AITaskAgent:Observability:EnableTracing` and `EnableMetrics` are bound into
@@ -311,7 +314,7 @@ Use `ILogger<T>` in your middlewares and services normally. The framework ensure
 
 ```csharp
 using AITaskAgent.Configuration;
-using AITaskAgent.Core.Base;
+using AITaskAgent.Core;
 using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Steps;
 using AITaskAgent.Core.StepResults;

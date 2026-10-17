@@ -53,7 +53,7 @@ section at all — LLM configuration is only validated when it is present.
 
 ```csharp
 using AITaskAgent.Configuration;
-using AITaskAgent.Core.Execution;      // IPipeline, PipelineContextFactory
+using AITaskAgent.Core.Execution;      // IPipeline
 using AITaskAgent.Core.StepResults;    // StepResult<T>
 using AITaskAgent.Core.Steps;          // DelegatedStep<,>
 using Microsoft.Extensions.DependencyInjection;
@@ -88,8 +88,9 @@ Three things have to line up, and the framework enforces all three at startup:
 | `ServiceType` | `appsettings.json`, per provider | must match the `ILlmService.Name` of a registered service |
 | `Provider` | `appsettings.json`, per role | must match a key under `Providers` |
 
-Current `ILlmService.Name` values: `openai` (`OpenAILLmService.OpenAILlmService`)
-and `gemini` (`GeminiLlmService.GeminiLlmService`).
+Current `ILlmService.Name` values: `openai` (`OpenAILLmService.OpenAILlmService`),
+`openrouter` (`OpenAILLmService.OpenRouterLlmService`), `azure-openai`
+(`OpenAILLmService.AzureOpenAILlmService`) and `gemini` (`GeminiLlmService.GeminiLlmService`).
 
 `appsettings.json`:
 
@@ -115,7 +116,9 @@ and `gemini` (`GeminiLlmService.GeminiLlmService`).
 
 `ServiceType` is what decouples the provider *key* from the service that serves
 it. `"OpenRouter"` is a free-form label; without `ServiceType` the framework
-looks for an `ILlmService` literally named `OpenRouter`, finds none, and throws.
+uses the key itself: it looks for an `ILlmService` whose `Name` equals the key
+(case-insensitive) or, failing that, contains it, and throws if none does. With only
+`OpenAILlmService` registered, `OpenRouter` matches nothing.
 
 `${VAR}` placeholders are expanded from environment variables by the framework
 itself (`GetEx`/`BindEx`), for every string value under `LlmProviders`. You do
@@ -180,14 +183,12 @@ after; `SimpleChatDemo` before. Both work.
 
 ## 5. Do not hand-roll the configuration
 
-Two samples in this repository (`FileToolsTestApp`, `AdvancedLlmPipeline`)
-rebuild the `LlmEnvironment` by hand: plain `Bind()`, their own `${VAR}` regex,
-and reflection to attach an `ILlmService` guessed from a substring of the
-provider key, with a silent fallback to "the first provider in the dictionary"
-when a role name does not match. They are **not** the pattern to copy — see
-[the configuration audit](../project_notes/sample-configuration-audit.md).
-Follow `SimpleChatDemo`, `McpIntegrationDemo`, `PipelineVisualizer` or
-`YamlPipelineDemo` instead.
+Every sample now reads `IOptions<LlmEnvironment>` built by `AddAITaskAgent()`,
+but two keep leftovers you should not copy: `AdvancedLlmPipeline` still expands
+`${VAR}` with its own regex before the framework sees the file, and
+`FileToolsTestApp` falls back to the first provider in the dictionary with a
+hard-coded `gpt-4o` role when the requested and default roles are missing.
+Follow `SimpleChatDemo`, `McpIntegrationDemo` or `PipelineVisualizer` instead.
 
 What hand-rolling costs you: startup validation (a typo in a role's `Provider`
 silently points at the wrong backend instead of throwing), automatic `${VAR}`

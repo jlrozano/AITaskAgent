@@ -138,9 +138,10 @@ LlmRole role = env.Roles["default"];        // model + inference + fallbacks + s
 LlmProvider provider = env.Providers["Gemini"];  // connection + model catalogue with prices
 ```
 
-Binding fails loudly at startup for a role pointing at an unknown provider, a provider whose
-`ServiceType` matches no registered `ILlmService.Name`, a missing `BaseUrl` or `Model`, or a
-`DefaultRole` that is not among the configured roles. See [LLM Namespace](llm-namespace.md).
+Binding fails loudly at startup for a role without a `Provider` or pointing at an unknown provider,
+a provider whose `ServiceType` matches no registered `ILlmService.Name`, a missing `BaseUrl` or
+`Model`, a fallback pointing at an unknown provider or without a `Model`, or a `DefaultRole` that is
+not among the configured roles. See [LLM Namespace](llm-namespace.md).
 
 ---
 

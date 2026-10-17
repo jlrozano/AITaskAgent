@@ -70,6 +70,7 @@ using AITaskAgent.LLM.Steps;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using OpenAILLmService;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddSingleton<ILlmService, OpenAILlmService>();

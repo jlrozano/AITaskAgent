@@ -33,7 +33,8 @@ Setup has **two** steps: register the services, then initialize the framework on
 using AITaskAgent.Configuration;
 using AITaskAgent.LLM.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting;    // package Microsoft.Extensions.Hosting
+using OpenAILLmService;                // project OpenAILLmService/OpenAILLmService.csproj
 
 var builder = Host.CreateApplicationBuilder(args);
 

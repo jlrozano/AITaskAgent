@@ -89,7 +89,8 @@ public class ObservableStep : TypedStep<In, Out>
 {
     public ObservableStep() : base("Observable") { }
     
-    protected internal override void EnrichActivityBefore(
+    // protected internal in StepBase; outside the framework assembly the override is plain protected
+    protected override void EnrichActivityBefore(
         Activity? activity, 
         IStepResult input, 
         PipelineContext context)
@@ -97,7 +98,7 @@ public class ObservableStep : TypedStep<In, Out>
         activity?.SetTag("custom.input_size", input.Value?.ToString().Length);
     }
     
-    protected internal override void EnrichActivityAfter(
+    protected override void EnrichActivityAfter(
         Activity? activity, 
         IStepResult result, 
         PipelineContext context)
@@ -196,7 +197,7 @@ Implement `SwitchToNextFallback` to give a step a second chance with a different
 and runs again. `BaseLlmStep` uses this to walk `LlmRole.Fallbacks`.
 
 ```csharp
-protected override bool SwitchToNextFallback(IStepResult error, int attempt)
+protected override bool SwitchToNextFallback(IStepResult error, PipelineContext context, int attempt)
 {
     if (_endpointIndex + 1 >= _endpoints.Count) return false;
     _endpointIndex++;

@@ -16,8 +16,10 @@ The fast-forward is not an optimisation detail — it is the point. Steps that a
 or wrote to a database must not run twice because someone took an hour to click a button.
 
 What makes it correct is the caching rule: a result is written **only after the step and all of its
-`NextSteps` have succeeded**. So `StepC` is absent from the cache and runs again, while `StepA` and
-`StepB` are genuinely finished and are served from it.
+`NextSteps` have succeeded**. `StepA` and `StepB` are genuinely finished and are served from the
+cache. The one exception is the suspending step itself: `StepC`'s *suspended* result is stored under
+its key, and finding it there with `SuspendInfo` set is what makes the resume restore `StepC`'s
+state and run it again instead of serving it.
 
 ## Suspending
 
@@ -42,8 +44,9 @@ protected override Task<IStepResult> ExecuteAsync(
 }
 ```
 
-`DataToReview` is what you show the person. `state` is what the step needs to pick up where it left
-off, and it reaches the step again through `IResume`.
+`DataToReview` is what you show the person. The `state` constructor argument is only the result's
+`Value`; what the step gets back on resume is whatever its `IResume.SaveStateAsync` returns, which
+the pipeline calls at suspension time.
 
 ## Saving and restoring step state
 
@@ -62,13 +65,16 @@ protected override Task RestoreStateAsync(object? state, object? hitlResponse)
 ```
 
 `StatelessTemplateLlmStep` already saves its whole conversation this way, so an LLM step that
-suspends mid-tool-call resumes with its history intact.
+suspends mid-tool-call resumes with its history intact (with one caveat for shared instances, see
+[Known limitations](#known-limitations)).
 
 ## What the pipeline does
 
-On suspension it stores the step's state in the context under a key scoped by `CorrelationId`,
-emits a `PipelineSuspendedEvent` carrying `TargetStepPath`, `IsBranchSuspension` and `BranchName`,
-and returns the suspended result up the chain.
+On suspension it calls `step.Resume.SaveStateAsync`, stores the returned state in `Metadata` under
+a key scoped by `CorrelationId`, emits a `PipelineSuspendedEvent` carrying `TargetStepPath`,
+`IsBranchSuspension` and `BranchName`, caches the suspended result under the step's path, and
+returns it up the chain. A step whose `Resume` is null (one that implements `IStep` directly) makes
+it throw `InvalidOperationException`.
 
 Crucially, results are cached **only after a step and all its `NextSteps` have succeeded**. That is
 what makes the fast-forward correct: anything in the cache is genuinely finished, and anything
@@ -94,9 +100,10 @@ var result = await pipeline.ExecuteAsync(
     context: resumed);
 ```
 
-The pipeline recognises a resume by the saved state already present in the context. It replays the
-completed steps from cache, reaches the suspended one, calls its `RestoreStateAsync` with both the
-saved state and your input, and carries on.
+The pipeline recognises a resume by the saved state already present in the context; the input
+must then be an `IStepResult`. It replays the completed steps from cache, reaches the suspended
+one, calls its `RestoreStateAsync` with the saved state and your input's `Value`, runs it again and
+carries on.
 
 `InMemoryPipelineContextStorage` ships with the framework and is fine for a single process. Anything
 that must survive a restart needs a real `IPipelineContextStorage` — Redis, a database, a file.
@@ -106,32 +113,49 @@ that must survive a restart needs a real `IPipelineContextStorage` — Redis, a 
 | Event | When |
 |---|---|
 | `PipelineSuspendedEvent` | a step asked for input; carries the step path and, for parallel work, the branch |
-| `PipelineResumingEvent` | a resume has started |
-| `PipelineResumedEvent` | the suspended step has been rehydrated and execution continues |
-| `StepCachedHitEvent` | a completed step was served from cache instead of re-running |
+
+`PipelineResumingEvent`, `PipelineResumedEvent` and `StepCachedHitEvent` are defined in
+`AITaskAgent.Observability.Events`, but the framework does not emit them today: a resume and a
+cache hit only show up in the debug log.
 
 Subscribing with the run's `CorrelationId` gives you just that run's events, which is usually what a
 UI wants.
 
 ## Suspending inside branches and loops
 
-`ParallelStep` marks a suspension raised inside a branch (`IsBranchSuspension`, `BranchName`), and
-each branch runs with its own conversation and step path, so one branch waiting for a person does
-not disturb the others. `LoopStep` keys its cache per iteration, so resuming re-enters the iteration
+The pipeline marks a suspension raised inside a `ParallelStep` branch (`IsBranchSuspension`,
+`BranchName`), and each branch runs with its own conversation and step path, so one branch waiting
+for a person does not disturb the others. But `ParallelStep` does not carry the branch's
+`SuspendInfo` into its `ParallelResult`, so the pipeline does **not** stop there: it continues after
+the parallel step as if the branch had finished. `LoopStep` keys its cache per iteration, so resuming re-enters the iteration
 that suspended rather than restarting the loop.
 
-## Current limits
+## Known limitations
 
 Worth knowing before you build on this:
+
+- **A suspended `ParallelStep` branch is lost.** `ParallelStep` only copies branch errors into its
+  `ParallelResult` and never sets `SuspendInfo`, so the pipeline treats the parallel step as
+  finished, runs the next step and caches it as completed. On resume the parallel step is served
+  from that cache and the suspended branch never gets its `RestoreStateAsync`. The saved state key
+  is per `CorrelationId`, not per step, so a second suspension in the same run would overwrite it
+  anyway. Do not suspend inside a `ParallelStep` branch until this is fixed.
+- **`StatelessTemplateLlmStep` keeps its suspension state in instance fields.** The conversation a
+  call uses is stored per invocation in the context, but the copy that `SaveStateAsync` returns and
+  the one `RestoreStateAsync` receives live in fields of the step object, because those hooks get
+  no `PipelineContext`. One instance shared by concurrent runs (for example a singleton step) can
+  therefore save, or resume with, another run's conversation. Use one instance per run when the
+  step can suspend.
 
 - **Persisting the context is your job.** Nothing in the framework calls
   `IPipelineContextStorage.SaveAsync`; it only reads through `PipelineContextFactory.CreateFromId`.
 - **`ResumeRequest` is not wired up.** The type exists and describes the right shape
   (`TargetStepPath`, `UserInput`, `Metadata`), but no code path consumes it. Resuming today means
   passing the answer as the pipeline input, as shown above.
-- **The correlation id is generated, not chosen.** `PipelineContextFactory.Create` always mints a
-  new `Guid`, so you have to read `context.CorrelationId` after the fact rather than supplying your
-  own — awkward when you want to key a resume off a business id.
+- **The factory does not take a correlation id.** `PipelineContextFactory.Create` always mints a
+  new `Guid`. `PipelineContext` is a record with an `init` `CorrelationId`, so to key a run off a
+  business id use `PipelineContextFactory.Create() with { CorrelationId = orderId }` or build the
+  context with `new PipelineContext(...) { CorrelationId = orderId }`.
 
 ## See also
 

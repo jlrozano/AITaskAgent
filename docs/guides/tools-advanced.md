@@ -48,13 +48,13 @@ public abstract class LlmTool : ITool
         // 1. Create trace activity
         // 2. Add basic tags
         // 3. HOOK: EnrichActivityBefore()
-        // 4. Send ToolStartedEvent
-        // 5. HOOK: EnrichStartedEvent()
+        // 4. HOOK: EnrichStartedEvent()
+        // 5. Send ToolStartedEvent
         // 6. ⚡ YOUR CODE: InternalExecuteAsync()
-        // 7. HOOK: EnrichActivityAfter()
+        // 7. HOOK: EnrichActivityAfter()   (finally block from here on)
         // 8. Record metrics
-        // 9. Send ToolCompletedEvent
-        // 10. HOOK: EnrichCompletedEvent()
+        // 9. HOOK: EnrichCompletedEvent()
+        // 10. Send ToolCompletedEvent
     }
 
     // ✅ ABSTRACT - You MUST implement this
@@ -118,8 +118,8 @@ record WeatherArgs(string Location, string? Unit = "celsius");
 
 | Member | Default | Why override |
 |--------|---------|--------------|
-| `IsReadOnly` | `false` | Set `true` for observation-only tools; buys the model 3 identical repetitions instead of 1 before the tool loop is cut |
-| `UsageGuidelines` | `null` | Behavioural guidance injected into the **system prompt**, separate from `Description` |
+| `IsReadOnly` | `false` | Set `true` for observation-only tools; the loop is then cut only when the same call appears in 3 of the last 10 iterations, instead of on the 2nd consecutive repeat of a mutating batch |
+| `UsageGuidelines` | `null` | Behavioural guidance injected into the **system prompt** (falls back to `Description` there when `null`) |
 | `GetDefinition()` | built from `Name`/`Description`/`ParametersSchema` | Full control over the emitted `ToolDefinition` |
 
 ---
@@ -150,7 +150,7 @@ Automatically added to every tool execution:
 
 - `tool.name` - Tool identifier
 - `step.name` - Step that invoked the tool
-- `correlation_id` - Request correlation ID
+- `correlation.id` - Request correlation ID
 - `tool.duration_ms` - Execution time
 - `tool.success` - Boolean success flag
 
@@ -204,13 +204,17 @@ protected override ToolStartedEvent EnrichStartedEvent(
 {
     return baseEvent with
     {
-        AdditionalData = new Dictionary<string, object?>
+        AdditionalData = new Dictionary<string, object>
         {
             ["arguments"] = argumentsJson
         }
     };
 }
 ```
+
+> `LlmTool` already fills `AdditionalData` with `"parameters"` (and, on success in the completed
+> event, `"result"`). Replacing the dictionary with `with { AdditionalData = ... }` drops those keys;
+> add to `baseEvent.AdditionalData` instead if a UI relies on them.
 
 ### EnrichCompletedEvent()
 
@@ -224,7 +228,7 @@ protected override ToolCompletedEvent EnrichCompletedEvent(
 {
     return baseEvent with
     {
-        AdditionalData = new Dictionary<string, object?>
+        AdditionalData = new Dictionary<string, object>
         {
             ["result_length"] = result.Length,
             ["result_preview"] = result[..Math.Min(100, result.Length)]
@@ -240,10 +244,13 @@ protected override ToolCompletedEvent EnrichCompletedEvent(
 Tools are executed **recursively** until the LLM returns a final response without tool calls.
 
 See [the tool loop diagram](../assets/images/tool-invocation-loop.png) in [Tools](tools.md) for the
-full loop, both guards and the three ways out of it.
+full loop, its guards and the four ways out of it.
 
-Two independent brakes: `MaxToolIterations` is the hard ceiling and throws, while the repetition
-check cuts the loop early and gracefully when the model keeps asking for the same calls.
+Two independent brakes: `MaxToolIterations` is the hard ceiling and fails the LLM call, while the
+repetition check cuts the loop early and gracefully when the model keeps asking for the same calls.
+A tool can also end the loop itself by throwing `ToolLoopStopRequestedException`: its message is
+the tool result, the rest of the batch still runs, and the step returns that message as the final
+answer without another LLM call.
 
 ### Execution Flow
 
@@ -279,9 +286,12 @@ var llmStep = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>("Agent",
 };
 ```
 
-If the limit is reached, an exception is thrown:
+If the limit is reached, the LLM call returns a failed, non-retriable result carrying (not throwing)
+a `ToolIterationLimitExceededException` (derives from `InvalidOperationException`; exposes
+`StepName` and `MaxToolIterations`). It is not a provider failure, so the default fallback does not
+switch engines on it; a derived step can recognise it in its own `SwitchToNextFallback`:
 ```
-InvalidOperationException: Maximum tool iterations (5) exceeded - possible infinite loop
+ToolIterationLimitExceededException: Maximum tool iterations (5) exceeded - possible infinite loop
 ```
 
 ---
@@ -290,30 +300,36 @@ InvalidOperationException: Maximum tool iterations (5) exceeded - possible infin
 
 ### 1. Loop Detection (repeat tolerance depends on `IsReadOnly`)
 
-Each iteration's tool calls are compared against the previous one. How many identical repetitions
-are tolerated depends on whether the batch mutates anything:
+Tool calls are compared by a normalised key (name + arguments) against a window of the last 10
+iterations. The rule depends on whether the tool mutates anything:
 
-| Batch composition | Repeats allowed |
-|-------------------|-----------------|
-| Every call's tool declares `IsReadOnly = true` | 3 |
-| Any call's tool mutates state (`IsReadOnly = false`, the default) | 1 |
+| Calls | When the loop is cut |
+|-------|----------------------|
+| A call whose tool declares `IsReadOnly = true` | Its key appears in 3 of the last 10 iterations (this one included), consecutive or not |
+| A batch with any call whose tool mutates state (`IsReadOnly = false`, the default) | The same set of calls on consecutive iterations, at the 2nd repetition |
 
 ```csharp
-// All read-only: re-reading the same file can be legitimate exploration
-// Iteration 1..3: ["read_file", "list_dir"]  → tolerated
-// Iteration 4:    ["read_file", "list_dir"]  → loop cut, final response forced
+// Read-only: re-reading the same file twice can be legitimate exploration
+// Iteration 1: ["read_file(a)"]
+// Iteration 2: ["list_dir(x)"]
+// Iteration 3: ["read_file(a)"]
+// Iteration 4: ["read_file(a)"]  → 3rd occurrence in the window: loop cut, final response forced
 
 // Mutating: repeating a write with identical arguments cannot be progress
 // Iteration 1: ["write_file"]
-// Iteration 2: ["write_file"]  → loop cut immediately
+// Iteration 2: ["write_file"]   (1st repetition, tolerated)
+// Iteration 3: ["write_file"]  → loop cut
 ```
+
+An iteration whose response executed an action tag (a note, a file write...) counts as progress:
+read-only occurrences are only counted from the last such iteration on.
 
 `MaxToolIterations` still bounds the loop, but waiting for it wastes round-trips and tells the
 model nothing; cutting on repetition ends the loop as soon as progress stops.
 
 **Log messages:**
 ```
-Step {StepName} repeated the same tool calls ({Count}/{Threshold} before stopping)
+Step {StepName} repeated the same tool calls ({Count} consecutive)
 Step {StepName} stopped: tool calls [{Tools}] repeated {Count} times without progress
 ```
 
@@ -334,7 +350,8 @@ Removes duplicate tool calls **within the same batch**:
 // - calculator(50, 50) once
 // - weather("Paris")
 
-// But add result to conversation for BOTH calculator calls
+// The duplicate is dropped before the assistant message is stored, so the
+// conversation holds one call and one result per unique call
 ```
 
 **Log message:**
@@ -349,8 +366,12 @@ If the requested tool is not in the step's `Tools` collection:
 ```csharp
 // LLM requests: unknown_tool()
 // → Error message added to conversation: "Error: Tool 'unknown_tool' not found"
-// → ToolCompletedEvent sent with Success=false
+// → No ToolCompletedEvent: the tool never ran
 ```
+
+The lookup is by exact `Name` (case-sensitive). If the name matches a registered **tag handler**
+instead, the message restates that tag's instructions (or, if the tag already ran in the same
+response, tells the model the action is done).
 
 ---
 
@@ -508,7 +529,9 @@ protected override async Task<string> InternalExecuteAsync(
 3. Activity status set to `Error`
 4. `ToolCompletedEvent` sent with `Success=false`, `ErrorMessage=ex.Message`
 5. Metrics recorded: `tool.executions` (success=false)
-6. Exception is **re-thrown** to caller
+6. Exception is **re-thrown** to caller — `BaseLlmStep` catches it and sends
+   `Error executing tool: <message>` to the model as the tool result; the step does not fail
+   (except `ToolLoopStopRequestedException`, which ends the tool loop)
 
 ---
 
@@ -627,7 +650,6 @@ protected override async Task<string> InternalExecuteAsync(
 2. Tool not assigned to the step's `Tools` collection
 3. Tool name/description unclear to LLM
 4. JSON schema too complex
-5. The role's inference settings have `ToolSupport = false`
 
 **Solutions**:
 ```csharp
@@ -651,12 +673,12 @@ public override string? UsageGuidelines =>
 ```
 
 `UsageGuidelines` is an optional `ITool` member injected into the **system prompt** (unlike
-`Description`, which goes into the `ToolDefinition`), so it is the right place for "when should I
-reach for this" guidance.
+`Description`, which goes into the `ToolDefinition`; when `UsageGuidelines` is `null` the system
+prompt repeats `Description`), so it is the right place for "when should I reach for this" guidance.
 
 ### Infinite Loop / Max Iterations Exceeded
 
-**Symptoms**: `InvalidOperationException: Maximum tool iterations (5) exceeded`
+**Symptoms**: `ToolIterationLimitExceededException: Maximum tool iterations (5) exceeded`
 
 **Possible causes**:
 1. Tool returns incomplete/invalid data
@@ -692,10 +714,9 @@ var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>("Agent", ro
 
 **Cause**: LLM is requesting the same tool multiple times in one response
 
-**This is normal** - the framework handles it automatically by:
-- Executing the tool only once
-- Caching the result
-- Adding the same result to conversation for each `tool_call_id`
+**This is normal** - the framework handles it automatically by dropping the duplicate calls
+(same normalised name + arguments) before running the batch and before storing the assistant
+message, so each unique call runs once and gets one result.
 
 **No action needed** unless it happens excessively (indicates LLM confusion).
 

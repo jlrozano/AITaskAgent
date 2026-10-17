@@ -84,7 +84,7 @@ try
     {
         Console.WriteLine($"\n\nFinal Answer: {llmResult.Content}");
         Console.WriteLine($"Tokens: {llmResult.TokensUsed}");
-        Console.WriteLine($"Cost:   {llmResult.CostUsd:C}");
+        Console.WriteLine($"Cost:   {llmResult.CostUsd} USD");
         Console.WriteLine($"Model:  {llmResult.Model}");
     }
 }
@@ -99,8 +99,8 @@ public class CalculatorTool : ITool
     public string Name => "calculator";
     public string Description => "Performs arithmetic: add, subtract, multiply, divide";
 
-    // Pure computation, no side effects: the tool-calling loop tolerates 3 identical
-    // repeats instead of 1.
+    // Pure computation, no side effects: the repeat detector judges it by the read-only rule
+    // (cut on the 3rd identical call within the last 10 iterations, consecutive or not).
     public bool IsReadOnly => true;
 
     // ParametersJsonSchema is a JSON Schema string.
@@ -192,7 +192,7 @@ public class WeatherTool : ITool
 
 Final Answer: 25 × 4 = 100. The weather in Paris is 22°C and Sunny.
 Tokens: 245
-Cost:   $0.0004
+Cost:   0.0004 USD
 Model:  gpt-4o
 ```
 
@@ -221,10 +221,13 @@ A role can also declare its own `Tools`, which a step built from it inherits.
 list. Without prices in configuration it stays null.
 
 **Loop bounds.** `MaxToolIterations` (default 5) caps the tool-calling loop. On top of that the
-step detects a model repeating the same calls with identical arguments and stops early — after 3
-repeats when every call is `IsReadOnly`, after 1 otherwise. It does not fail the step: the tool
-calls are dropped and the model is told to answer with what it has.
+step detects a model repeating the same calls with identical arguments and stops early — a
+read-only call is cut when it appears in 3 of the last 10 iterations, a set containing any
+non-read-only call when it comes 3 iterations in a row. It does not fail the step and does not call
+the model again: the tool calls are dropped and that turn's text (or a message explaining the cut)
+becomes the answer, with `ToolLoopStopMessage` set on the result.
 
 **Fallbacks.** If the role declares `Fallbacks` (or the environment declares
-`FallbackProviders`), a failed attempt switches to the next model and rewinds the conversation to
-the bookmark taken before the step ran.
+`FallbackProviders`), an attempt that failed with a provider error (`LlmProviderException`)
+switches to the next model and rewinds the conversation to the bookmark taken before the step ran;
+other failures (tool loop, parsing) do not switch.

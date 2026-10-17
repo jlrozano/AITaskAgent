@@ -73,24 +73,29 @@ has been emitted with `Success = false`.
 otherwise. Declaring it matters because the tool-calling loop uses it to decide how much repetition
 to tolerate.
 
-When the model asks for exactly the same set of calls (same names, same arguments) in consecutive
-iterations, `BaseLlmStep` counts the repeats and cuts the loop once a threshold is passed:
+`BaseLlmStep` watches the tool calls (name plus normalized arguments) of the last 10 iterations
+and cuts the loop with one of two rules:
 
-| All calls in the iteration are read-only | Identical repeats tolerated |
+| Calls | Cut when |
 |---|---|
-| yes | 3 |
-| no | 1 |
+| A read-only call | The same call appears in 3 of the last 10 iterations (this one included), consecutive or not |
+| A set with at least one non-read-only call | The same set is requested 3 iterations in a row (second repetition) |
 
-Re-reading the same file is often legitimate exploration; repeating a write with identical
-arguments means the model is stuck. When the threshold is crossed the step does not fail — the
-tool calls are dropped and the model is told why, so it answers with what it already has.
+An iteration whose response executed an in-text tag (a note, a file write...) counts as progress:
+read-only occurrences only count from the last such iteration on. Re-reading the same file can be
+legitimate exploration; repeating a write with identical arguments means the model is stuck. When a
+rule fires the step does not fail and does not call the model again: the tool calls are dropped and
+that turn becomes the final answer, keeping its text or, if it had none, a message explaining the
+cut. The candidate is marked with `LlmResponse.ToolLoopStopMessage` (and the step result with
+`LlmStepResult.ToolLoopStopMessage`) so a derived step can tell the cut from a real answer. A tool
+can also end the loop itself by throwing `ToolLoopStopRequestedException`.
 
 ```csharp
 public class ReadFileTool : LlmTool
 {
     public override string Name => "read_file";
     public override string Description => "Reads a text file";
-    public override bool IsReadOnly => true;    // three identical reads are tolerated
+    public override bool IsReadOnly => true;    // cut on the 3rd identical read within 10 iterations
     // ...
 }
 
@@ -98,7 +103,7 @@ public class WriteFileTool : LlmTool
 {
     public override string Name => "write_file";
     public override string Description => "Writes a text file";
-    // IsReadOnly stays false: one identical repeat and the loop stops
+    // IsReadOnly stays false: cut when the same call set comes 3 iterations in a row
 }
 ```
 

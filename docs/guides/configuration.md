@@ -175,10 +175,10 @@ Everything lives under the single `AITaskAgent` root section. `LlmProviders` is 
 | `ApiVersion` | `string?` | Passed through to the service (e.g. Gemini's `v1beta`). |
 | `ServiceType` | `string?` | Which registered `ILlmService` to bind. Defaults to the provider key itself. |
 | `Inference` | `LlmInferenceSettings?` | Provider-wide inference defaults. |
-| `Models` | `LlmModelSettings[]` | `Name`, `InputPricePerMillion`, `OutputPricePerMillion`, `Inference`. Drives `CalculateCost` **only** — the per-model `Inference` is not read by anything. A `null` price means unknown: the cost comes out `null`, not 0. |
+| `Models` | `LlmModelSettings[]` | `Name`, `InputPricePerMillion`, `OutputPricePerMillion`, `CachedInputPricePerMillion` (optional; falls back to the input price), `Inference`. Drives `CalculateCost` **only** — the per-model `Inference` is not read by anything. A `null` price means unknown: the cost comes out `null`, not 0. |
 
 `ServiceType` is matched against `ILlmService.Name`, first by exact case-insensitive equality and
-then by `Contains`. Several providers may share the same service (all four OpenAI-compatible
+then by `Contains`. Several providers may share the same service (the three OpenAI-compatible
 endpoints above use `"openai"`).
 
 ### Role keys
@@ -240,7 +240,14 @@ framework itself understands; every other knob goes into `Options`.
 | `JsonSupport` | `bool` | `false` |
 | `ToolSupport` | `bool` | `true` |
 | `Stop` | `IList<string>?` | – |
+| `UseMaxCompletionTokens` | `bool` | `false` |
+| `RequestTimeoutSeconds` | `int?` | – (OpenAI service: 10 min; `0` disables) |
+| `StreamingInactivityTimeoutSeconds` | `int?` | – (OpenAI service: 2 min; `0` disables) |
 | `Options` | `JObject` | `{}` — the single source of truth |
+
+`ToolSupport` is declared but no framework code reads it: tools are sent whenever the step has
+any. `RequestTimeoutSeconds` and `StreamingInactivityTimeoutSeconds` are only read by the OpenAI
+service.
 
 Vendor-specific parameters (Gemini's `ThinkingConfig`, a gateway's `enable_thinking`, routing
 hints, `TopK`, penalties…) live in `Options` and are read by the `ILlmService` implementation:
@@ -265,11 +272,12 @@ service implementation.
 Pricing is configuration, not protocol, so it lives on the provider:
 
 ```csharp
-decimal? cost = provider.CalculateCost(model, promptTokens, completionTokens);
+decimal? cost = provider.CalculateCost(model, promptTokens, completionTokens, cachedPromptTokens);
 ```
 
 It looks the model up in `Provider.Models` (case-insensitive) and returns `null` when the model has
-no pricing configured. `BaseLlmStep` calls it after each request and stores the value in
+no pricing configured. Cached prompt tokens (optional argument) are billed at
+`CachedInputPricePerMillion`, or at the input price when that is not set. `BaseLlmStep` calls it after each request and stores the value in
 `LlmResult.CostUsd`, which surfaces on the step result as `CostUsd`.
 
 ---
@@ -285,11 +293,11 @@ no pricing configured. `BaseLlmStep` calls it after each request and stores the 
 | `Timeouts.DefaultPipelineTimeout` | `TimeSpan` | `00:10:00` | Yes — `PipelineOptions` |
 | `Timeouts.DefaultStepTimeout` | `TimeSpan` | `00:01:00` | Yes — `PipelineOptions` |
 | `Timeouts.DefaultToolTimeout` | `TimeSpan` | `00:00:30` | No |
-| `Timeouts.StreamingActivityTimeout` | `TimeSpan` | `00:00:30` | No |
-| `Conversation.MaxTokens` | `int` | `8192` | Yes — the transient `ConversationContext` |
-| `Conversation.UseBookmarks` | `bool` | `true` | No |
+| `Timeouts.StreamingActivityTimeout` | `TimeSpan` | `00:00:30` | No — `[Obsolete]`; use `LlmInferenceSettings.StreamingInactivityTimeoutSeconds` |
+| `Conversation.MaxTokens` | `int` | `8192` | Only by the transient `ConversationContext` registered in DI (`PipelineContextFactory.Create` builds its own with `new ConversationContext()`, 4000) |
+| `Conversation.UseBookmarks` | `bool` | `true` | Only if you pass a `ConversationOptions` to the `ConversationContext` constructor (the DI factory does not) |
 | `Conversation.UseSlidingWindow` | `bool` | `true` | Yes — copied into every `LlmRequest` by `BaseLlmStep` |
-| `Conversation.KeepFirstNMessages` | `int` | `2` | No (the window always keeps the first 2) |
+| `Conversation.KeepFirstNMessages` | `int` | `2` | Only if you pass a `ConversationOptions` to the `ConversationContext` constructor (the DI factory does not); otherwise 2 |
 | `Conversation.SlidingWindowMaxTokens` | `int` | `8192` | Yes — copied into every `LlmRequest` by `BaseLlmStep` |
 | `CircuitBreaker.FailureThreshold` | `int` | `5` | No |
 | `CircuitBreaker.OpenDurationSeconds` | `int` | `60` | No |
@@ -312,7 +320,7 @@ no pricing configured. `BaseLlmStep` calls it after each request and stores the 
 > history is sent and `SlidingWindowMaxTokens` is ignored; exceeding the context then fails with the
 > provider's error instead of silently losing messages.
 
-All of these are `init`-only records: they are bound from configuration, not mutated at runtime.
+All of these are classes with `init`-only properties: they are bound from configuration, not mutated at runtime.
 To change them programmatically, supply the values through a configuration source (for example
 `AddInMemoryCollection`) rather than `services.Configure<AITaskAgentOptions>(o => ...)`.
 

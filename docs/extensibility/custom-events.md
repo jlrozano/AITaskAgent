@@ -35,6 +35,8 @@ public abstract record ProgressEventBase : IProgressEvent
     public string? CorrelationId { get; init; }
     public bool SuppressFromUser { get; init; }
     public string SchemaVersion { get; init; } = "1.0";
+
+    public virtual void WriteLog(ILogger logger, LogLevel level);   // common fields only
 }
 ```
 
@@ -42,10 +44,32 @@ public abstract record ProgressEventBase : IProgressEvent
 diagnostics you do not want surfacing in a UI. `SchemaVersion` lets consumers cope with payload
 changes; set it explicitly if your event ever gains or loses fields.
 
+### 3. Custom Log Line (optional)
+
+`EventChannel` logs every event by calling `evt.WriteLog(logger, level)`, unless its log level is
+`LogLevel.None`. The default writes only the common fields, using
+`IProgressEvent.CommonLogFormat` (`"{EventType} from {StepName} | CorrelationId: {CorrelationId}"`).
+Override it to add your own fields; the channel still decides whether and at which level:
+
+```csharp
+public sealed record DataProcessedEvent : ProgressEventBase
+{
+    // ...
+
+    public override void WriteLog(ILogger logger, LogLevel level) =>
+        logger.Log(level,
+            IProgressEvent.CommonLogFormat + " | Records: {RecordsProcessed}",
+            EventType, StepName, CorrelationId, RecordsProcessed);
+}
+```
+
+An event that implements `IProgressEvent` directly instead of deriving from `ProgressEventBase` gets
+the same common-fields line from the interface's default implementation.
+
 ## Emitting Events from Steps
 
 ```csharp
-public class DataProcessingStep : TypedStep<DataInput, DataOutput>
+public class DataProcessingStep() : TypedStep<DataInput, DataOutput>("DataProcessing")
 {
     protected override async Task<DataOutput> ExecuteAsync(
         DataInput input,
@@ -134,7 +158,7 @@ using var subscription = eventChannel.Subscribe(async (evt, ct) =>
 ```
 
 `Subscribe` returns an `IDisposable`; disposing it unsubscribes and drains the handler's buffer.
-Each subscription has its own bounded channel (200 items, drop-oldest), so a slow handler never
+Each subscription has its own bounded channel (1000 items, drop-oldest), so a slow handler never
 blocks the pipeline — it loses the oldest events instead.
 
 ### Reader form

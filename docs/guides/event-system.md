@@ -28,11 +28,26 @@ public interface IProgressEvent
     string? CorrelationId { get; }
     bool SuppressFromUser { get; }    // true = logging/debugging only
     string SchemaVersion { get; }     // "1.0" — schema evolution marker
+
+    // Default implementation: logs the common fields only
+    void WriteLog(ILogger logger, LogLevel level) =>
+        logger.Log(level, CommonLogFormat, EventType, StepName, CorrelationId);
 }
 ```
 
 `ProgressEventBase` is the abstract record every framework event derives from; it supplies all of
-the above except `EventType`.
+the above except `EventType`, and redeclares `WriteLog` as `virtual` so an event can log its own
+fields (`LlmResponseEvent` overrides it to include `Content`).
+
+### Automatic logging
+
+`EventChannel.SendAsync` logs every event — including those with `SuppressFromUser = true` —
+by calling `evt.WriteLog(logger, EventLogLevel)`, and only when `EventLogLevel != LogLevel.None`.
+The channel knows nothing about concrete event types; each event decides what it writes.
+`EventChannelOptions.EventLogLevel` defaults to `None`, but the singleton registered by
+`AddAITaskAgent` takes its level from `AITaskAgent:Observability:EventLogLevel`
+(`ObservabilityOptions`, default `Debug`). The `new EventChannel()` constructor used outside DI
+defaults to `Information`.
 
 ### IEventChannel
 
@@ -125,13 +140,16 @@ await foreach (IProgressEvent evt in subscription.Reader.ReadAllAsync(cancellati
 ```
 
 `IEventSubscription` is `IAsyncDisposable` and exposes `ChannelReader<IProgressEvent> Reader`. The
-channel is bounded: once a slow consumer fills `capacity`, further events for that subscriber are
-dropped rather than blocking the pipeline.
+channel is bounded with `BoundedChannelFullMode.DropOldest`: once a slow consumer fills
+`capacity`, each new event evicts the **oldest** buffered one (with a warning log) rather than
+blocking the pipeline. Handler-based `Subscribe` uses the same mode with a capacity of
+`EventChannelOptions.ChannelCapacity` (1000).
 
 ### Per-execution subscribers
 
-`IPipeline.ExecuteAsync` accepts a `subscribers` argument. The pipeline then creates a **local**
-`EventChannel` for that run, activates the handlers at start and completes them when execution
+`IPipeline.ExecuteAsync` accepts a `subscribers` argument. When no `context` is passed, the
+pipeline then creates a **local** `EventChannel` for that run (with an explicit `context` the
+argument is ignored), activates the handlers at start and completes them when execution
 finishes, giving full isolation between concurrent runs:
 
 ```csharp
@@ -163,12 +181,15 @@ yourself.
 | `BranchCompletedEvent` | `branch.completed` | `ParallelStep` | A parallel branch finishes |
 | `LoopExhaustedEvent` | `loop.exhausted` | `LoopStep` | `MaxIterations` reached without a break |
 | `LlmResponseEvent` | `llm.response` | `BaseLlmStep` | LLM response (streaming chunk or final) |
-| `ToolStartedEvent` | `tool.started` | `LlmTool` | Tool execution begins |
-| `ToolCompletedEvent` | `tool.completed` | `LlmTool` | Tool execution ends |
+| `ToolStartedEvent` | `tool.started` | `LlmTool`, `McpToolWrapper` | Tool execution begins |
+| `ToolCompletedEvent` | `tool.completed` | `LlmTool`, `McpToolWrapper` | Tool execution ends |
 | `TagStartedEvent` | `tag.started` | `StreamingTagParser` | An action tag's opening tag was recognised (its body may still be arriving) |
 | `TagCompletedEvent` | `tag.completed` | `TagHandlerBase` / `StreamingTagParser` | The tag's handler finished (`Success`), or the tag was never closed (`Success = false`) |
 
-The string literals are available as constants on `AITaskAgentConstants.EventTypes`.
+Most string literals are available as constants on `AITaskAgentConstants.EventTypes`; the
+exceptions are `branch.started` / `branch.completed` (`BranchStartedEvent.EventTypeName` /
+`BranchCompletedEvent.EventTypeName`) and `step.timeout`, which is only a literal inside
+`StepTimeoutEvent`.
 
 The table gives you the emitter. What it cannot show is *when* each one fires and how they nest,
 which is what a progress UI actually has to model:
@@ -180,7 +201,7 @@ which is what a progress UI actually has to model:
 Two consequences are worth stating outright, because they break the obvious implementation:
 `StepStartedEvent` arrives **more than once** for the same step (once per attempt, from two
 different middlewares), while `StepCompletedEvent` arrives **once** — so pairing them one-to-one
-will leak. And a run that suspends never emits `PipelineCompletedEvent` at all.
+will leak. And a run that suspends still ends with `PipelineCompletedEvent`, but with `Success = false` and `ErrorMessage = "Suspended awaiting input"` (`Pipeline.cs:181-199`).
 
 ### Declared but not yet emitted
 
@@ -189,16 +210,21 @@ raises them. Do not build a UI that waits for one:
 
 | Event | EventType |
 |-------|-----------|
-| `StepProgressEvent` | `step.progress` |
 | `StepCachedHitEvent` | `step.cached_hit` |
 | `PipelineResumingEvent` | `pipeline.resuming` |
 | `PipelineResumedEvent` | `pipeline.resumed` |
+
+`StepProgressEvent` is a separate case: it implements `IProgressEvent` directly (not
+`ProgressEventBase`) and its `EventType` is a required property set by the sender, so there is no
+fixed `step.progress` value. The core framework never sends it; the `FileTools` tools do, through
+`BaseFileTool.NotifyProgressAsync`, with `EventType = "ToolProgress"` and a `Message`.
 
 ### StepPath
 
 Several events carry a `StepPath` in addition to `StepName`: `StepStartedEvent`,
 `StepCompletedEvent`, `StepValidationEvent`, `StepTimeoutEvent`, `StepCachedHitEvent`,
-`BranchStartedEvent`, `BranchCompletedEvent`, `PipelineResumingEvent`, `PipelineResumedEvent`.
+`BranchStartedEvent`, `BranchCompletedEvent`, `PipelineSuspendedEvent`, `PipelineResumingEvent`,
+`PipelineResumedEvent`.
 The path mirrors `PipelineContext.CurrentStepPath` (`"MyLoop/Iter_2/Inner"`) and is what
 lets a UI place an event inside a nested or parallel execution tree.
 
@@ -227,9 +253,17 @@ public sealed record LlmResponseEvent : ProgressEventBase
     public string? RawFinishReason { get; init; }
     public bool IsThinking { get; init; }     // reasoning/thought chunk
     public int TokensUsed { get; init; }
+    // Set only on the final event of the primary choice; null when not reported/priced
+    public int? PromptTokens { get; init; }
+    public int? CompletionTokens { get; init; }
+    public int? CachedPromptTokens { get; init; }
+    public decimal? CostUsd { get; init; }
     public string? Model { get; init; }
     public string? Provider { get; init; }
     public List<ToolCall>? ToolCalls { get; init; }
+
+    // Overrides the default log line to add IsThinking, FinishReason, Content and TokensUsed
+    public override void WriteLog(ILogger logger, LogLevel level) { ... }
 }
 ```
 
@@ -344,17 +378,22 @@ default. Override them in a derived step when the enrichment is intrinsic to tha
 
 ### BaseLlmStep Enrichment
 
-`BaseLlmStep` already enriches its activities with:
+`BaseLlmStep` opens a child `LLM.Invoke` activity (`ActivityKind.Client`) for every LLM call and
+tags it with:
 
 - `llm.model` - Model used
 - `llm.provider` - Provider name
+- `llm.iteration` - Tool-loop iteration
+- `llm.has_tools` - Whether tools were sent
 - `llm.tokens_used` - Total tokens
+- `llm.finish_reason` - Finish reason
 
 ---
 
 ## Creating Custom Events
 
-Derive from `ProgressEventBase` and override `EventType`:
+Derive from `ProgressEventBase` and override `EventType` (and `WriteLog`, if the automatic log
+line should carry more than the common fields):
 
 ```csharp
 public sealed record ContextSnapshotEvent : ProgressEventBase

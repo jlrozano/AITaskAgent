@@ -25,9 +25,9 @@ await pipeline.ExecuteAsync(
 );
 ```
 
-There is a single `ExecuteAsync` overload. Its defaults come from `PipelineOptions`
-(configuration section `"Pipeline"`, itself seeded from `AITaskAgent:Timeouts`), exposed as
-`DefaultPipelineTimeout` and `DefaultStepTimeout`.
+There is a single `ExecuteAsync` overload. Its defaults come from `PipelineOptions`, which
+`AddAITaskAgent()` fills from `AITaskAgent:Timeouts` (no section is bound to `PipelineOptions`
+itself), exposed as `DefaultPipelineTimeout` and `DefaultStepTimeout`.
 
 Global middlewares are **not** passed per call: register them once with
 `PipelineMiddlewareRegistry.Register(...)` or
@@ -109,18 +109,19 @@ iterative refinement and self-correction possible without declaring the shape in
 
 ### 1. Context Activation & Setup
 Before execution, the `PipelineContextFactory` initializes the **Operational Memory (Context)**:
-- **Fresh Mode**: No IDs provided. Initializes a clean context with a new `CorrelationId`.
-- **Resumption Mode (`ContextId`)**: Recovers existing context. The engine uses `StepResults` to skip previously completed steps and resume exactly where it failed.
-- **Continuation Mode (`ConversationId`)**: New context but pre-loads the long-term history of a specific conversation.
+- **Fresh Mode** (`Create()`): Initializes a clean context with a new `CorrelationId`.
+- **Resumption Mode** (`CreateFromId(id)`): Recovers a stored context. The engine uses `StepResults` to skip previously completed steps and resume where it stopped.
+- **Continuation Mode** (`Create(conversation)`): New context, but with a `ConversationContext` whose history is already loaded.
 
 ### 2. The Execution Cycle
 The engine processes a dynamic **Step Stack** instead of a rigid list:
 
 1. **Fetch**: Pops the next step from the stack.
 2. **Wrap (Middleware Chain)**: The step is executed through a chain of "shields":
+    - **User middlewares**: Whatever was registered in `PipelineMiddlewareRegistry`, outermost.
     - **Observability**: Emits traces and events.
-    - **Resilience**: Manages retries via `RetryMiddleware`.
-    - **Safety**: Enforces execution timeouts.
+    - **Safety**: Enforces execution timeouts (`TimeoutMiddleware`), covering all retry attempts.
+    - **Resilience**: Manages retries via `RetryMiddleware`, which calls the step itself.
 3. **Execute & Persist**: The step logic runs. The result is stored in the **Context (StepResults)** cache to prevent re-execution and enable bookmarks.
 4. **Dynamic Branching**:
     - **Error?** → Execution stops; Error results are emitted.
@@ -128,8 +129,8 @@ The engine processes a dynamic **Step Stack** instead of a rigid list:
 
 ### 3. Peripheral Observability (Projections)
 As the loop iterates, it emits data to the **EventChannel**. This is a projection of the internal state, not part of the context itself:
-- **Events (Milestones)**: `PipelineStarted`, `StepCompleted`, `RouterDecision`, `ToolExecution`.
-- **Metrics (Health)**: `StepErrors` counters, `StepDuration` histograms, `TokenUsage` metrics.
+- **Events (Milestones)**: `PipelineStartedEvent`, `StepCompletedEvent`, `StepRoutingEvent`, `ToolStartedEvent` / `ToolCompletedEvent`, among others.
+- **Metrics (Health)**: counters such as `aitaskagent.step.errors` and `aitaskagent.llm.tokens`, histograms such as `aitaskagent.step.duration`.
 - **Traces (Call Graph)**: Distributed traces showing the hierarchy of dynamic calls.
 
 ---

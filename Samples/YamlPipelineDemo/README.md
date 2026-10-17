@@ -17,16 +17,16 @@ Un pipeline de 3 pasos que demuestra el engine YAML con integración OpenRouter 
 
 ## Requisitos
 
-- .NET 8+
-- Clave de API de OpenRouter (para modelos con razonamiento como DeepSeek-R1)
+- .NET 10 SDK (`net10.0`)
+- Clave de API de OpenRouter
 
 ## Setup
 
-### 1. Configurar OpenRouter API Key (Recomendado para Razonamiento)
+### 1. Configurar OpenRouter API Key
 
-El `appsettings.development.json` ya está preconfigurado con OpenRouter y DeepSeek-R1 (modelo con razonamiento).
+El `appsettings.json` ya está preconfigurado con OpenRouter (proveedor `OpenRouter`, `ServiceType: openai`) y el rol `default` con el modelo `openai/gpt-oss-120b:free`.
 
-Solo necesitas tu clave de API de OpenRouter:
+Solo necesitas tu clave de API de OpenRouter (se expande desde `${OPENROUTER_API_KEY}`):
 
 ```bash
 # Windows
@@ -36,30 +36,31 @@ set OPENROUTER_API_KEY=sk-or-v1-...
 export OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-**Modelos disponibles con razonamiento** en `appsettings.development.json`:
-- `deepseek/deepseek-r1:free` - DeepSeek R1 (gratis en OpenRouter)
-- `openai/o1` - OpenAI O1 (requiere créditos)
-- `openai/o1-mini` - OpenAI O1 Mini
+Para usar otro modelo, cambia `Roles:default:Model` (o sobrescríbelo en `appsettings.development.json`).
 
 ### 2. (Alternativa) Usar OpenAI Directamente
 
-Si prefieres usar OpenAI en lugar de OpenRouter, crea/modifica `appsettings.development.json`:
+Si prefieres usar OpenAI en lugar de OpenRouter, crea `appsettings.development.json` (está en `.gitignore`); se carga siempre que exista, después de `appsettings.json`:
 
 ```json
 {
   "AITaskAgent": {
     "LlmProviders": {
       "Providers": {
-        "default": {
-          "Provider": "OpenAI",
+        "OpenAI": {
+          "ServiceType": "openai",
           "BaseUrl": "https://api.openai.com/v1",
           "ApiKey": "${OPENAI_API_KEY}",
-          "Model": "gpt-4o",
-          "JsonCapability": "JsonObject",
-          "Reasoning": true
+          "Inference": { "JsonSupport": true }
         }
       },
-      "DefaultProvider": "default"
+      "Roles": {
+        "default": {
+          "Provider": "OpenAI",
+          "Model": "gpt-4o"
+        }
+      },
+      "DefaultRole": "default"
     }
   }
 }
@@ -70,21 +71,17 @@ Y configura:
 export OPENAI_API_KEY=sk-...
 ```
 
-### 3. Ejecutar en Development Mode
+### 3. Ejecutar
 
 ```bash
-# Windows
-set DOTNET_ENVIRONMENT=Development
-dotnet run
-
-# Linux/macOS
-export DOTNET_ENVIRONMENT=Development
 dotnet run
 ```
 
+`Program.cs` carga `appsettings.development.json` (opcional) sin mirar `DOTNET_ENVIRONMENT`, y después las variables de entorno.
+
 ## Output Esperado
 
-Durante la ejecución verás el **razonamiento interno del LLM** en amarillo:
+Durante la ejecución verás en amarillo el **contenido de cada `LlmResponseEvent`** (incluido el razonamiento, si el modelo lo emite) y el resto de eventos serializados como JSON. El filtro por `IsThinking` y la cabecera `[💭 LLM Thinking - ...]` están comentados en `Program.cs`, igual que la impresión de los resultados de los pasos 1 y 2; la salida siguiente es ilustrativa:
 
 ```
 === YAML Pipeline Engine Demo with LLM Reasoning ===
@@ -140,18 +137,19 @@ Recommendation: Process payment and file in Q1 2026 expenses
 - `pipelines/main.yaml` - Definición del pipeline con 3 pasos
 - `schemas/*.json` - JSON Schemas para inputs y outputs
 - `prompts/*.md` - System prompts para cada paso
-- `appsettings.development.json` - Configuración de OpenAI (local, excluido de git)
+- `appsettings.json` - Configuración de OpenRouter y del rol `default`
+- `appsettings.development.json` - Sobrescritura local opcional (excluida de git, no incluida en el repo)
 
 ## Cómo Funciona la Observación de Razonamiento
 
 El programa usa el sistema de eventos `IEventChannel` para capturar `LlmResponseEvent` en tiempo real:
 
 1. **Suscripción a Eventos**: Se crea una suscripción asincrónica al channel de eventos
-2. **Filtrado**: Solo se muestran eventos donde `IsThinking == true` (razonamiento interno)
-3. **Visualización**: El pensamiento se muestra en **amarillo** con el identificador del step
+2. **Filtrado**: el filtro por `IsThinking == true` está comentado; se muestra el `Content` de todo `LlmResponseEvent` y el resto de eventos como JSON
+3. **Visualización**: Todo se muestra en **amarillo**
 4. **Execution**: El razonamiento se captura **en paralelo** durante la ejecución del pipeline
 
-Código relevante en [Program.cs](Program.cs#L55-L76):
+Código relevante en [Program.cs](Program.cs#L66-L88):
 ```csharp
 var eventSubscription = eventChannel?.CreateSubscription(capacity: 500);
 if (eventSubscription != null)
@@ -160,11 +158,16 @@ if (eventSubscription != null)
     {
         await foreach (var evt in eventSubscription.Reader.ReadAllAsync())
         {
-            if (evt is LlmResponseEvent llmEvent && llmEvent.IsThinking)
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            if (evt is LlmResponseEvent res)
             {
-                // Mostrar pensamiento en amarillo
-                Console.WriteLine(llmEvent.Content);
+                Console.Write(res.Content);
             }
+            else
+            {
+                Console.WriteLine(JsonConvert.SerializeObject(evt, Formatting.Indented));
+            }
+            Console.ResetColor();
         }
     });
 }
@@ -172,10 +175,8 @@ if (eventSubscription != null)
 
 ## Notas Técnicas
 
-- El pipeline usa **variables de contexto** para pasar datos entre pasos:
-  - `{{input.content}}` - accede al contenido del documento
-  - `{{step_1_classify.type}}` - accede a outputs del paso anterior
+- Los prompts se renderizan con `PromptTemplateResolver`, cuyo modelo es `{ Input, Context }`: `{{input.<campo>}}` accede a la entrada del paso (la salida del paso anterior) y `{{context.<clave>}}` a los metadatos del pipeline. No hay acceso por nombre a los resultados de otros pasos: cada paso recibe la salida del anterior como entrada.
+- `pipelines/main.yaml` usa `{{inputData.<campo>}}`, que no corresponde a ese modelo, y `systemPrompt: "@classifier"`, que `FileTemplateProvider` busca como `@classifier.md`. Leyendo el código, ninguno de los dos se resolvería (sin comprobar en ejecución).
 - Los schemas se compilan a tipos C# en tiempo de ejecución con Roslyn
 - Cada paso se ejecuta secuencialmente con validación de dependencias (DAG)
 - El sistema de eventos es **asincrónico** y no bloquea la ejecución del pipeline
-- La propiedad `Reasoning: true` en appsettings permite al LLM usar más tokens para razonamiento

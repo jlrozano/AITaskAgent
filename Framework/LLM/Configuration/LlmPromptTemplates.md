@@ -2,21 +2,27 @@
 
 ## Overview
 
-The `LlmPromptTemplates` class provides configurable templates for how JSON schemas are presented to LLMs. This allows you to customize the instructions based on the LLM's characteristics or your specific needs.
+The static `LlmPromptTemplates` class holds the templates that present a JSON schema to an LLM when the provider cannot enforce it natively. The defaults are **read-only** (`static readonly` fields and get-only aliases): you cannot reassign them globally. To use a different text, pass it as `customTemplate` to `FormatSystemPrompt` / `FormatUserMessage`.
+
+The framework itself (`BaseLlmStep` → `LlmHelpers.InjectSchemaInSystemPrompt`) always calls `FormatSystemPrompt(schemaJson)` without a custom template, so a custom template only applies where you call the format helpers yourself.
 
 ## Default Templates
 
 ### System Prompt Template
-Used when LLM supports `JsonObject` but not `JsonSchema`:
+`DefaultSystemPromptSchemaTemplate` (alias `SystemPromptSchemaTemplate`). `BaseLlmStep` appends it to the system prompt when the provider has no native JSON schema support (`Inference.JsonSupport = false`); with `JsonSupport = true` the schema goes in `ResponseFormat` and no template is used:
 
 ```csharp
-LlmPromptTemplates.SystemPromptSchemaTemplate = """
+public static readonly string DefaultSystemPromptSchemaTemplate = """
     
-    IMPORTANT: You MUST respond with valid JSON matching this schema:
+    **IMPORTANT**: If you do not call any tool, you MUST respond with a plain text JSON object 
+    conforming to this schema:
+
     ```json
     {schema}
     ```
-    
+
+    This schema applies ONLY to your text response, never to tool arguments.
+
     Pay attention to:
     - Property descriptions explain what each field should contain
     - Required fields must be present
@@ -28,45 +34,54 @@ LlmPromptTemplates.SystemPromptSchemaTemplate = """
 ```
 
 ### User Message Template
-Used when LLM has no JSON support:
+`DefaultUserMessageSchemaTemplate` (alias `UserMessageSchemaTemplate`), applied by `FormatUserMessage` / `LlmHelpers.InjectSchemaInUserMessage`. No framework step calls it today; it is available for your own code:
 
 ```csharp
-LlmPromptTemplates.UserMessageSchemaTemplate = """
+public static readonly string DefaultUserMessageSchemaTemplate = """
     {message}
+
+    **RESPONSE FORMAT**
+
+    If you do not call any tool, you MUST respond with a plain text JSON object 
+    conforming to this schema:
     
-    IMPORTANT: Respond ONLY with valid JSON matching this schema:
     ```json
     {schema}
     ```
     
-    Guidelines:
-    - Read property descriptions carefully - they explain what to put in each field
-    - All required fields must be included
-    - For enums, use only the listed values (descriptions explain each option)
-    - Respect validation rules (min/max values, string lengths, patterns)
-    
-    Do not include any explanation or text outside the JSON object.
+    This schema applies ONLY to your text response, never to tool arguments.
+   
+    CRITICAL RULES:
+    1. Output ONLY the JSON object with your actual content values
+    2. Fields with "type": "string" MUST be plain text strings, NOT nested JSON objects
+    3. Read each property's "description" - it explains what content to provide
+    4. Include ALL required fields
+    5. For enum fields, use only the listed values
+    6. No text or explanation outside the JSON object
+
     """;
 ```
 
 ## Customization Examples
 
+All examples pass the template per call; `schemaJson` is the schema text (for example `schema.ToJson()`).
+
 ### Example 1: Simplified Template for Advanced Models
 ```csharp
 // For models like GPT-4 that understand schemas well
-LlmPromptTemplates.SystemPromptSchemaTemplate = """
+string prompt = LlmPromptTemplates.FormatSystemPrompt(schemaJson, customTemplate: """
     
     Respond with JSON matching this schema:
     ```json
     {schema}
     ```
-    """;
+    """);
 ```
 
 ### Example 2: More Verbose for Less Capable Models
 ```csharp
 // For older or smaller models that need more guidance
-LlmPromptTemplates.UserMessageSchemaTemplate = """
+string message = LlmPromptTemplates.FormatUserMessage(userText, schemaJson, customTemplate: """
     {message}
     
      CRITICAL INSTRUCTIONS 
@@ -85,12 +100,12 @@ LlmPromptTemplates.UserMessageSchemaTemplate = """
     
     DO NOT include any text, explanation, or commentary outside the JSON
     ONLY return the JSON object
-    """;
+    """);
 ```
 
 ### Example 3: Localized Templates (Spanish)
 ```csharp
-LlmPromptTemplates.SystemPromptSchemaTemplate = """
+string prompt = LlmPromptTemplates.FormatSystemPrompt(schemaJson, customTemplate: """
     
     IMPORTANTE: Debes responder con JSON válido que coincida con este esquema:
     ```json
@@ -104,17 +119,17 @@ LlmPromptTemplates.SystemPromptSchemaTemplate = """
     - Las restricciones de validación (min/max, patrones, longitudes) deben respetarse
     
     No incluyas ningún texto fuera del objeto JSON.
-    """;
+    """);
 ```
 
 ### Example 4: Runtime Configuration Based on Model
 ```csharp
-public void ConfigureTemplatesForModel(string modelName)
+public static string? SelectTemplateForModel(string modelName)
 {
     if (modelName.Contains("gpt-4"))
     {
         // GPT-4 needs minimal instructions
-        LlmPromptTemplates.SystemPromptSchemaTemplate = """
+        return """
             Respond with JSON matching: ```json
             {schema}
             ```
@@ -123,7 +138,7 @@ public void ConfigureTemplatesForModel(string modelName)
     else if (modelName.Contains("claude"))
     {
         // Claude benefits from structured guidelines
-        LlmPromptTemplates.SystemPromptSchemaTemplate = """
+        return """
             
             Return valid JSON matching this schema:
             ```json
@@ -138,16 +153,18 @@ public void ConfigureTemplatesForModel(string modelName)
     }
     else
     {
-        // Use default verbose template for unknown models
-        // (already set by default)
+        // null = use DefaultSystemPromptSchemaTemplate
+        return null;
     }
 }
+
+string prompt = LlmPromptTemplates.FormatSystemPrompt(schemaJson, SelectTemplateForModel(modelName));
 ```
 
 ## How It Works
 
 1. **Schema Generation**: `StepResultFactory` generates `JsonSchema` from your result types, including all `[Description]` attributes
-2. **Template Application**: `LlmHelpers` uses `LlmPromptTemplates` to format the schema into prompts
+2. **Template Application**: when the provider has `JsonSupport = false`, `BaseLlmStep` calls `LlmHelpers.InjectSchemaInSystemPrompt`, which formats the schema with `LlmPromptTemplates.FormatSystemPrompt` (default template) and appends it to the system prompt
 3. **LLM Receives**: The formatted prompt with embedded schema (including descriptions, validations, etc.)
 
 ## Schema Content
@@ -155,11 +172,11 @@ public void ConfigureTemplatesForModel(string modelName)
 The `{schema}` placeholder is replaced with the full JSON Schema, which includes:
 
 - **Property descriptions** from `[Description]` attributes
-- **Required fields** from nullable analysis and `required` keyword
+- **Required fields** (`required` list)
 - **Enum values and descriptions** from enum `[Description]` attributes
-- **Validation rules** from `[Range]`, `[StringLength]`, `[MinLength]`, `[MaxLength]`, `[RegularExpression]`, etc.
+- **Validation rules** from `[Range]`, `[StringLength]`, `[MinLength]`, `[MaxLength]`, `[RegularExpression]`
 - **Type information** (string, number, boolean, array, object)
-- **Format hints** (email, uri, date-time)
+- **Format hints** (`email` from `[EmailAddress]`, `uri` from `[Url]`, `date-time` for date types)
 
 Example generated schema:
 ```json

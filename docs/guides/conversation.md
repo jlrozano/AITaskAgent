@@ -20,7 +20,9 @@ var conversation = new ConversationContext(
 
 The DI registration is **transient** and pre-configured with `Conversation.MaxTokens` from
 configuration plus the registered `ILlmService.EstimateTokenCount` as the token counter (falling
-back to `NullLlmService` when no provider is registered).
+back to `NullLlmService` when no provider is registered). It does not pass `ConversationOptions`, so
+`KeepFirstNMessages` and `UseBookmarks` keep their defaults (2 and `true`) there; to apply the
+configured values, construct the context with the `conversationOptions` argument.
 
 ## Adding Messages
 
@@ -73,17 +75,21 @@ Manage context size by keeping recent messages:
 <!-- Source: docs/assets/diagrams/sliding-window-shape.excalidraw -->
 
 The first N messages are charged against `maxTokens` too, and the backwards walk stops at the
-first message that does not fit — it does not skip it and keep looking for a smaller one.
+first message that does not fit — it does not skip it and keep looking for a smaller one. Three
+rules keep the request valid even over budget: the tool results that directly follow the head travel
+with it; the last group (the last message, plus the assistant tool-call message it answers when it
+is a tool result) is always sent; and a leading tool result whose assistant tool-call message was
+cut is dropped too. Tool-call names and arguments count towards the token estimate.
 
 ```csharp
 // Get messages with sliding window
 var messages = conversation.GetMessagesForRequest(
     maxTokens: 8192,
-    fromBookmark: null,      // when set, returns only the messages after that bookmark
-    useSlidingWindow: true
+    fromBookmark: null,      // when set (and UseBookmarks is on), returns only the messages after that bookmark
+    useSlidingWindow: true   // false: the whole history, maxTokens ignored
 );
 
-// Keeps first N messages (system context) + recent messages
+// Keeps first N messages (ConversationOptions.KeepFirstNMessages) + recent messages
 var messages = conversation.History.GetMessagesWithSlidingWindow(
     keepFirstN: 2,
     maxTokens: 8192
