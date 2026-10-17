@@ -10,8 +10,8 @@ public sealed class ObservabilityOptions
     /// <summary>Log level for EventChannel events.</summary>
     public LogLevel EventLogLevel { get; init; } = LogLevel.Debug;
 
-    /// <summary>Event channel buffer capacity per subscriber.</summary>
-    public int EventChannelCapacity { get; init; } = 100;
+    /// <summary>Event channel buffer capacity per subscriber. Default: 1000.</summary>
+    public int EventChannelCapacity { get; init; } = 1000;
 
     /// <summary>Enable telemetry metrics.</summary>
     public bool EnableMetrics { get; init; } = true;

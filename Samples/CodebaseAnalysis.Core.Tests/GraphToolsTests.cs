@@ -16,7 +16,7 @@ namespace CodebaseAnalysis.Core.Tests;
 /// Las tools del grafo que ve el chat: <c>graph_neighbors</c> sobre el grafo sintético de <see cref="JavaGraphFixture"/>
 /// (con aristas del analizador y de Struts añadidas) y las propiedades de <c>graph_search</c>. El de extremo a extremo
 /// enriquece <see cref="JavaTestRepo"/> con el JDK de los tests y comprueba los criterios 1 y 6 del plan de referencias de
-/// tipos y campos (docs/plans/2026-09-29-referencias-tipos-campos-plan.md).
+/// tipos y campos.
 /// </summary>
 public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
 {
@@ -198,6 +198,22 @@ public sealed class GraphToolsTests(ITestOutputHelper output) : IDisposable
         var whole = await NeighborsAsync(g.DatabasePath, """{"qualified_name":"demo.Hub.hub","limit":5000}""");
         Assert.Contains("): 5\n", whole.ReplaceLineEndings("\n"));
         Assert.DoesNotContain("truncada", whole);
+    }
+
+    [Fact]
+    public async Task OVERRIDES_is_a_default_edge_type_and_the_tool_says_so()
+    {
+        using var g = await GraphAsync();
+        await g.EdgeAsync((await g.NodeIdAsync(Execute))!.Value, (await g.NodeIdAsync(BaseLog))!.Value, "OVERRIDES", "{\"enriched_by\":[\"JavaAnalyzer\"]}");
+
+        // Sin edge_types sale la arista método a método, y el modelo sabe por la descripción que existe.
+        var text = await NeighborsAsync(g.DatabasePath, $"{{\"qualified_name\":\"{Execute}\",\"direction\":\"out\"}}");
+
+        Assert.Contains("OVERRIDES", GraphNeighborsTool.DefaultEdgeTypes);
+        Assert.Contains($"`{BaseLog}`", Section(text, "## `OVERRIDES` salientes"));
+        var definition = new GraphNeighborsTool().GetDefinition();
+        Assert.Contains("OVERRIDES", definition.Description, StringComparison.Ordinal);
+        Assert.Contains("OVERRIDES", definition.ParametersJsonSchema, StringComparison.Ordinal);
     }
 
     [Fact]

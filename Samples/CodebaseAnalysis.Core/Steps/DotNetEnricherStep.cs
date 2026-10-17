@@ -116,7 +116,7 @@ public sealed class DotNetEnricherStep : IStep<GraphStatusResult, GraphStatusRes
         var stopwatch = Stopwatch.StartNew();
         var (cliPath, locateError) = LocateCli(options);
         if (cliPath is null)
-            return await FailAsync(locateError!, null);
+            return await FailAsync(locateError!, $"cli not found: {locateError}");
 
         context.Report(StepName, AnalysisLogLevel.Info, "🚀 Ejecutando enriquecimiento semántico Roslyn (DotNetEnricher)...");
         context.Report(StepName, AnalysisLogLevel.Info, $"   CLI: {cliPath}");
@@ -173,7 +173,8 @@ public sealed class DotNetEnricherStep : IStep<GraphStatusResult, GraphStatusRes
             Facets = input.Facets
         };
 
-        // Fallo del enriquecedor: con Required se para el análisis; si no, aviso, fila failed y fallback del LLM.
+        // Fallo del enriquecedor: con Required se para el análisis; si no, aviso, fila failed y fallback del LLM. Con un runMessage nulo no
+        // hay fila, y hoy nadie lo pasa: sin .sln ni Enabled=false (que no llaman a FailAsync) el paso no llegó a intentarse y no deja fila.
         async Task<GraphStatusResult> FailAsync(string message, string? runMessage)
         {
             if (options.Required)

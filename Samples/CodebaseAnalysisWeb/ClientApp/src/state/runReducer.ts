@@ -39,6 +39,14 @@ export const PHASE_STEPS: Record<string, Phase> = {
  */
 export const PREPARATION_STEPS: readonly string[] = ['RepositoryInventoryStep', 'DomainDiscoveryStep', 'CoveragePlanningStep', 'TimeBudgetStep'];
 
+/**
+ * La pasada compartida (`CodebaseAnalysis:SharedPass:Enabled`) corre tras `TimeBudgetStep` y antes de los informes, y el servidor
+ * la asigna a la fase `facets` (`AnalysisEventMapper`). Cuando existe es el último paso de esa fase: su `step.started` la reabre,
+ * su `step.completed` la cierra y su `sharedpass.progress` en fase `failed` la marca fallida. No está en `PHASE_STEPS` porque con la
+ * pasada apagada no existe y entonces la cierran las facetas o la preparación.
+ */
+export const SHARED_PASS_STEP = 'SharedPassStep';
+
 /** Último paso de la preparación: con él termina la fase `facets` cuando la preparación está activa. */
 const LAST_PREPARATION_STEP = PREPARATION_STEPS[PREPARATION_STEPS.length - 1];
 
@@ -571,6 +579,28 @@ function phaseDuration(phase: PhaseState, name: Phase, finishedAt: string, stepD
   return Number.isFinite(elapsed) ? Math.max(0, elapsed) : stepDurationMs;
 }
 
+/**
+ * La pasada compartida mantiene abierta la fase `facets` mientras trabaja (`TimeBudgetStep` ya la cerró) y propaga su fallo: un
+ * `sharedpass.progress` en curso la reabre; en fase `failed` la marca fallida (el step captura sus errores y termina con éxito,
+ * así que su `step.completed` no lo diría). El cierre bueno lo hace el `step.completed` del step.
+ */
+function syncFacetsWithSharedPass(state: RunState, event: AnalysisEventDto): void {
+  const phase = state.sharedPass?.phase;
+  const facets = state.phases.facets;
+  if (phase === 'failed') {
+    if (facets.status !== 'failed') {
+      updatePhase(state, 'facets', {
+        status: 'failed',
+        finishedAt: event.ts,
+        durationMs: phaseDuration(facets, 'facets', event.ts, null),
+        error: event.message || 'La pasada compartida falló.',
+      });
+    }
+  } else if (phase !== 'done' && phase !== 'cut' && facets.status === 'succeeded') {
+    updatePhase(state, 'facets', { status: 'running', finishedAt: null, durationMs: null });
+  }
+}
+
 const SHARED_PASS_PHASES: readonly SharedPassPhase[] = ['reading', 'consolidating', 'judging', 'saving', 'done', 'cut', 'failed'];
 const SHARED_PASS_BATCH_STATUSES: readonly SharedPassBatchStatus[] = ['pending', 'reading', 'retrying', 'complete', 'partial', 'failed', 'notRead'];
 const FINISHED_BATCH: readonly SharedPassBatchStatus[] = ['complete', 'partial', 'failed', 'notRead'];
@@ -708,6 +738,7 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry | null {
   // El estado de la pasada no es una línea del registro (sus mensajes llegan aparte, como `log`) ni cuenta como aviso.
   if (event.type === 'sharedpass.progress') {
     state.sharedPass = sharedPassOf(data, state.sharedPass);
+    if (!state.verifying) syncFacetsWithSharedPass(state, event);
     return null;
   }
   const report = auditorOf(event);
@@ -722,7 +753,7 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry | null {
   // Verificar no vuelve a ejecutar fases: la preparación y la síntesis de esa ejecución no mueven el avance del análisis.
   const verifying = state.verifying;
   const verifier = report && isVerificationSource(event) ? report : null;
-  const topPhase = event.source && !verifying ? PHASE_STEPS[event.source] ?? (PREPARATION_STEPS.includes(event.source) ? 'facets' : undefined) : undefined;
+  const topPhase = event.source && !verifying ? PHASE_STEPS[event.source] ?? (PREPARATION_STEPS.includes(event.source) || event.source === SHARED_PASS_STEP ? 'facets' : undefined) : undefined;
   if (event.phase && !verifying && event.type !== 'run.completed' && event.type !== 'run.started') {
     markPhaseRunning(state, event.phase, event.ts);
   }
@@ -822,7 +853,7 @@ function applyEvent(state: RunState, event: AnalysisEventDto): LogEntry | null {
     case 'step.completed': {
       const success = bool(data.success) ?? event.level !== 'error';
       // El éxito de un step que no es el último de su fase la deja en marcha: la fase no parpadea entre steps.
-      const isLast = !!topPhase && (PHASE_LAST_STEP[topPhase] === event.source || event.source === LAST_PREPARATION_STEP);
+      const isLast = !!topPhase && (PHASE_LAST_STEP[topPhase] === event.source || event.source === LAST_PREPARATION_STEP || event.source === SHARED_PASS_STEP);
       const closesPhase = topPhase && (!success || (isLast && state.phases[topPhase].status !== 'failed'));
       if (topPhase && closesPhase) {
         updatePhase(state, topPhase, {

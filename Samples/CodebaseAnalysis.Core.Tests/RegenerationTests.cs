@@ -137,6 +137,52 @@ public sealed class RegenerationTests
         Assert.Equal(0, byDefault.Steps.OfType<TolerantReportsParallelStep>().Single().MaxDegreeOfParallelism);
     }
 
+    /// <summary>
+    /// <see cref="AnalysisRunner.ForRegeneration"/> debe copiar TODAS las opciones del input: la copia a mano perdía
+    /// <c>MaxParallelAuditors</c>. Salta con el siguiente campo nuevo que nadie copie.
+    /// </summary>
+    [Fact]
+    public void ForRegeneration_copies_every_option_of_the_input()
+    {
+        // Lo único que ForRegeneration cambia a propósito: los informes pedidos y no reindexar.
+        string[] intentionallyDifferent = [nameof(AnalysisPipelineInput.RequestedReports), nameof(AnalysisPipelineInput.ForceReindex)];
+
+        var source = new AnalysisPipelineInput();
+        var properties = typeof(AnalysisPipelineInput)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly)
+            .Where(p => p.CanRead && p.SetMethod is { IsPublic: true } && !intentionallyDifferent.Contains(p.Name))
+            .ToList();
+        Assert.NotEmpty(properties);
+
+        foreach (var property in properties)
+        {
+            object value = property.PropertyType switch
+            {
+                var t when t == typeof(int) => 7919,
+                var t when t == typeof(string) => "valor-distinto",
+                var t when t == typeof(bool) => !(bool)property.GetValue(source)!,
+                var t when t == typeof(Dictionary<string, int>) => new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["FlowsAuditor"] = 31 },
+                _ => throw new NotSupportedException(
+                    $"AnalysisPipelineInput.{property.Name} ({property.PropertyType.Name}): enséñale a este test un valor distinto del de por defecto.")
+            };
+            property.SetValue(source, value);
+        }
+
+        var copy = AnalysisRunner.ForRegeneration(source, [ReportType.CodeSmells]);
+
+        foreach (var property in properties)
+        {
+            var expected = property.GetValue(source);
+            var actual = property.GetValue(copy);
+            if (expected is Dictionary<string, int> expectedMap)
+                Assert.Equal(expectedMap.OrderBy(p => p.Key), ((Dictionary<string, int>)actual!).OrderBy(p => p.Key));
+            else
+                Assert.True(Equals(expected, actual), $"ForRegeneration no copia {property.Name}: esperado '{expected}', obtenido '{actual}'.");
+        }
+        Assert.False(copy.ForceReindex);
+        Assert.Equal(ReportType.CodeSmells, Assert.Single(copy.RequestedReports));
+    }
+
     /// <summary>Los pasos y, de los paralelos, sus ramas, recursivamente.</summary>
     private static IEnumerable<IStep> WithBranches(IEnumerable<IStep> steps) =>
         steps.SelectMany(s => s is ParallelStep parallel ? [s, .. WithBranches(parallel.Branches)] : new[] { s });

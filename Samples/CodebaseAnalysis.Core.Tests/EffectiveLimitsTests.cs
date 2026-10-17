@@ -66,6 +66,33 @@ public sealed class EffectiveLimitsTests(Xunit.Abstractions.ITestOutputHelper ou
     }
 
     [Fact]
+    public void The_analysis_dump_includes_the_shared_pass_roles_only_when_the_pass_is_enabled()
+    {
+        string[] sharedRoles = ["SharedPassReader", "SharedPassJudge"];
+        (string, string?)[] RolesConfig(bool enabled) =>
+        [
+            .. FakeLlmConfig.Pairs(LlmServiceTypes.AzureOpenAI, [.. LlmRoleFactory.RequiredRoles, .. sharedRoles]),
+            ($"{Llm}:Roles:SharedPassReader:Inference:RequestTimeoutSeconds", "1234"),
+            ("CodebaseAnalysis:SharedPass:Enabled", enabled ? "true" : "false")
+        ];
+        string RolesLine(bool enabled)
+        {
+            var configuration = TestConfig.FromPairs(RolesConfig(enabled));
+            using var services = Services(configuration);
+            var roles = LlmRoleFactory.BuildRoles(services, _ => null, _ => { }, [.. LlmRoleFactory.RequiredRoles, .. sharedRoles]);
+            return EffectiveLimits.DescribeAnalysis(services, roles)[2];
+        }
+
+        var on = RolesLine(enabled: true);
+        Assert.Contains("por intento 1234 s [rol] (sin streaming) en SharedPassReader", on, StringComparison.Ordinal);
+        Assert.Contains("SharedPassJudge", on, StringComparison.Ordinal);
+
+        var off = RolesLine(enabled: false);
+        Assert.DoesNotContain("SharedPassReader", off, StringComparison.Ordinal);
+        Assert.DoesNotContain("SharedPassJudge", off, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_chat_dump_has_the_turn_limit_and_the_streaming_limits_of_its_role()
     {
         var configuration = TestConfig.FromPairs(Config);

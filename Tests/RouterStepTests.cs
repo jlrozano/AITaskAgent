@@ -1,4 +1,5 @@
 using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.StepResults;
 using AITaskAgent.Core.Steps;
@@ -60,6 +61,51 @@ public class RouterStepTests
         await ((IStep)router).ExecuteAsync(input, Context(), 1, null, CancellationToken.None);
 
         Assert.Contains(fallback, input.NextSteps);
+    }
+
+    /// <summary>
+    /// RouterStep.SelectTargetStep used to add the target to NextSteps and SwitchStep added it
+    /// again, so the pipeline ran it twice (the second run was hidden by the step cache).
+    /// </summary>
+    [Fact]
+    public async Task Adds_the_selected_route_to_NextSteps_once()
+    {
+        var (router, target, _) = Build();
+        var input = new FakeRouterResult(new EmptyStep("Analyzer"), "NewStory");
+
+        var result = await ((IStep)router).ExecuteAsync(input, Context(), 1, null, CancellationToken.None);
+
+        Assert.Same(target, Assert.Single(result.NextSteps));
+    }
+
+    private sealed class CountingTarget(string name)
+        : StepBase(name, typeof(IStepResult), typeof(StepResult<string>))
+    {
+        public int Executions { get; private set; }
+
+        protected override Task<IStepResult> ExecuteAsync(
+            IStepResult input, PipelineContext context, int attempt,
+            IStepResult? lastStepResult, CancellationToken cancellationToken)
+        {
+            Executions++;
+            return Task.FromResult<IStepResult>(new StepResult<string>(this, "routed"));
+        }
+    }
+
+    [Fact]
+    public async Task Still_routes_inside_a_pipeline()
+    {
+        var target = new CountingTarget("NewStory");
+        var router = new RouterStep("Router",
+            new Dictionary<string, IStep> { ["NewStory"] = target },
+            new EmptyStep("Fallback"));
+        var input = new FakeRouterResult(new EmptyStep("Analyzer"), "newstory");
+
+        var result = await new Pipeline().ExecuteAsync("Test", [router], input, new PipelineContext());
+
+        Assert.False(result.HasError, result.Error?.Message);
+        Assert.Equal(1, target.Executions);
+        Assert.Equal("routed", result.Value);
     }
 
     [Fact]

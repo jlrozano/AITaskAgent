@@ -25,7 +25,9 @@ public static class EffectiveLimits
         var configuration = serviceProvider?.GetService(typeof(IConfiguration)) as IConfiguration;
         var timeouts = configuration != null ? AnalysisTimeouts.FromConfiguration(configuration) : new AnalysisTimeouts();
         var java = configuration != null ? JavaAnalyzerOptions.FromConfiguration(configuration) : new JavaAnalyzerOptions();
-        var pipelineRoles = roles.Where(r => LlmRoleFactory.RequiredRoles.Contains(r.Key, StringComparer.OrdinalIgnoreCase));
+        // Con la pasada compartida activa, sus roles (lector y juez) también tienen plazos que mostrar.
+        var shownRoles = configuration != null ? LlmRoleFactory.RequiredRoles.Concat(LlmRoleFactory.SharedPassRoles(configuration)).ToList() : [.. LlmRoleFactory.RequiredRoles];
+        var pipelineRoles = roles.Where(r => shownRoles.Contains(r.Key, StringComparer.OrdinalIgnoreCase));
 
         return
         [
@@ -69,7 +71,9 @@ public static class EffectiveLimits
     /// <summary>Los plazos efectivos de un rol: el suyo, si no el de su proveedor y si no el del servicio.</summary>
     internal static string DescribeRole(LlmRole role)
     {
-        var streaming = role.Inference?.UseStreaming ?? role.Provider.Inference?.UseStreaming ?? false;
+        var streaming = role.Inference?.GetOption<bool?>(nameof(LlmInferenceSettings.UseStreaming))
+            ?? role.Provider.Inference?.GetOption<bool?>(nameof(LlmInferenceSettings.UseStreaming))
+            ?? false;
         var request = Effective(role, i => i.RequestTimeoutSeconds, OpenAILlmService.DefaultRequestTimeout);
         var inactivity = Effective(role, i => i.StreamingInactivityTimeoutSeconds, OpenAILlmService.DefaultStreamingInactivityTimeout);
         return streaming

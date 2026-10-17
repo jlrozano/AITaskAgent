@@ -44,7 +44,7 @@ namespace AITaskAgent.Core.Abstractions
                 {
                     ServiceLifetime.Singleton => entry.Instance!,
                     ServiceLifetime.Transient => (T)ActivatorUtilities.CreateInstance(sp, entry.Type),
-                    ServiceLifetime.Scoped => sp.GetServices<T>().First(s => keyName == name),
+                    ServiceLifetime.Scoped => sp.GetServices<T>().First(s => GetServiceName(s) == name),
                     _ => throw new InvalidOperationException()
                 };
             }

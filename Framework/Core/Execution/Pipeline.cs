@@ -300,9 +300,9 @@ public sealed class Pipeline : PipelineRuntimeBase, IPipeline
                         Timestamp = DateTimeOffset.UtcNow,
                         TargetStepPath = stepKey,
                         IsBranchSuspension = isBranchScope,
-                        BranchName = isBranchScope
-                            ? (string.IsNullOrWhiteSpace(context.CurrentStepPath) ? null : context.CurrentStepPath.Split('/')[0])
-                            : null,
+                        // Explicit, not derived from the path: branch paths keep the parent's
+                        // prefix, so their first segment is no longer the branch name.
+                        BranchName = isBranchScope ? context.BranchName : null,
                         SchemaVersion = "1.0"
                     }, cancellationToken);
                     context.StepResults[stepKey] = currentResult;

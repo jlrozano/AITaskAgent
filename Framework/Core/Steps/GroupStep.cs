@@ -5,7 +5,8 @@ using AITaskAgent.Core.Models;
 namespace AITaskAgent.Core.Steps;
 
 /// <summary>
-/// Non-generic base for sequential step grouping. Directly serializable from YAML via <c>!GroupStep</c>.
+/// Non-generic base for sequential step grouping. Not declarable from YAML: the YAML factory only maps
+/// <c>IYamlStep</c> types marked with <c>[YamlStepTag]</c>, and this type is only tagged with <c>[StepTag]</c>.
 /// Unlike <see cref="ParallelStep"/>, executes steps sequentially in the SAME pipeline context by
 /// appending them to <c>NextSteps</c> — the parent Pipeline runs them in order.
 /// </summary>

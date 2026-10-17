@@ -125,6 +125,14 @@ public sealed record PipelineContext
     /// </summary>
     public string CurrentStepPath { get => _currentPath; }
 
+    /// <summary>
+    /// Name of the innermost parallel branch this context runs, or null outside any branch.
+    /// Set by <c>ParallelStep</c> on the branch clone; the pipeline reads it for
+    /// <c>PipelineSuspendedEvent.BranchName</c>, since the branch path now keeps the parent prefix
+    /// and its first segment is no longer the branch.
+    /// </summary>
+    internal string? BranchName { get; set; }
+
     internal void AddPathPart(string part)
     {
         _lastPath.Push(_currentPath);
@@ -150,7 +158,11 @@ public sealed record PipelineContext
             Metadata = Metadata,
             StepResults = StepResults,
             StepState = [],
-            _currentPath = ""
+            // Keep the parent's path: a branch's results share StepResults with the parent, so
+            // dropping the prefix made keys like "B/B" collide across loop iterations and across
+            // ParallelSteps with same-named branches.
+            _currentPath = CurrentStepPath,
+            BranchName = BranchName
         };
 
         // Clone the path stack by reversing the original order
@@ -269,10 +281,17 @@ public class PipelineContextFactory
 
         if (subscribers != null)
         {
-            var options = _instance._serviceProvider.GetService<Microsoft.Extensions.Options.IOptions<AITaskAgent.Configuration.AITaskAgentOptions>>()?.Value;
-            var eventLogLevel = options?.Observability?.EventLogLevel ?? LogLevel.Information;
+            // Without registered options the fallback is ObservabilityOptions' own defaults, so DI and
+            // non-DI paths agree on the event log level and the channel capacity.
+            var observability = GetAgentOptions()?.Observability ?? new AITaskAgent.Configuration.ObservabilityOptions();
             var logger = _instance._serviceProvider.GetService<ILogger<EventChannel>>();
-            var localChannel = new EventChannel(eventLogLevel, logger);
+            var localChannel = new EventChannel(
+                new EventChannelOptions
+                {
+                    EventLogLevel = observability.EventLogLevel,
+                    ChannelCapacity = observability.EventChannelCapacity
+                },
+                logger);
             var hasSubscribers = false;
 
             foreach (var handler in subscribers)
@@ -289,9 +308,15 @@ public class PipelineContextFactory
 
         return new(eventChannel, _instance._serviceProvider)
         {
-            Conversation = conversation ?? new ConversationContext()
+            Conversation = conversation ?? new ConversationContext(
+                logger: _instance._serviceProvider.GetService<ILogger<ConversationContext>>(),
+                conversationOptions: GetAgentOptions()?.Conversation)
         };
     }
+
+    private static AITaskAgent.Configuration.AITaskAgentOptions? GetAgentOptions() =>
+        _instance?._serviceProvider
+            .GetService<Microsoft.Extensions.Options.IOptions<AITaskAgent.Configuration.AITaskAgentOptions>>()?.Value;
     public static async Task<PipelineContext> CreateFromId(string id)
     {
         return _instance == null

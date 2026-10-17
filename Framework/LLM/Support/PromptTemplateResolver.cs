@@ -1,6 +1,7 @@
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Support.Template;
+using Microsoft.Extensions.Logging;
 
 namespace AITaskAgent.LLM.Support;
 
@@ -21,7 +22,12 @@ public static class PromptTemplateResolver
     /// <paramref name="variables"/>, reachable as <c>{{ context.mykey }}</c>). Keys are lowercased
     /// and step variables win over pipeline metadata on collision.
     /// </summary>
-    /// <param name="rawPrompt">Template text, or a template name when a provider is supplied.</param>
+    /// <param name="rawPrompt">
+    /// Template name or inline template text. With a provider it is first looked up as a name; when
+    /// the provider has no such template, a single-line value ending in ".md" throws
+    /// <see cref="InvalidOperationException"/> (a template file name is never sent as the prompt),
+    /// and anything else is rendered as inline text. Without a provider it is always inline text.
+    /// </param>
     /// <param name="input">Step input; its <c>Value</c> becomes <c>Input</c> in the model.</param>
     /// <param name="context">Pipeline context; supplies metadata and the base directory for includes.</param>
     /// <param name="templateProvider">Optional provider. When null, the raw text is rendered directly.</param>
@@ -52,11 +58,59 @@ public static class PromptTemplateResolver
             Context = mergedContext  // {{ context.mykey }}
         };
 
-        return templateProvider != null
-            ? templateProvider.Render(rawPrompt, model) ?? rawPrompt
-            // baseDirectory null: un @[ruta] relativo se resuelve contra el directorio de trabajo.
-            // CurrentStepPath es la ruta del paso en el árbol del pipeline, no un directorio.
-            : TinyTemplateRendered.Render(rawPrompt, model, strictMode: false, baseDirectory: null,
-                logger: context.GetLogger(typeof(PromptTemplateResolver))) ?? rawPrompt;
+        if (templateProvider != null)
+        {
+            var rendered = templateProvider.Render(rawPrompt, model);
+            if (rendered != null)
+            {
+                return rendered;
+            }
+
+            // The provider has no template by that name. Something that looks like a template file
+            // ("X_prompt.md") is a missing template, not a prompt: sending its name to the model
+            // is exactly the silent failure this guards against.
+            if (LooksLikeTemplateFileName(rawPrompt))
+            {
+                throw new InvalidOperationException(
+                    $"Prompt template '{rawPrompt.Trim()}' was not found by {templateProvider.GetType().Name}. " +
+                    "A template file name is never sent to the model as the prompt; add the template or " +
+                    "pass the prompt text inline.");
+            }
+
+            // Anything else is inline text and is rendered like the provider-less path below.
+            var logger = context.GetLogger(typeof(PromptTemplateResolver));
+            if (!rawPrompt.Any(char.IsWhiteSpace))
+            {
+                // A single token could be a misspelled template name; inline prompts rarely are one word.
+                logger.LogWarning(
+                    "No template named '{TemplateName}' was found by {Provider}; rendering it as inline text.",
+                    rawPrompt, templateProvider.GetType().Name);
+            }
+
+            return RenderInline(rawPrompt, model, logger);
+        }
+
+        return RenderInline(rawPrompt, model, context.GetLogger(typeof(PromptTemplateResolver)));
+    }
+
+    /// <summary>
+    /// Renders <paramref name="rawPrompt"/> as inline template text.
+    /// </summary>
+    private static string RenderInline(string rawPrompt, object model, ILogger logger) =>
+        // baseDirectory null: un @[ruta] relativo se resuelve contra el directorio de trabajo.
+        // CurrentStepPath es la ruta del paso en el árbol del pipeline, no un directorio.
+        TinyTemplateRendered.Render(rawPrompt, model, strictMode: false, baseDirectory: null,
+            logger: logger) ?? rawPrompt;
+
+    /// <summary>
+    /// True when <paramref name="rawPrompt"/> is a single line ending in ".md", i.e. a template
+    /// file name such as the <c>{name}_prompt.md</c> default of <c>TemplateLlmStep</c>.
+    /// </summary>
+    private static bool LooksLikeTemplateFileName(string rawPrompt)
+    {
+        var trimmed = rawPrompt.Trim();
+        return trimmed.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+            && !trimmed.Contains('\n')
+            && !trimmed.Contains('\r');
     }
 }

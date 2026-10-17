@@ -34,7 +34,7 @@ public sealed class GraphNeighborsTool : LlmTool
     /// <summary>Tipos de arista por defecto: los que sirven para seguir el código y las pantallas.</summary>
     public static IReadOnlyList<string> DefaultEdgeTypes { get; } =
     [
-        "CALLS", "INHERITS", "IMPLEMENTS", "DEFINES_METHOD", "HANDLES",
+        "CALLS", "INHERITS", "IMPLEMENTS", "OVERRIDES", "DEFINES_METHOD", "HANDLES",
         "FORWARDS_TO", "SUBMITS_TO", "INCLUDES", "RENDERS", "EXTENDS_DEFINITION",
         "USES_TYPE", "READS", "WRITES",
         Enrichment.AnalysisGraph.AnalysisGraphLabels.Queries, Enrichment.AnalysisGraph.AnalysisGraphLabels.Modifies,
@@ -99,7 +99,7 @@ public sealed class GraphNeighborsTool : LlmTool
     public override string Name => ToolName;
     public override string Description =>
         "Vecinos de un nodo del grafo de código por sus aristas: quién llama a X y a quién llama X (CALLS, con las líneas de cada llamada), " +
-        "qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué métodos define un tipo (DEFINES_METHOD), " +
+        "qué hereda o implementa y quién lo hereda o implementa (INHERITS, IMPLEMENTS), qué método sobrescribe o implementa un método y quién lo sobrescribe (OVERRIDES), qué métodos define un tipo (DEFINES_METHOD), " +
         "qué clase atiende una ruta (HANDLES) y, en Struts/JSP, qué JSP o definición Tiles muestra una acción (FORWARDS_TO), " +
         "a qué acción envía una JSP (SUBMITS_TO), qué incluye (INCLUDES) y qué JSP compone una definición (RENDERS, EXTENDS_DEFINITION). " +
         "En Java, además, qué tipos usa un método, un campo o un tipo (USES_TYPE, con el contexto: parámetro, retorno, local, cast, new…) " +
@@ -129,7 +129,7 @@ public sealed class GraphNeighborsTool : LlmTool
         "edge_types": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Tipos de arista a incluir. Por defecto: CALLS, INHERITS, IMPLEMENTS, DEFINES_METHOD, HANDLES, FORWARDS_TO, SUBMITS_TO, INCLUDES, RENDERS, EXTENDS_DEFINITION, USES_TYPE, READS, WRITES, QUERIES, MODIFIES, CITES, CONTAINS, DEPENDS_ON, ABOUT."
+          "description": "Tipos de arista a incluir. Por defecto: CALLS, INHERITS, IMPLEMENTS, OVERRIDES, DEFINES_METHOD, HANDLES, FORWARDS_TO, SUBMITS_TO, INCLUDES, RENDERS, EXTENDS_DEFINITION, USES_TYPE, READS, WRITES, QUERIES, MODIFIES, CITES, CONTAINS, DEPENDS_ON, ABOUT."
         },
         "line": {
           "type": "integer",

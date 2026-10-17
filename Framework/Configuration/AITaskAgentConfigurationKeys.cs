@@ -18,6 +18,7 @@ public static class AITaskAgentConfigurationKeys
     public const string Timeouts = $"{RootSection}:Timeouts";
 
     /// <summary>Resilience configuration section.</summary>
+    [Obsolete("No configuration section is bound under 'AITaskAgent:Resilience'; the real sections are 'AITaskAgent:CircuitBreaker' and 'AITaskAgent:RateLimit'.")]
     public const string Resilience = $"{RootSection}:Resilience";
 
     /// <summary>Conversation configuration section.</summary>

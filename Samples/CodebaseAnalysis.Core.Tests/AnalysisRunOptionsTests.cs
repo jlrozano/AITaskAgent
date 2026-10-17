@@ -220,4 +220,49 @@ public sealed class AnalysisRunOptionsTests
         Assert.Equal(expected, input.MaxParallelAuditors);
         Assert.Equal(warned, warnings.Any(w => w.Contains("CodebaseAnalysis:Reports:MaxParallelAuditors", StringComparison.Ordinal)));
     }
+
+    [Theory]
+    [InlineData("--verify")]
+    [InlineData("--repo")]
+    [InlineData("--db")]
+    [InlineData("--output")]
+    [InlineData("--force-reindex")]
+    [InlineData("--reports")]
+    [InlineData("--report")]
+    [InlineData("--log-level")]
+    [InlineData("--loglevel")]
+    [InlineData("--validation-output")]
+    [InlineData("--expected")]
+    [InlineData("--AITaskAgent:Conversation:UseSlidingWindow")]
+    public void A_value_flag_at_the_end_of_the_line_is_reported_as_missing_its_value(string flag)
+    {
+        Assert.Equal(flag, string.Join(" ", AnalysisRunOptions.FindFlagsMissingValue([flag])));
+    }
+
+    [Fact]
+    public void A_value_flag_followed_by_another_flag_is_missing_its_value()
+    {
+        // «--verify --repo X»: el proveedor tomaría «--repo» como valor de verify y se perdería el repositorio.
+        Assert.Equal("--verify", string.Join(" ", AnalysisRunOptions.FindFlagsMissingValue(["--verify", "--repo", "X"])));
+        Assert.Equal("--repo --db", string.Join(" ", AnalysisRunOptions.FindFlagsMissingValue(["--repo", "--db", "--output", "out"])));
+    }
+
+    [Fact]
+    public void Complete_command_lines_and_valueless_switches_are_not_reported()
+    {
+        Assert.Empty(AnalysisRunOptions.FindFlagsMissingValue([]));
+        Assert.Empty(AnalysisRunOptions.FindFlagsMissingValue(["--repo", "X", "--verify", "all", "--reports", "01,04", "--debug"]));
+        Assert.Empty(AnalysisRunOptions.FindFlagsMissingValue(["--trace", "--repo", "X"]));
+        Assert.Empty(AnalysisRunOptions.FindFlagsMissingValue(["--verify=all", "--repo=X"]));
+        Assert.Empty(AnalysisRunOptions.FindFlagsMissingValue(["--AITaskAgent:Conversation:UseSlidingWindow", "true"]));
+    }
+
+    [Fact]
+    public void A_dangling_verify_after_extracting_the_switches_is_still_detected()
+    {
+        // Program.cs comprueba tras ExtractSwitch: «--verify --verify-synthesis» deja un --verify sin valor.
+        var args = AnalysisRunOptions.ExtractSwitch(["--repo", "X", "--verify", VerificationCommand.SynthesisSwitch], VerificationCommand.SynthesisSwitch, out _);
+
+        Assert.Equal("--verify", string.Join(" ", AnalysisRunOptions.FindFlagsMissingValue(args)));
+    }
 }

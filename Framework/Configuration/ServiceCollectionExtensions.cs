@@ -67,7 +67,13 @@ public static class ServiceCollectionExtensions
         {
             var options = sp.GetRequiredService<IOptions<AITaskAgentOptions>>().Value;
             var logger = sp.GetService<ILogger<EventChannel>>();
-            return new EventChannel(options.Observability.EventLogLevel, logger);
+            return new EventChannel(
+                new EventChannelOptions
+                {
+                    EventLogLevel = options.Observability.EventLogLevel,
+                    ChannelCapacity = options.Observability.EventChannelCapacity
+                },
+                logger);
         });
         services.TryAddSingleton<IPipelineContextStorage, InMemoryPipelineContextStorage>();
         services.TryAddSingleton<PipelineContextFactory>();
@@ -87,7 +93,9 @@ public static class ServiceCollectionExtensions
 
             return new ConversationContext(
                 config.Conversation.MaxTokens,
-                llmService.EstimateTokenCount);
+                llmService.EstimateTokenCount,
+                sp.GetService<ILogger<ConversationContext>>(),
+                config.Conversation);
         });
 
         return services;

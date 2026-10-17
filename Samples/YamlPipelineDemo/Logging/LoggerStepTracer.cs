@@ -6,8 +6,10 @@ namespace YamlPipelineDemo.Logging;
 /// <summary>
 /// IStepTracer implementation that writes trace events to the structured logger
 /// (YAML file) instead of the console.
-/// Replaces the default ConsoleStepTracer registered by AddAITaskAgent().
+/// Not registered anywhere, and the framework never invokes IStepTracer (AddAITaskAgent()
+/// registers no tracer), so this class has no effect.
 /// </summary>
+[Obsolete("Not invoked by the framework; will be removed in a release with breaking changes. Use IEventChannel events or ActivitySource traces instead.")]
 internal sealed class LoggerStepTracer(ILogger<LoggerStepTracer> logger) : IStepTracer
 {
     public Task OnTraceEventAsync(StepTraceEvent evt)

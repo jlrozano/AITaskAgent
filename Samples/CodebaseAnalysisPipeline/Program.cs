@@ -38,6 +38,14 @@ internal static class Program
         //    quitan antes, porque sin valor se comerían el argumento siguiente.
         args = AnalysisRunOptions.ExtractSwitch(args, AnalysisRunOptions.ValidateReportsSwitch, out var validateOnly);
         args = AnalysisRunOptions.ExtractSwitch(args, VerificationCommand.SynthesisSwitch, out var verifySynthesis);
+        // Un flag que exige valor y llega sin él se ignoraría en silencio y arrancaría un análisis de pago con otra intención: se aborta antes de nada.
+        if (AnalysisRunOptions.FindFlagsMissingValue(args) is { Count: > 0 } missingValue)
+        {
+            Console.WriteLine($"❌ Falta el valor de: {string.Join(", ", missingValue)}. Uso: --flag <valor> (p. ej. --verify all, --repo <ruta>). No se ha ejecutado nada.");
+            Environment.ExitCode = 2;
+            return;
+        }
+
         IConfiguration configuration = AnalysisConfiguration.Build(
             AnalysisConfiguration.DefaultConfigFilePath, args, AnalysisConfiguration.GetEnvVar, Console.WriteLine);
 

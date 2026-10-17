@@ -96,6 +96,13 @@ public class DotNetEnricherStepTests
         Assert.Equal(1, fallback.Calls);
         Assert.Contains(reporter.Entries, e => e.Level == AnalysisLogLevel.Warning && e.Source == DotNetEnricherStep.StepName
                                                && e.Message.Contains("Se usa el enriquecimiento semántico por LLM.", StringComparison.Ordinal));
+
+        // El fallo es visible: queda una fila failed (el CLI ausente no es una pasada que no se intentó, como lo es no tener .sln).
+        using var conn = new SqliteConnection($"Data Source={db}");
+        await conn.OpenAsync();
+        var run = Assert.Single(await EnrichmentRuns.ListAsync(conn, CancellationToken.None, DotNetEnricherIdentity.EnricherName));
+        Assert.Equal(EnrichmentRuns.StatusFailed, run.Status);
+        Assert.Contains("cli not found", run.Message, StringComparison.Ordinal);
     }
 
     [Fact]

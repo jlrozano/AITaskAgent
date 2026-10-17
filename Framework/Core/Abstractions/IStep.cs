@@ -19,6 +19,13 @@ public interface IStep
     /// <summary>
     /// Gets the number of milliseconds to wait between retry attempts.
     /// </summary>
+    /// <remarks>
+    /// Applied by the retry middleware before each retry (never before the first attempt nor
+    /// after a fallback switch). A value of 0 or less disables the wait. The wait counts against
+    /// the step timeout.
+    /// The name has a typo ("Miilliseconds"); it is kept to avoid breaking implementers and will
+    /// be renamed to <c>MillisecondsBetweenRetries</c> in a release with breaking changes.
+    /// </remarks>
     int MiillisecondsBetweenRetries => 100;
     /// <summary>
     /// Optional timeout for this step's execution.

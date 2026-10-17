@@ -30,7 +30,9 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="NJsonSchema" Version="11.6.1" />
     <PackageReference Include="NJsonSchema.CodeGeneration.CSharp" Version="11.6.1" />
-    <PackageReference Include="OpenAI" Version="2.7.0" />
+    <!-- BinaryData (public API: LlmTool.ParametersSchema) lives here. It used to arrive transitively through the
+         unused OpenAI package (OpenAI -> System.ClientModel -> System.Memory.Data). -->
+    <PackageReference Include="System.Memory.Data" Version="8.0.1" />
     <PackageReference Include="YamlDotNet" Version="13.0.1" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <PackageReference Include="Microsoft.ClearScript.V8" Version="7.5.0" />

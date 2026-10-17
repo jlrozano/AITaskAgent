@@ -29,6 +29,27 @@ public sealed class FileTemplateProviderTests : IDisposable
     }
 
     [Fact]
+    public void GetTemplate_tolerates_a_name_that_already_ends_in_md()
+    {
+        // TemplateLlmStep's defaults are "{name}_prompt.md": the provider used to look for ".md.md".
+        WriteTemplate("Writer_prompt", "content");
+        var provider = new FileTemplateProvider(_dir);
+
+        Assert.Equal("content", provider.GetTemplate("Writer_prompt.md"));
+        Assert.Equal("content", provider.GetTemplate("Writer_prompt"));
+    }
+
+    [Fact]
+    public void GetTemplate_returns_null_instead_of_throwing_for_text_that_is_not_a_file_name()
+    {
+        // The resolver probes the provider with inline prompt text before rendering it inline.
+        var provider = new FileTemplateProvider(_dir);
+
+        Assert.Null(provider.GetTemplate("Hello {{ input }}\nline two: <x>?"));
+        Assert.Null(provider.GetTemplate("bad\0name"));
+    }
+
+    [Fact]
     public void GetTemplate_returns_null_when_file_does_not_exist()
     {
         var provider = new FileTemplateProvider(_dir);

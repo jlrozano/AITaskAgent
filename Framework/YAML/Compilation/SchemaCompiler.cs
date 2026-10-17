@@ -84,12 +84,14 @@ public class SchemaCompiler
         }
 
         // Embed the JS function and invoke it via ClearScript V8
-        var escapedJs = jsFunction.Replace("\"", "\\\"").Replace("\r\n", "\\n").Replace("\n", "\\n");
+        // FormatLiteral emits a complete, correctly escaped C# string literal (quotes included):
+        // backslashes, quotes, control characters and line breaks all survive the round trip.
+        var jsLiteral = SymbolDisplay.FormatLiteral(jsFunction, quote: true);
         return $$"""
             using var engine = new global::Microsoft.ClearScript.V8.V8ScriptEngine();
             engine.AddHostObject("context", context);
             engine.AddHostObject("self", this);
-            engine.Execute("{{escapedJs}}");
+            engine.Execute({{jsLiteral}});
             var jsResult = engine.Invoke("validate", this, context);
             bool isValid = jsResult is bool b ? b : true;
             return Task.FromResult((isValid, (string?)null));
@@ -211,6 +213,8 @@ public class SchemaCompiler
         try
         {
             refs.Add(MetadataReference.CreateFromFile(typeof(V8ScriptEngine).Assembly.Location));
+            // V8ScriptEngine derives from types in ClearScript.Core: without it the generated validator does not compile.
+            refs.Add(MetadataReference.CreateFromFile(typeof(Microsoft.ClearScript.ScriptEngine).Assembly.Location));
         }
         catch { /* optional */ }
 

@@ -39,6 +39,22 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
         };
     }
 
+    /// <summary>
+    /// Creates a new EventChannel from explicit options (log level and per-subscriber capacity),
+    /// independent of DI. A copy is taken, so later changes to <paramref name="options"/> have no effect.
+    /// </summary>
+    public EventChannel(EventChannelOptions options, ILogger<EventChannel>? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.ChannelCapacity, 1, nameof(options));
+        _logger = logger ?? NullLogger<EventChannel>.Instance;
+        _options = new EventChannelOptions
+        {
+            EventLogLevel = options.EventLogLevel,
+            ChannelCapacity = options.ChannelCapacity
+        };
+    }
+
     public Task SendAsync<TEvent>(TEvent progressEvent, CancellationToken cancellationToken = default)
         where TEvent : IProgressEvent
     {
@@ -211,18 +227,7 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
     {
         if (_options.EventLogLevel != LogLevel.None)
         {
-            if (evt is Events.LlmResponseEvent llmEvt)
-            {
-                _logger.Log(_options.EventLogLevel,
-                    "{EventType} from {StepName} | CorrelationId: {CorrelationId} | IsThinking: {IsThinking} | FinishReason: {FinishReason} | Content: {Content} | Tokens: {Tokens}",
-                    evt.EventType, evt.StepName, evt.CorrelationId, llmEvt.IsThinking, llmEvt.FinishReason, llmEvt.Content, llmEvt.TokensUsed);
-            }
-            else
-            {
-                _logger.Log(_options.EventLogLevel,
-                    "{EventType} from {StepName} | CorrelationId: {CorrelationId}",
-                    evt.EventType, evt.StepName, evt.CorrelationId);
-            }
+            evt.WriteLog(_logger, _options.EventLogLevel);
         }
     }
 

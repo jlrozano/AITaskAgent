@@ -446,9 +446,15 @@ public abstract partial class BaseLlmStep(
             Model = GetModel(context),
             Temperature = inference?.Temperature ?? provider?.Inference?.Temperature,
             MaxTokens = inference?.MaxTokens ?? provider?.Inference?.MaxTokens,
-            UseMaxCompletionTokens = inference?.UseMaxCompletionTokens ?? provider?.Inference?.UseMaxCompletionTokens ?? false,
+            // Resolved field by field: the typed bool properties read false when the key is absent, so
+            // only the raw nullable option tells "role did not set it" apart from "role set false".
+            UseMaxCompletionTokens = inference?.GetOption<bool?>(nameof(LlmInferenceSettings.UseMaxCompletionTokens))
+                ?? provider?.Inference?.GetOption<bool?>(nameof(LlmInferenceSettings.UseMaxCompletionTokens))
+                ?? false,
             Tools = toolDefinitions,
-            UseStreaming = inference?.UseStreaming ?? provider?.Inference?.UseStreaming ?? false,
+            UseStreaming = inference?.GetOption<bool?>(nameof(LlmInferenceSettings.UseStreaming))
+                ?? provider?.Inference?.GetOption<bool?>(nameof(LlmInferenceSettings.UseStreaming))
+                ?? false,
             BaseUrl = provider?.BaseUrl,
             ApiKey = provider?.ApiKey,
             ApiVersion = provider?.ApiVersion,

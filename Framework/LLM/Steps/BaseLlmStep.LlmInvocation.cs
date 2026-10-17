@@ -418,7 +418,7 @@ public abstract partial class BaseLlmStep
 
         foreach (var toolCall in toolCalls)
         {
-            var tool = availableTools.FirstOrDefault(t => t.Name == toolCall.Name);
+            var tool = availableTools.FirstOrDefault(t => t.Name.Equals(toolCall.Name, StringComparison.OrdinalIgnoreCase));
 
             if (tool == null)
             {

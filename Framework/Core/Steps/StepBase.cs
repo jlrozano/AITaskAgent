@@ -72,8 +72,9 @@ public abstract class StepBase(string name, Type inputType, Type outputType) : I
     public IReadOnlyList<IStepValidator> Validators => _validators;
 
     /// <summary>
-    /// Adds a semantic validator to this step. Called by <see cref="AITaskAgent.YAML.Execution.YamlPipelineFactory"/>
-    /// after deserialization, or programmatically. Validators run in order; first failure short-circuits.
+    /// Adds a semantic validator to this step programmatically. Nothing in the framework calls it:
+    /// <see cref="AITaskAgent.YAML.Execution.YamlPipelineFactory"/> does not attach validators, so a YAML
+    /// file cannot declare them. Validators run in order; first failure short-circuits.
     /// </summary>
     public void AddValidator(IStepValidator validator)
     {
@@ -83,7 +84,7 @@ public abstract class StepBase(string name, Type inputType, Type outputType) : I
 
     // ── YAML configuration properties ────────────────────────────────────────
     // These properties are set during YAML deserialization and resolved by
-    // YamlPipelineFactory to their runtime equivalents (compiled types, IStepValidator).
+    // YamlPipelineFactory to their runtime equivalents (compiled InputType/OutputType).
 
     /// <summary>
     /// YAML-only. Schema name for the input type. Resolved to <see cref="InputType"/> by SchemaCompiler.

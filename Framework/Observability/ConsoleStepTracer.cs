@@ -4,6 +4,7 @@ namespace AITaskAgent.Observability;
 /// Console implementation of step tracer for development/debugging.
 /// Outputs trace events to console with visual indicators.
 /// </summary>
+[Obsolete("Not invoked by the framework; will be removed in a release with breaking changes. Use IEventChannel events or ActivitySource traces instead.")]
 public sealed class ConsoleStepTracer : IStepTracer
 {
     public Task OnTraceEventAsync(StepTraceEvent evt)

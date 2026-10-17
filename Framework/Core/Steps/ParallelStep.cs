@@ -10,9 +10,20 @@ using System.Diagnostics;
 namespace AITaskAgent.Core.Steps;
 
 /// <summary>
-/// Non-generic base for parallel execution. Directly serializable from YAML via <c>!ParallelStep</c>.
+/// Non-generic base for parallel execution. Not declarable from YAML: the YAML factory only maps
+/// <c>IYamlStep</c> types marked with <c>[YamlStepTag]</c>, and this type is only tagged with <c>[StepTag]</c>.
 /// Executes all branches concurrently; each branch gets an isolated conversation context.
 /// </summary>
+/// <remarks>
+/// Branch step paths keep the parent prefix: a branch <c>B</c> of parallel <c>Fan</c> runs under
+/// <c>"{parent}/Fan/B"</c>, so its step is cached as <c>"{parent}/Fan/B/B"</c>.
+/// <para>
+/// Known limitation: a branch suspension (a branch result with <c>SuspendInfo</c>) is not
+/// propagated. The <see cref="ParallelResult"/> never carries <c>SuspendInfo</c>, so the pipeline
+/// continues after this step and caches it as completed, and on resume the suspended branch is
+/// never restored. Do not suspend inside a branch. See docs/guides/human-in-the-loop.md.
+/// </para>
+/// </remarks>
 [StepTag("ParallelStep")]
 public class ParallelStep : StepBase
 {
@@ -71,10 +82,14 @@ public class ParallelStep : StepBase
         await Parallel.ForEachAsync(_branches, CreateParallelOptions(cancellationToken), async (step, ct) =>
         {
             PipelineContext branchContext = context.CloneForBranch();
+            branchContext.BranchName = step.Name;
             var branchId = Guid.NewGuid().ToString();
             try
             {
-                branchContext.AddPathPart(step.Name);
+                // "{parent}/{ParallelName}/{Branch}": the clone keeps the parent's path, and the
+                // parallel's own name keeps two ParallelSteps with same-named branches apart. The
+                // branch step itself is then stored under ".../{Branch}/{Branch}".
+                branchContext.AddPathPart($"{Name}/{step.Name}");
                 await branchContext.SendEventAsync(new BranchStartedEvent
                 {
                     StepName = Name,

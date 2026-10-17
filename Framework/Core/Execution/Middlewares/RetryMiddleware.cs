@@ -26,6 +26,15 @@ internal sealed class RetryMiddleware(ILogger<RetryMiddleware> logger) : IPipeli
         int attempt = 1;
         while (attempt <= step.MaxRetries)
         {
+            // Back off before a retry (attempt > 1 is only reached after a recoverable error or a
+            // failed validation). A fallback switch resets attempt to 1, so it never waits, and
+            // fatal exceptions return before getting here. The wait counts against the step
+            // timeout, because TimeoutMiddleware wraps this middleware.
+            if (attempt > 1 && step.MiillisecondsBetweenRetries > 0)
+            {
+                await Task.Delay(step.MiillisecondsBetweenRetries, cancellationToken);
+            }
+
             // Announce every retry. ObservabilityMiddleware emits the StepStartedEvent for the
             // first attempt, but it cannot see the later ones: this middleware calls
             // step.ExecuteAsync directly rather than next(), so the retry loop lives *inside*

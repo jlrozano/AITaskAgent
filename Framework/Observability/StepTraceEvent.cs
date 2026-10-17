@@ -4,6 +4,7 @@ namespace AITaskAgent.Observability;
 /// Event representing a trace point in step execution.
 /// Maps to distributed tracing concepts (spans, events, attributes).
 /// </summary>
+[Obsolete("Not invoked by the framework; will be removed in a release with breaking changes. Use IEventChannel events or ActivitySource traces instead.")]
 public sealed class StepTraceEvent
 {
     /// <summary>Name of the step emitting the event.</summary>
@@ -21,7 +22,7 @@ public sealed class StepTraceEvent
     /// <summary>Name of the pipeline executing this step.</summary>
     public string? PipelineName { get; init; }
 
-    /// <summary>Type of step (e.g., "LlmStep", "LambdaStep") for span classification.</summary>
+    /// <summary>Type of step (e.g., "LlmStep", "DelegatedStep") for span classification.</summary>
     public string? StepType { get; init; }
 
     /// <summary>Parent step name for nested pipeline hierarchies.</summary>

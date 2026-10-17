@@ -9,6 +9,8 @@ using AITaskAgent.YAML.Steps;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.Reflection;
+using YamlDotNet.Core;
+using YamlDotNet.Core.Events;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -71,7 +73,7 @@ public sealed class YamlPipelineFactory(
     public YamlPipeline CreateFromYaml(string mergedYaml)
     {
         var deserializer = BuildDeserializer();
-        var doc = deserializer.Deserialize<YamlPipelineDocument>(mergedYaml);
+        var doc = DeserializeMerged(deserializer, mergedYaml);
 
         // Resolve each YamlLlmStep's role. Steps are deserialized against a placeholder role
         // (NullLlmService) because the profile name is only known after parsing.
@@ -98,6 +100,35 @@ public sealed class YamlPipelineFactory(
     }
 
     // ── Private ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Reads every document of a multi-document stream (files joined with <c>---</c>) and combines
+    /// them: steps are concatenated, and the pipeline name is the first non-empty one.
+    /// <c>Deserialize&lt;T&gt;(string)</c> accepts a single document only and throws on the second.
+    /// </summary>
+    private static YamlPipelineDocument DeserializeMerged(IDeserializer deserializer, string yaml)
+    {
+        var parser = new Parser(new StringReader(yaml));
+        parser.Consume<StreamStart>();
+
+        var name = string.Empty;
+        var steps = new List<IYamlStep>();
+        var count = 0;
+
+        while (parser.Accept<DocumentStart>(out _))
+        {
+            var part = deserializer.Deserialize<YamlPipelineDocument>(parser);
+            if (part == null) continue; // empty document
+            count++;
+            if (string.IsNullOrEmpty(name)) name = part.Name;
+            steps.AddRange(part.Steps);
+        }
+
+        if (count == 0)
+            throw new InvalidOperationException("The pipeline YAML contains no documents.");
+
+        return new YamlPipelineDocument { Name = name, Steps = steps };
+    }
 
     private IDeserializer BuildDeserializer()
     {

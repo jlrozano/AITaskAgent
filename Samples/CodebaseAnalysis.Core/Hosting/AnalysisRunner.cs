@@ -147,6 +147,9 @@ public static class AnalysisRunner
         ForceReindex = false,
         RequestedReports = reports.Distinct().ToList(),
         AuditorMaxToolIterations = input.AuditorMaxToolIterations,
-        AuditorMaxToolIterationsByRole = new Dictionary<string, int>(input.AuditorMaxToolIterationsByRole, StringComparer.OrdinalIgnoreCase)
+        AuditorMaxToolIterationsByRole = new Dictionary<string, int>(input.AuditorMaxToolIterationsByRole, StringComparer.OrdinalIgnoreCase),
+        MaxParallelAuditors = input.MaxParallelAuditors,
+        SourceDefaultEncoding = input.SourceDefaultEncoding,
+        BackupsToKeep = input.BackupsToKeep
     };
 }

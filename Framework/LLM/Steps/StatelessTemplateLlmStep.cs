@@ -12,6 +12,14 @@ namespace AITaskAgent.LLM.Steps;
 /// Templates are loaded via ITemplateProvider and merged with input data using ITemplateEngine.
 /// Creates a clean conversation context for each execution (does not persist history).
 /// </summary>
+/// <remarks>
+/// Known limitation: the conversation saved on suspension (<c>SaveStateAsync</c>) and the one
+/// handed back on resume (<c>RestoreStateAsync</c>) live in instance fields, because those hooks
+/// receive no <see cref="PipelineContext"/>. The conversation each call actually uses is per
+/// invocation, so this only matters when the step suspends: one instance shared by concurrent runs
+/// can save, or resume with, another run's conversation. Use one instance per run for a step that
+/// can suspend. See docs/guides/human-in-the-loop.md.
+/// </remarks>
 /// <typeparam name="TIn">Input step result type</typeparam>
 /// <typeparam name="TOut">Output LLM result type</typeparam>
 public class StatelessTemplateLlmStep<TIn, TOut>(

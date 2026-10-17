@@ -117,6 +117,37 @@ public static class AnalysisRunOptions
     }
 
     /// <summary>
+    /// Flags de la CLI que exigen valor. Cualquier otro <c>--Seccion:Clave</c> (con «:») lo exige también; <c>--trace</c> y
+    /// <c>--debug</c> no.
+    /// </summary>
+    private static readonly string[] ValueFlags =
+    [
+        "--repo", "--db", "--output", "--force-reindex", "--reports", "--report", "--log-level", "--loglevel",
+        "--verify", "--validation-output", "--expected"
+    ];
+
+    /// <summary>
+    /// Los flags que exigen valor y llegan sin él: al final de la línea o seguidos de otro <c>--flag</c>. El proveedor de línea
+    /// de comandos ignora en silencio un <c>--clave</c> final sin valor, así que <c>--verify</c> o <c>--repo</c> al final
+    /// arrancaban un análisis completo de pago con otra intención. Se llama con los argumentos tras <see cref="ExtractSwitch"/>.
+    /// La forma <c>--clave=valor</c> lleva su valor y no se comprueba.
+    /// </summary>
+    public static IReadOnlyList<string> FindFlagsMissingValue(IReadOnlyList<string> args)
+    {
+        var missing = new List<string>();
+        for (var i = 0; i < args.Count; i++)
+        {
+            var arg = args[i];
+            if (!arg.StartsWith("--", StringComparison.Ordinal) || arg.Contains('='))
+                continue;
+            var needsValue = ValueFlags.Contains(arg, StringComparer.OrdinalIgnoreCase) || arg.Contains(':');
+            if (needsValue && (i + 1 >= args.Count || args[i + 1].StartsWith("--", StringComparison.Ordinal)))
+                missing.Add(arg);
+        }
+        return missing;
+    }
+
+    /// <summary>
     /// <c>--validation-output</c>: carpeta donde se escribe <c>_validation.json</c>, relativa al repositorio o absoluta; por
     /// defecto, la de informes. Sirve para validar un repositorio sin escribir en él. No crea nada en disco.
     /// </summary>

@@ -55,8 +55,8 @@ public sealed class RouterStep(
             ? step
             : defaultRoute) ?? throw new InvalidOperationException($"No route for intention {selectedOption} and no default route");
 
-        input.NextSteps.Add(targetStep);
-
+        // Do not add targetStep to input.NextSteps here: SwitchStep.ExecuteAsync already does it
+        // with the value returned below, and adding it twice made the pipeline run it twice.
         return (targetStep, input);
     }
 }

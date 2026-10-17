@@ -10,7 +10,8 @@ public sealed class EventChannelOptions
     /// <summary>
     /// Log level for automatic event logging.
     /// Set to None to disable automatic logging (events are still sent to subscribers).
-    /// Default: None
+    /// The class default is None, but the framework never relies on it: <c>new EventChannel()</c> logs at
+    /// Information and the DI registration uses <c>ObservabilityOptions.EventLogLevel</c> (Debug).
     /// </summary>
     public LogLevel EventLogLevel { get; set; } = LogLevel.None;
 

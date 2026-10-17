@@ -36,7 +36,7 @@ public sealed class FileTemplateProvider(
     /// <summary>
     /// Gets a template by name. Returns null if not found.
     /// </summary>
-    /// <param name="name">Template name (without .md extension)</param>
+    /// <param name="name">Template name, with or without the .md extension ("x" and "x.md" both load x.md)</param>
     public string? GetTemplate(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -78,7 +78,21 @@ public sealed class FileTemplateProvider(
 
     private string? LoadTemplateFromFile(string name)
     {
-        var targetPath = Path.GetFullPath(Path.Combine(folderPath, $"{name}.md"));
+        // Tolerate names that already carry the extension: TemplateLlmStep's defaults are
+        // "{name}_prompt.md" / "{name}_system.md", and appending ".md" again looked for "X.md.md".
+        var fileName = name.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? name : $"{name}.md";
+
+        string targetPath;
+        try
+        {
+            targetPath = Path.GetFullPath(Path.Combine(folderPath, fileName));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Not a usable file name (callers may probe with inline prompt text): a miss, not a crash.
+            return null;
+        }
+
         var safeBasePath = Path.GetFullPath(folderPath) + Path.DirectorySeparatorChar;
 
         // Null on a miss (missing file or a path-traversal attempt) is the contract GetTemplate

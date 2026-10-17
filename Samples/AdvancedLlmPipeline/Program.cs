@@ -116,7 +116,10 @@ services.AddAITaskAgent();
 services.AddSingleton<ILlmService, OpenAILLmService.OpenAILlmService>();
 services.AddSingleton<ILlmService, GeminiLlmService.GeminiLlmService>();
 
+// IStepTracer is obsolete: the framework never invokes it, so this registration has no effect.
+#pragma warning disable CS0618
 services.AddSingleton<IStepTracer, NullStepTracer>();
+#pragma warning restore CS0618
 services.AddSingleton<IConversationStorage>(new FileConversationStorage("conversations"));
 
 var serviceProvider = services.BuildServiceProvider();

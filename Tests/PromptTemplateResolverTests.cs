@@ -9,8 +9,8 @@ namespace AITaskAgent.Tests;
 /// <summary>
 /// Resolve is the single choke point TemplateLlmStep and YamlLlmStep both funnel prompts through:
 /// a template-name string (when a provider is supplied) or literal text with {{...}} placeholders
-/// (when it is not). These pin both paths, the Input/Context model it builds, and the exact
-/// fallback (rawPrompt unchanged) it takes when a provider's Render comes back null.
+/// (when it is not). These pin both paths, the Input/Context model it builds, and what it does
+/// when a provider's Render comes back null: a ".md" file name throws, anything else renders inline.
 /// </summary>
 public sealed class PromptTemplateResolverTests
 {
@@ -95,13 +95,47 @@ public sealed class PromptTemplateResolverTests
     }
 
     [Fact]
-    public void Resolve_returns_rawPrompt_unchanged_when_provider_render_returns_null()
+    public void Resolve_renders_rawPrompt_as_inline_text_when_provider_has_no_such_template()
+    {
+        // It used to come back raw, with its {{...}} placeholders unrendered.
+        var provider = new RecordingProvider(renderResult: null);
+
+        var result = PromptTemplateResolver.Resolve("Hello {{Input}}", Input("world"), new PipelineContext(), provider);
+
+        Assert.Equal("Hello world", result);
+        Assert.Single(provider.Calls);
+    }
+
+    [Fact]
+    public void Resolve_keeps_a_single_word_without_placeholders_when_provider_has_no_such_template()
     {
         var provider = new RecordingProvider(renderResult: null);
 
         var result = PromptTemplateResolver.Resolve("outliner_prompt", Input("x"), new PipelineContext(), provider);
 
         Assert.Equal("outliner_prompt", result);
+    }
+
+    [Theory]
+    [InlineData("Writer_prompt.md")]
+    [InlineData("  Writer_prompt.MD ")]
+    public void Resolve_throws_instead_of_sending_a_missing_template_file_name(string rawPrompt)
+    {
+        var provider = new RecordingProvider(renderResult: null);
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => PromptTemplateResolver.Resolve(rawPrompt, Input("x"), new PipelineContext(), provider));
+
+        Assert.Contains(rawPrompt.Trim(), ex.Message);
+    }
+
+    [Fact]
+    public void Resolve_without_provider_still_renders_md_ending_text_inline()
+    {
+        // Without a provider there is no lookup to fail: the text is inline by definition.
+        var result = PromptTemplateResolver.Resolve("see notes.md", Input("x"), new PipelineContext());
+
+        Assert.Equal("see notes.md", result);
     }
 
     [Fact]

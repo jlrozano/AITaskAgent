@@ -703,3 +703,62 @@ describe('runReducer: preparación por subsistema e investigaciones (modo B)', (
     expect(canVerify(state, 'FlujosEndToEnd')).toBe(true);
   });
 });
+
+describe('runReducer: pasada compartida y fase facets', () => {
+  const prepared = (events: AnalysisEventDto[]) => replay(events, createRunState(preparedRunStatus));
+  const timeBudgetDone = preparedRun.findIndex((e) => e.type === 'step.completed' && e.source === 'TimeBudgetStep');
+  const base = preparedRun.slice(0, timeBudgetDone + 1);
+  const tbEvent = preparedRun[timeBudgetDone];
+  let seq = 10_000;
+  const at = (seconds: number) => new Date(Date.parse(tbEvent.ts) + seconds * 1000).toISOString();
+  const passEvent = (type: string, seconds: number, data: Record<string, unknown>, level: AnalysisEventDto['level'] = 'info', message = type): AnalysisEventDto => ({
+    seq: seq++,
+    runId: tbEvent.runId,
+    ts: at(seconds),
+    type,
+    source: 'SharedPassStep',
+    report: null,
+    phase: 'facets',
+    level,
+    message,
+    data,
+  });
+  const started = (seconds: number) => passEvent('step.started', seconds, { stepPath: 'x', attempt: 1 });
+  const progress = (seconds: number, phase: string) => passEvent('sharedpass.progress', seconds, { phase });
+  const completed = (seconds: number, success = true) =>
+    passEvent('step.completed', seconds, { stepPath: 'x', success, durationMs: seconds * 1000, error: success ? null : 'boom' }, success ? 'success' : 'error');
+
+  it('SharedPassStep reabre la fase facets que TimeBudgetStep cerró y la mantiene en marcha durante la pasada', () => {
+    const state = prepared([...base, started(1), progress(2, 'reading'), progress(3, 'judging')]);
+    expect(state.phases.facets).toMatchObject({ status: 'running', finishedAt: null, error: null });
+    expect(state.phases.reports.status).toBe('pending');
+    expect(state.sharedPass?.phase).toBe('judging');
+  });
+
+  it('un sharedpass.progress en curso reabre la fase aunque no haya llegado el step.started', () => {
+    const state = prepared([...base, progress(2, 'reading')]);
+    expect(state.phases.facets).toMatchObject({ status: 'running', finishedAt: null });
+  });
+
+  it('el step.completed de SharedPassStep cierra facets con la duración de todo el tramo', () => {
+    const closed = prepared([...base, started(1), progress(2, 'reading'), progress(3, 'done'), completed(4)]);
+    const facetsStart = preparedRun[preparedRun.findIndex((e) => e.type === 'step.started' && e.source === 'SqlFacetExtractorStep')].ts;
+    expect(closed.phases.facets).toMatchObject({ status: 'succeeded', finishedAt: at(4), error: null });
+    expect(closed.phases.facets.durationMs).toBe(Date.parse(at(4)) - Date.parse(facetsStart));
+  });
+
+  it('un fallo de la pasada (progress en fase failed, aunque el step termine con éxito) marca la fase fallida', () => {
+    const state = prepared([...base, started(1), progress(2, 'reading'), progress(3, 'failed'), completed(4)]);
+    expect(state.phases.facets).toMatchObject({ status: 'failed', finishedAt: at(3) });
+    expect(state.phases.facets.error).toBeTruthy();
+  });
+
+  it('un step.completed fallido de SharedPassStep marca la fase fallida', () => {
+    const state = prepared([...base, started(1), progress(2, 'reading'), completed(3, false)]);
+    expect(state.phases.facets).toMatchObject({ status: 'failed', error: 'boom' });
+  });
+
+  it('sin pasada compartida la fase facets sigue cerrándola TimeBudgetStep', () => {
+    expect(prepared(base).phases.facets.status).toBe('succeeded');
+  });
+});

@@ -12,7 +12,7 @@ Emitir un dictamen cualitativo de salud técnica (semáforo Verde, Ámbar o Rojo
    - La deuda técnica debe evaluarse en función de cómo impacta el mantenimiento y la evolución dentro de esa plataforma concreta.
 
 2. **Ponderación Pragmática de Hotspots**:
-   - Un valor elevado en el ranking de hotspots (`hotspot = CC * fan_in`) **no implica automáticamente que deba reescribirse**.
+   - Un valor elevado en el ranking de hotspots (`hotspot = round(CC·ln(1+fan_in), 2)` en Java y C#; si el prompt indica que es un repositorio Office, `hotspot` es un indicador propio de esa ingesta y no esa fórmula) **no implica automáticamente que deba reescribirse**.
    - Un componente central puede tener alta complejidad ciclomática por requerimientos de negocio intrínsecos y alto fan-in por ser el núcleo operativo. Si es estable en ejecución, demolerlo introduce un **riesgo operativo inadmisible**.
    - Los hotspots más peligrosos son aquellos que combinan complejidad accidental, lógica duplicada, ausencia de manejo de errores controlado y mezcla indebida de dominios.
 

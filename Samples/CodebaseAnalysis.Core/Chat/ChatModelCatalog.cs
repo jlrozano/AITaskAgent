@@ -115,7 +115,9 @@ public sealed class ChatModelCatalog
 
     private static ChatModelOption Option(string id, string? label, string roleName, LlmRole role, bool? streaming, Action<string> warn)
     {
-        var useStreaming = role.Inference?.UseStreaming ?? role.Provider.Inference?.UseStreaming ?? false;
+        var useStreaming = role.Inference?.GetOption<bool?>(nameof(LlmInferenceSettings.UseStreaming))
+            ?? role.Provider.Inference?.GetOption<bool?>(nameof(LlmInferenceSettings.UseStreaming))
+            ?? false;
         if (streaming == true && !useStreaming)
             warn($"⚠️ El modelo de chat '{id}' declara Streaming pero su rol '{roleName}' no tiene Inference:UseStreaming.");
 
