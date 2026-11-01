@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -66,7 +67,7 @@ public sealed class TemplatePromptResolutionTests : IDisposable
         IStep step = new TemplateLlmStep<LlmStringStepResult, LlmStringStepResult>(
             "Writer", RoleFor(service), new FileTemplateProvider(_dir));
 
-        await step.ExecuteAsync(Input("dragons"), new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+        await step.ExecuteAsync(Input("dragons"), new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         var request = Assert.Single(service.Requests);
         Assert.Equal("You are a writer.", request.SystemPrompt);
@@ -83,7 +84,7 @@ public sealed class TemplatePromptResolutionTests : IDisposable
             promtTemplateString: "Hola {{Input}}",
             systemTemplateString: "Sistema para {{Input}}");
 
-        await step.ExecuteAsync(Input("mundo"), new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+        await step.ExecuteAsync(Input("mundo"), new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         var request = Assert.Single(service.Requests);
         Assert.Equal("Sistema para mundo", request.SystemPrompt);
@@ -100,7 +101,7 @@ public sealed class TemplatePromptResolutionTests : IDisposable
             "Writer", RoleFor(service), new FileTemplateProvider(_dir));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            step.ExecuteAsync(Input("dragons"), new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None));
+            step.ExecuteAsync(Input("dragons"), new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None));
 
         Assert.Contains("Writer_prompt.md", ex.Message);
         Assert.Empty(service.Requests);

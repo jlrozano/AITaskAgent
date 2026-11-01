@@ -471,10 +471,31 @@ public sealed class GeminiLlmService : ILlmService
 
         if (_logger.IsEnabled(LogLevel.Debug))
         {
-            _logger.LogDebug("Full Gemini Request Content:\n{ContentJson}", Newtonsoft.Json.JsonConvert.SerializeObject(contents, Newtonsoft.Json.Formatting.Indented));
+            _logger.LogDebug("Full Gemini Request Content:\n{ContentJson}", RedactInlineData(Newtonsoft.Json.Linq.JToken.FromObject(contents)).ToString(Newtonsoft.Json.Formatting.Indented));
         }
 
         return contents;
+    }
+
+    /// <summary>Replaces the base64 of every <c>inlineData.data</c> (images, PDFs) with its length so it never reaches a log.</summary>
+    internal static Newtonsoft.Json.Linq.JToken RedactInlineData(Newtonsoft.Json.Linq.JToken token)
+    {
+        var inlines = ((Newtonsoft.Json.Linq.JContainer)token).Descendants().OfType<Newtonsoft.Json.Linq.JProperty>()
+            .Where(p => string.Equals(p.Name, "inlineData", StringComparison.OrdinalIgnoreCase) && p.Value is Newtonsoft.Json.Linq.JObject)
+            .Select(p => (Newtonsoft.Json.Linq.JObject)p.Value)
+            .ToList();
+        foreach (var inline in inlines)
+        {
+            var data = inline.Properties().FirstOrDefault(p => string.Equals(p.Name, "data", StringComparison.OrdinalIgnoreCase));
+            if (data is { Value: Newtonsoft.Json.Linq.JValue { Type: Newtonsoft.Json.Linq.JTokenType.String or Newtonsoft.Json.Linq.JTokenType.Bytes } value })
+            {
+                // byte[] serializes to a JValue of type Bytes (base64 only when written out).
+                var length = value.Value is byte[] bytes ? (bytes.Length + 2) / 3 * 4 : value.ToString().Length;
+                data.Value = $"<{length} base64 chars omitted>";
+            }
+        }
+
+        return token;
     }
 
     /// <summary>

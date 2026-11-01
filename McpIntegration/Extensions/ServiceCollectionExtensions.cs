@@ -1,3 +1,4 @@
+using AITaskAgent.Configuration;
 using McpIntegration.Abstractions;
 using McpIntegration.Configuration;
 using McpIntegration.Providers;
@@ -21,12 +22,14 @@ public static class ServiceCollectionExtensions
     {
         var builder = new McpServerConfigBuilder(serverName);
         configure(builder);
-        var config = builder.Build();
+        return services.AddExtension(new McpExtension(builder.Build()));
+    }
 
+    /// <summary>The registrations of <see cref="McpExtension"/>.</summary>
+    internal static void RegisterProvider(IServiceCollection services, McpServerConfig config)
+    {
         services.TryAddTransient<IMcpToolProvider>(sp =>
             new McpToolProvider(config, sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<McpToolProvider>>()));
-
-        return services;
     }
 
     /// <summary>

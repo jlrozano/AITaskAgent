@@ -1,0 +1,80 @@
+using AITaskAgent.Core.Abstractions;
+using AITaskAgent.Core.Models;
+using AITaskAgent.LLM.Abstractions;
+using AITaskAgent.LLM.Configuration;
+using AITaskAgent.LLM.Conversation.Context;
+using AITaskAgent.Support.Template;
+
+namespace AITaskAgent.LLM.Steps;
+
+/// <summary>
+/// Stateless LLM step that uses templates for prompts.
+/// Templates are loaded via ITemplateProvider and merged with input data using ITemplateEngine.
+/// Creates a clean conversation context for each execution (does not persist history).
+/// </summary>
+/// <remarks>
+/// Known limitation: the conversation saved on suspension (<c>SaveStateAsync</c>) and the one
+/// handed back on resume (<c>RestoreStateAsync</c>) live in instance fields, because those hooks
+/// receive no <see cref="PipelineContext"/>. The conversation each call actually uses is per
+/// invocation, so this only matters when the step suspends: one instance shared by concurrent runs
+/// can save, or resume with, another run's conversation. Use one instance per run for a step that
+/// can suspend. See docs/guides/human-in-the-loop.md.
+/// </remarks>
+/// <typeparam name="TIn">Input step result type</typeparam>
+/// <typeparam name="TOut">Output LLM result type</typeparam>
+public class StatelessTemplateLlmStep<TIn, TOut>(
+    string name,
+    LlmRole role,
+    ITemplateProvider? templateProvider = null,
+    IList<string>? tools = null,
+    string? promtTemplateString = null,
+    string? systemTemplateString = null
+) : TemplateLlmStep<TIn, TOut>(name, role, templateProvider, tools, promtTemplateString, systemTemplateString)
+
+    where TIn : IStepResult
+    where TOut : ILlmStepResult
+{
+    private ConversationContext? _restoredConversation;
+    private ConversationContext? _currentConversation;
+    private readonly int? _roleMaxTokens = role.Inference?.MaxTokens;
+
+    protected override Task<object?> SaveStateAsync()
+    {
+        // En un paso "Stateless", la conversación vive de forma aislada en `_currentConversation`
+        // (lo que devolvió GetConversationContext para esta invocación - BaseLlmStep guarda esa
+        // misma instancia en su propio estado por invocación, no aquí).
+        // Guardando el contexto entero garantizamos que las herramientas o historial previo (ej: el AskUser Tool)
+        // no se pierdan al suspender el proceso. El framework (PipelineContext) ya lo serializará automáticamente.
+        return Task.FromResult<object?>(_currentConversation);
+    }
+
+    protected override Task RestoreStateAsync(object? state, object? hitlResponse)
+    {
+        if (state is ConversationContext savedContext)
+        {
+            _restoredConversation = savedContext;
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Creates a clean conversation context (stateless) unless it is resuming from a saved state.
+    /// </summary>
+    protected override ConversationContext GetConversationContext(PipelineContext context)
+    {
+        if (_restoredConversation != null)
+        {
+            _currentConversation = _restoredConversation;
+            _restoredConversation = null; // Consumir y limpiar
+
+        }
+        else
+        {
+            var history = context.AsLlmContext(Name).Conversation.History;
+            _currentConversation = new(_roleMaxTokens ?? history.MaxTokens, history.TokenCounter);
+
+        }
+        return _currentConversation;
+    }
+
+}

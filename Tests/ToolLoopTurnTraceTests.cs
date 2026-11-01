@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -99,7 +100,7 @@ public sealed class ToolLoopTurnTraceTests
 
         await step.ExecuteAsync(
             new LlmStringStepResult(new EmptyStep("Seed")) { Content = "hazlo" },
-            new PipelineContext(null, logs), attempt: 1, lastStepResult: null, CancellationToken.None);
+            new LlmPipelineContext(null, logs), attempt: 1, lastStepResult: null, CancellationToken.None);
         return logs;
     }
 

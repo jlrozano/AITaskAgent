@@ -69,6 +69,9 @@ record WeatherArgs(string Location);
 
 ## Implementing `ITool` Directly
 
+`ITool` also has an optional `UsageGuidelines` property (`string?`, `null` by default): behavioural guidance
+on when and how to use the tool, injected into the system prompt. The example below does not override it.
+
 ```csharp
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
@@ -179,9 +182,19 @@ var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>(
 
 `Tools` defaults to `role.Tools ?? []`. `TemplateLlmStep` and `IntentionAnalyzerStep` also accept an
 `IList<string>` of tool **names**, resolved through `AvailableTools.Instance.GetTools(...)` (with no
-names they start with an empty list rather than `role.Tools`).
+names they start with an empty list rather than `role.Tools`); a name that is not registered is
+silently dropped (`TemplateLlmStep`).
 
-Requested calls are matched against `Tools` by exact `Name` (case-sensitive) and run one after
+`YamlLlmStep` resolves its tool names without static state, from the service provider the step was
+created with: first the `ITool` services, then the `ITools` registry, then the `ToolAlias` services (a
+bare name wins over an alias). A name that is not available throws `InvalidOperationException`, listing
+the available ones.
+
+Qualified aliases of the form `Source:name` are not created by the framework: the host (the workflow
+designer, in `Samples/WorkflowDesigner.Core/Engine/EngineTools.cs`) registers them as `ToolAlias`
+services. The name the model sees is still `ITool.Name`.
+
+Requested calls are matched against `Tools` by `Name`, ignoring case, and run one after
 another. An unknown name, or an exception thrown by the tool, is reported back to the model as the
 tool message (`Error: Tool '...' not found` / `Error executing tool: ...`); it does not fail the step.
 
@@ -231,6 +244,17 @@ so a hand-rolled `ITool` must raise them itself or go unobserved.
 |-------|------|------------|
 | `ToolStartedEvent` | Before tool execution | StepName, ToolName, CorrelationId, AdditionalData["parameters"] |
 | `ToolCompletedEvent` | After execution (success or error) | ToolName, Success, Duration, ErrorMessage, AdditionalData["parameters"] (+ ["result"] on success) |
+
+Both events also have `Display`, the text the tool wants shown, rendered from its `DisplayStart` / `DisplayEnd`
+templates (properties of `LlmTool` and `McpToolWrapper`) or from the host's `IDisplayTextProvider` by tool name:
+
+```csharp
+tool.DisplayStart = "Querying {{ args.table }}";                       // args: the call arguments (JSON parsed)
+tool.DisplayEnd   = "{{ tool }}: {{ result.rows }} rows ({{ durationMs }} ms)";   // result, success, error, durationMs
+```
+
+The model, limits and guarantees (never throws, 500 characters, no includes) are in
+[Display text](event-system.md#display-text).
 
 ```csharp
 using var subscription = eventChannel.Subscribe(async (evt, ct) =>

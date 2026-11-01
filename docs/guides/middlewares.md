@@ -54,13 +54,18 @@ untouched), but `Pipeline` always resolves a non-null `DefaultStepTimeout`: 1 mi
 `AddAITaskAgent()` (`AITaskAgent:Timeouts:DefaultStepTimeout`), 30 minutes (`PipelineOptions`) when
 `Pipeline` is constructed directly. When an `OperationCanceledException` caused by the expiry reaches
 it, the middleware emits a `StepTimeoutEvent` carrying `StepName`, `StepPath` and
-`ConfiguredTimeout`, and returns an error result (`Step X timed out after T`) instead of throwing.
+`ConfiguredTimeout`, and returns an error result (`Step X exceeded its limit of N s`, carrying a `TimeoutException` as
+`OriginalException`) instead of throwing.
 
 > [!NOTE]
 > `RetryMiddleware`, inside it, catches every exception thrown by the step —
-> `OperationCanceledException` included — and turns it into an error result carrying the exception.
-> So a timeout that fires inside step code normally surfaces as that error result, with no
-> `StepTimeoutEvent`.
+> `OperationCanceledException` included — and turns it into an error result carrying the exception;
+> some steps (`ScriptStep`) catch the cancellation and return their own error. So the expiry normally
+> reaches `TimeoutMiddleware` as an error result, not as an exception. `TimeoutMiddleware` therefore also
+> treats **any error result** as the timeout when its timer fired and the caller's token was not cancelled:
+> the step is reported as `Step X exceeded its limit of N s` (`OriginalException` is a `TimeoutException`)
+> and the `StepTimeoutEvent` is emitted. A cancellation by the caller (pipeline timeout, user) is left as it
+> is.
 
 Because Timeout wraps Retry, the timeout is **global across all retry attempts**, not per attempt.
 
@@ -71,8 +76,14 @@ Terminal middleware that handles retry logic:
 1. Executes `step.ExecuteAsync(...)` — emitting a `StepStartedEvent` for every attempt after the first
 2. Runs structural validation (`result.ValidateAsync`)
 3. Runs semantic validation (`step.ValidateAsync`, which in `StepBase` runs `step.Validators` in order)
-4. If invalid and attempts remain, retries with the error text as feedback
+4. If invalid and attempts remain, retries with the error text as feedback, after waiting
+   `step.MiillisecondsBetweenRetries` (default 100 ms; 0 or less disables it; the name's typo is real).
+   The wait is applied before every attempt after the first, counts against the step timeout and is
+   skipped after a fallback switch
 5. Calls `step.FinalizeAsync(...)` on completion
+
+A `StepHookException` thrown by a validator is fatal too: the step is finalized and an error result
+returned, without retry.
 
 When the attempts run out it returns the last attempt's result, whose `Error` holds the last
 failure message; `Validation failed after N attempts` is only logged.

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AITaskAgent.CSharp</RootNamespace>
+    <AssemblyName>AITaskAgent.Extensions.CSharp</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AITaskAgent.Core\AITaskAgent.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Roslyn and the C# class generator live only in this optional extension: the framework and the YAML engine stay without them. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="NJsonSchema.CodeGeneration.CSharp" Version="11.6.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AITaskAgent.Extensions.CSharp.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -2,6 +2,11 @@
 
 `AITaskAgent.Observability.*`
 
+> Assemblies: the contracts (`IEventChannel`, `IProgressEvent`, `IEventSubscription`, `StepStatus`) and the base events live in
+> `AITaskAgent.Abstractions`; `EventChannel` and the tracers in `AITaskAgent.Core`; the five LLM events (`LlmResponseEvent`,
+> `ToolStartedEvent`, `ToolCompletedEvent`, `TagStartedEvent`, `TagCompletedEvent`) in `AITaskAgent.Extensions.Llm`. The namespace is the
+> same everywhere.
+
 ## EventChannel
 
 Default implementation of `IEventChannel`. Subscriptions are routed by **`CorrelationId`**: a
@@ -14,6 +19,9 @@ public sealed class EventChannel : IEventChannel, IAsyncDisposable
     public EventChannel(
         LogLevel eventLogLevel = LogLevel.Information,
         ILogger<EventChannel>? logger = null);
+
+    // Explicit options: log level and per-subscriber capacity (a copy is taken; capacity < 1 throws)
+    public EventChannel(EventChannelOptions options, ILogger<EventChannel>? logger = null);
 
     public Task SendAsync<TEvent>(TEvent progressEvent, CancellationToken cancellationToken = default)
         where TEvent : IProgressEvent;
@@ -62,10 +70,12 @@ public interface IEventSubscription : IAsyncDisposable
 The automatic logging level is the `eventLogLevel` constructor argument (default
 `LogLevel.Information`); the DI registration passes `AITaskAgentOptions.Observability.EventLogLevel`
 (default `LogLevel.Debug`). `EventChannelOptions` (`EventLogLevel`, default `None`;
-`ChannelCapacity`, default 1000) is public, but `EventChannel` builds its own instance from the
-constructor argument, so the per-subscriber buffer of `Subscribe` is always 1000.
+`ChannelCapacity`, default 1000) is public and is what the second constructor takes. The first constructor
+builds its own options from `eventLogLevel`, so its per-subscriber buffer of `Subscribe` is the default, 1000. The DI
+registration (`AddAITaskAgentCore`) and the channel `PipelineContextFactory` creates when `subscribers` are passed use the second constructor with
+`AITaskAgentOptions.Observability.EventChannelCapacity` (default 1000), so that setting sets the buffer.
 
-**Source:** [EventChannel.cs](../../Framework/Observability/EventChannel.cs)
+**Source:** [EventChannel.cs](../../AITaskAgent.Core/Observability/EventChannel.cs)
 
 ---
 
@@ -178,8 +188,12 @@ public sealed record StepStartedEvent : ProgressEventBase
     public string? StepPath { get; init; }
     public int AttemptNumber { get; init; } = 1;
     public Dictionary<string, object>? AdditionalData { get; init; }
+    public string? Display { get; init; }
 }
 ```
+
+`Display` is the text rendered from the step's `DisplayStart` template (or from an `IDisplayTextProvider`);
+null without a template. See [Display text](../guides/event-system.md#display-text).
 
 `RetryMiddleware` emits one of these per retry (attempts 2 and up) because it calls the step
 directly rather than going through `ObservabilityMiddleware` again.
@@ -196,6 +210,7 @@ public sealed record StepCompletedEvent : ProgressEventBase, IStepCompletedEvent
     public string? ErrorMessage { get; init; }
     public Dictionary<string, object?> AdditionalData { get; init; } = [];
     public IStepResult? StepResult { get; init; }
+    public string? Display { get; init; }
 }
 
 public interface IStepCompletedEvent : IProgressEvent
@@ -371,6 +386,7 @@ public sealed record ToolStartedEvent : ProgressEventBase
     public override string EventType => "tool.started";
     public required string ToolName { get; init; }
     public Dictionary<string, object>? AdditionalData { get; init; }
+    public string? Display { get; init; }
 }
 ```
 
@@ -385,8 +401,41 @@ public sealed record ToolCompletedEvent : ProgressEventBase
     public TimeSpan Duration { get; init; }
     public string? ErrorMessage { get; init; }
     public Dictionary<string, object>? AdditionalData { get; init; }
+    public string? Display { get; init; }
 }
 ```
+
+#### Display text
+
+`StepStartedEvent`, `StepCompletedEvent`, `ToolStartedEvent` and `ToolCompletedEvent` carry `string? Display`: a short text rendered from a
+template, null when there is none or the template fails (a failure is logged as a warning and the event goes without it).
+
+```csharp
+namespace AITaskAgent.Observability;   // AITaskAgent.Abstractions
+
+public enum DisplayKind  { Step, Tool }
+public enum DisplayPhase { Start, End }
+
+public interface IDisplayable                     // implemented by StepBase and LlmTool
+{
+    string? DisplayStart { get; }
+    string? DisplayEnd { get; }
+}
+
+// Optional host service, registered in DI: supplies the template by name for steps/tools that declare none of their own
+public interface IDisplayTextProvider
+{
+    string? GetTemplate(DisplayKind kind, string name, DisplayPhase phase);
+}
+```
+
+A template declared by the step or tool (`DisplayStart` / `DisplayEnd`) wins over the one from `IDisplayTextProvider`. The provider is called once
+per start and end event. `DisplayTextRenderer` (`AITaskAgent.Core`, static) renders the template (`StepStart`, `StepEnd`, `ToolStart`, `ToolEnd`); a text
+longer than `DisplayTextRenderer.MaxLength` (500) is cut with an ellipsis, and file includes are refused. Template models, YAML `display:` and
+examples are in [Display text](../guides/event-system.md#display-text).
+
+**Source:** [IDisplayTextProvider.cs](../../AITaskAgent.Abstractions/Observability/IDisplayTextProvider.cs),
+[DisplayTextRenderer.cs](../../AITaskAgent.Core/Support/Template/DisplayTextRenderer.cs)
 
 ---
 
@@ -513,4 +562,4 @@ public static class AITaskAgentConstants.TelemetryTags
 
 Note `correlation.id`, not `correlation_id`.
 
-**Source:** [AITaskAgentConstants.TelemetryTags.cs](../../Framework/Core/Constants/AITaskAgentConstants.TelemetryTags.cs)
+**Source:** [AITaskAgentConstants.TelemetryTags.cs](../../AITaskAgent.Abstractions/Constants/AITaskAgentConstants.TelemetryTags.cs)

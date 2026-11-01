@@ -1,7 +1,9 @@
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Models;
 using AITaskAgent.LLM.Tools.Abstractions;
+using AITaskAgent.Observability;
 using AITaskAgent.Observability.Events;
+using AITaskAgent.Support.Template;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -18,7 +20,7 @@ namespace McpIntegration.Tools;
 public sealed class McpToolWrapper(
     Tool mcpTool,
     McpClient client,
-    string serverName) : ITool
+    string serverName) : ITool, IDisplayable
 {
     private readonly Tool _mcpTool = mcpTool ?? throw new ArgumentNullException(nameof(mcpTool));
     private readonly McpClient _client = client ?? throw new ArgumentNullException(nameof(client));
@@ -26,6 +28,12 @@ public sealed class McpToolWrapper(
 
     /// <inheritdoc/>
     public string Name => _mcpTool.Name;
+
+    /// <summary>Template of <c>ToolStartedEvent.Display</c>; see <see cref="DisplayTextRenderer"/>. Null means none.</summary>
+    public string? DisplayStart { get; set; }
+
+    /// <summary>Template of <c>ToolCompletedEvent.Display</c>; see <see cref="DisplayTextRenderer"/>. Null means none.</summary>
+    public string? DisplayEnd { get; set; }
 
     /// <inheritdoc/>
     public string Description => _mcpTool.Description ?? string.Empty;
@@ -66,7 +74,9 @@ public sealed class McpToolWrapper(
             CorrelationId = context.CorrelationId,
             Timestamp = DateTimeOffset.UtcNow,
             ToolName = Name,
-            AdditionalData = startedData
+            AdditionalData = startedData,
+            Display = DisplayTextRenderer.ToolStart(
+                this, Name, argumentsJson, context, startedData.ToDictionary(kv => kv.Key, kv => (object?)kv.Value))
         }, cancellationToken);
 
         try
@@ -128,7 +138,10 @@ public sealed class McpToolWrapper(
                 ToolName = Name,
                 Success = true,
                 Duration = stopwatch.Elapsed,
-                AdditionalData = completedData
+                AdditionalData = completedData,
+                Display = DisplayTextRenderer.ToolEnd(
+                    this, Name, argumentsJson, textResult, context, true, null, stopwatch.Elapsed,
+                    completedData.ToDictionary(kv => kv.Key, kv => (object?)kv.Value))
             }, cancellationToken);
 
             return textResult;
@@ -151,7 +164,10 @@ public sealed class McpToolWrapper(
                 Success = false,
                 Duration = stopwatch.Elapsed,
                 ErrorMessage = ex.Message,
-                AdditionalData = new() { { "McpServer", _serverName } }
+                AdditionalData = new() { { "McpServer", _serverName } },
+                Display = DisplayTextRenderer.ToolEnd(
+                    this, Name, argumentsJson, null, context, false, ex.Message, stopwatch.Elapsed,
+                    new Dictionary<string, object?> { ["McpServer"] = _serverName })
             }, cancellationToken);
 
             throw;

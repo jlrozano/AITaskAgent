@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -97,7 +98,7 @@ public sealed class LlmCallUsageEventTests
         {
             var result = await step.ExecuteAsync(
                 new LlmStringStepResult(new EmptyStep("Seed")) { Content = "hazlo" },
-                new PipelineContext(channel), attempt: 1, lastStepResult: null, CancellationToken.None);
+                new LlmPipelineContext(channel), attempt: 1, lastStepResult: null, CancellationToken.None);
             await channel.DisposeAsync();
             lock (events)
             {

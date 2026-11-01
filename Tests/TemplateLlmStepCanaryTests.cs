@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -73,7 +74,7 @@ public sealed class TemplateLlmStepCanaryTests : IDisposable
 
         var input = new LlmStringStepResult(new EmptyStep("Seed")) { Content = "vampiros extraterrestres" };
 
-        await step.ExecuteAsync(input, new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+        await step.ExecuteAsync(input, new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         Assert.Single(capturingService.Requests);
         var request = capturingService.Requests[0];

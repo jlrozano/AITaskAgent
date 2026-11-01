@@ -13,8 +13,9 @@ carries an `Equivalent to BRMS <X>` comment.
 ## Why it is parked
 
 It overlaps with the YAML pipeline engine, which solves the same problem — describing a pipeline as
-data rather than code — and is further along: it compiles JSON Schemas into real C# types, validates
-the graph before running, and has a working sample. Two competing answers to one question is worse
+data rather than code — and is further along: it creates steps from an injectable `IStepRegistry`,
+describes them with a JSON Schema (`IStepRegistry.Describe`), validates the graph and the step
+configuration before running, runs JavaScript steps (`ScriptStep`) and has a working sample. Two competing answers to one question is worse
 than one, so this one waits until the YAML engine's shape is settled and it is clear what a designer
 should build on.
 
@@ -31,15 +32,15 @@ It was written against an older core, so expect these:
   implement `IStep` directly rather than deriving from `StepBase`, so they must supply both.
 - **`PipelineContext.CurrentPath` is now `CurrentStepPath`**, and the context carries a `Runtime`
   reference to the engine executing it.
-- **`StepManager` collides by name** with `Framework/Core/Steps/StepManager.cs`, which arrived with
-  the merge and does much the same job — registering step types by tag and building them from
-  configuration. Before adapting this one, decide whether it should exist at all or whether the
-  designer should use the framework's.
+- **`StepManager` overlaps with the framework's `IStepRegistry`** (`AITaskAgent.Core/Steps/StepRegistry.cs`),
+  which replaced the framework's own static `StepManager` and does much the same job — registering step
+  types by tag and building them from configuration. Before adapting this one, decide whether it should
+  exist at all or whether the designer should use the framework's.
 
 ## The open decision
 
-This project uses **Jint** for JavaScript; the YAML engine uses **ClearScript V8** for schema
-validation. Shipping two JavaScript engines in one product is hard to justify. Whichever survives,
+This project uses **Jint** for JavaScript; the framework's `ScriptStep` (`AITaskAgent.Extensions.Script`)
+uses **ClearScript V8**. Shipping two JavaScript engines in one product is hard to justify. Whichever survives,
 that choice should be made before this is revived rather than after.
 
 ## Housekeeping

@@ -36,6 +36,9 @@ public class OpenAILlmService : ILlmService, IDisposable
     private readonly ConcurrentDictionary<string, HttpClient> _clients = new();
     private readonly ILogger _logger;
 
+    /// <summary>The logger, for subclasses of this assembly that reuse the transport (see the Responses services).</summary>
+    internal ILogger Logger => _logger;
+
     private static readonly HashSet<int> TransientStatusCodes = [429, 500, 502, 503, 504];
 
     private readonly int _retryMaxAttempts;
@@ -93,14 +96,14 @@ public class OpenAILlmService : ILlmService, IDisposable
     /// </summary>
     internal LlmCallGateRegistry Gates { get; set; } = LlmCallGateRegistry.Shared;
 
-    private LlmCallGate GateOf(LlmRequest request)
+    internal LlmCallGate GateOf(LlmRequest request)
     {
         var limit = request.GetOption<int?>(MaxConcurrentRequestsKey) ?? DefaultMaxConcurrentRequests;
         return Gates.For(LlmCallGateRegistry.KeyOf(request.BaseUrl, request.Model), limit);
     }
 
     /// <summary>The pause the provider asked for with a 429 or 503, shared with every call of the same gate.</summary>
-    private static void ReportThrottle(LlmCallGate gate, int statusCode, TimeSpan? retryAfter)
+    internal static void ReportThrottle(LlmCallGate gate, int statusCode, TimeSpan? retryAfter)
     {
         if (statusCode is 429 or 503 && retryAfter is { } wait)
             gate.ReportThrottle(wait);
@@ -117,18 +120,18 @@ public class OpenAILlmService : ILlmService, IDisposable
     // Infrastructure
     // -------------------------------------------------------------------------
 
-    private static bool IsRetriable(int statusCode) =>
+    internal static bool IsRetriable(int statusCode) =>
         TransientStatusCodes.Contains(statusCode);
 
     /// <summary>How much of an unexpected response body reaches the log.</summary>
-    private const int RawBodyLogLimit = 4000;
+    internal const int RawBodyLogLimit = 4000;
 
-    private static string Truncate(string value, int maxLength) =>
+    internal static string Truncate(string value, int maxLength) =>
         string.IsNullOrEmpty(value) || value.Length <= maxLength
             ? value
             : value[..maxLength] + $"... [truncated, {value.Length} chars total]";
 
-    private HttpClient GetOrCreateClient(LlmRequest request)
+    internal HttpClient GetOrCreateClient(LlmRequest request)
     {
         var cacheKey = $"{request.BaseUrl}|{request.ApiKey}";
         if (_clients.TryGetValue(cacheKey, out var cached))
@@ -200,7 +203,7 @@ public class OpenAILlmService : ILlmService, IDisposable
         { } s => TimeSpan.FromSeconds(s)
     };
 
-    private static string FormatSeconds(TimeSpan limit) =>
+    internal static string FormatSeconds(TimeSpan limit) =>
         limit.TotalSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
@@ -229,7 +232,7 @@ public class OpenAILlmService : ILlmService, IDisposable
     /// vendor-specific passthrough keys. They are already handled explicitly above, or don't map
     /// to anything in the OpenAI protocol, so they must not be forwarded as raw body fields.
     /// </summary>
-    private static readonly HashSet<string> FrameworkFacadeOptionKeys = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> FrameworkFacadeOptionKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "Temperature", "TopP", "MaxTokens", "UseStreaming", "JsonSupport", "ToolSupport", "Stop",
         "UseMaxCompletionTokens", "RequestTimeoutSeconds", "StreamingInactivityTimeoutSeconds",
@@ -423,7 +426,7 @@ public class OpenAILlmService : ILlmService, IDisposable
     }
 
     /// <summary>What a single attempt learned beyond its result: the provider's retry hint, if any.</summary>
-    private sealed class AttemptInfo
+    internal sealed class AttemptInfo
     {
         public TimeSpan? RetryAfter { get; set; }
         public int StatusCode { get; set; }
@@ -456,24 +459,34 @@ public class OpenAILlmService : ILlmService, IDisposable
         return null;
     }
 
-    private async Task<LlmResult> InvokeOnceAsync(
+    internal virtual async Task<LlmResult> InvokeOnceAsync(
         LlmRequest request,
         AttemptInfo info,
         CancellationToken cancellationToken)
     {
         var client   = GetOrCreateClient(request);
         var endpoint = GetEndpoint(request);
-        var body     = BuildRequestBody(request);
+        JObject body;
+        try
+        {
+            body = BuildRequestBody(request);
+        }
+        catch (NotSupportedException ex)
+        {
+            // The request itself is unsupported (e.g. a PDF over chat completions): sending it again changes nothing.
+            _logger.LogError(ex, "Request not supported by {Provider}", Name);
+            return LlmResult.Failure(ex, isRetriable: false);
+        }
 
         if (_logger.IsEnabled(LogLevel.Trace))
         {
             _logger.LogTrace("Invoking {Model} ({Provider}) to {Endpoint} with body: {Body}",
-                request.Model, Name, endpoint, body.ToString(Formatting.Indented));
+                request.Model, Name, endpoint, AttachmentWire.LogSafe(body).ToString(Formatting.Indented));
         }
         else if (_logger.IsEnabled(LogLevel.Debug))
         {
             _logger.LogDebug("Invoking {Model} ({Provider}) to {Endpoint} with body: {Body}",
-                request.Model, Name, endpoint, body.ToString(Formatting.Indented));
+                request.Model, Name, endpoint, AttachmentWire.LogSafe(body).ToString(Formatting.Indented));
         }
         else if (_logger.IsEnabled(LogLevel.Information))
         {
@@ -626,7 +639,7 @@ public class OpenAILlmService : ILlmService, IDisposable
     /// </summary>
     public const string StreamClosedWithoutFinishReason = "stream_closed_without_finish_reason";
 
-    public async IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(
+    public virtual async IAsyncEnumerable<LlmStreamChunk> InvokeStreamingAsync(
         LlmRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -671,7 +684,7 @@ public class OpenAILlmService : ILlmService, IDisposable
     if (trace != null)
     {
         _logger.LogTrace("Invoking {Model} ({Provider}) to {Endpoint} (streaming) with body: {Body}",
-            request.Model, Name, endpoint, body.ToString(Formatting.Indented));
+            request.Model, Name, endpoint, AttachmentWire.LogSafe(body).ToString(Formatting.Indented));
     }
 
     var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)

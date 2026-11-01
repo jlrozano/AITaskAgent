@@ -85,7 +85,7 @@ var role = env.Roles[env.DefaultRole];
 
 // A context carries the conversation, metadata and the step-result cache
 var conversation = new ConversationContext();
-var context = PipelineContextFactory.Create(conversation);
+var context = LlmPipelineContextFactory.Create(conversation);   // an LlmPipelineContext: base context + conversation
 
 var llmStep = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>(
     name: "AskAI",

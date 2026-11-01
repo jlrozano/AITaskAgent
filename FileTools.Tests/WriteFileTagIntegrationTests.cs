@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -96,7 +97,7 @@ public sealed class WriteFileTagIntegrationTests : IDisposable
     private static Task<IStepResult> RunAsync(IStep step) =>
         step.ExecuteAsync(
             new LlmStringStepResult(new EmptyStep("Seed")) { Content = "crea un archivo" },
-            new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+            new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
     [Fact]
     public async Task Non_streaming_tag_is_processed_without_going_through_the_pipeline_middleware_chain()

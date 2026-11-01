@@ -160,8 +160,8 @@ var result = await pipeline.ExecuteAsync(
     subscribers: [async (evt, ct) => Console.WriteLine(evt.EventType)]);
 ```
 
-`PipelineContextFactory.Create(conversation, subscribers)` does the same when you build the context
-yourself.
+`PipelineContextFactory.Create(subscribers)` (or `LlmPipelineContextFactory.Create(conversation, subscribers)` for a context
+around an existing conversation) does the same when you build the context yourself.
 
 ---
 
@@ -174,7 +174,7 @@ yourself.
 | `PipelineSuspendedEvent` | `pipeline.suspended` | `Pipeline` | Execution suspended awaiting external input |
 | `StepStartedEvent` | `step.started` | `ObservabilityMiddleware` (first attempt), `RetryMiddleware` (retries) | Before each attempt |
 | `StepCompletedEvent` | `step.completed` | `ObservabilityMiddleware` | After step execution |
-| `StepRoutingEvent` | `step.routing` | `SwitchStep` / `RouterStep` | Route selection |
+| `StepRoutingEvent` | `step.routing` | `SwitchStep<T>` (and `RouterStep`, which derives from it) | Route selection; `DeclarativeSwitchStep` (YAML `switch`) does not emit it |
 | `StepValidationEvent` | `step.validation` | `RetryMiddleware` | Structural or semantic validation result |
 | `StepTimeoutEvent` | `step.timeout` | `TimeoutMiddleware` | Step exceeded its timeout |
 | `BranchStartedEvent` | `branch.started` | `ParallelStep` | A parallel branch starts |
@@ -188,8 +188,9 @@ yourself.
 
 Most string literals are available as constants on `AITaskAgentConstants.EventTypes`; the
 exceptions are `branch.started` / `branch.completed` (`BranchStartedEvent.EventTypeName` /
-`BranchCompletedEvent.EventTypeName`) and `step.timeout`, which is only a literal inside
-`StepTimeoutEvent`.
+`BranchCompletedEvent.EventTypeName`), `pipeline.resuming` / `pipeline.resumed`
+(`PipelineResumingEvent.EventTypeName` / `PipelineResumedEvent.EventTypeName`), `step.cached_hit`
+(a literal inside `StepCachedHitEvent`) and `step.timeout` (a literal inside `StepTimeoutEvent`).
 
 The table gives you the emitter. What it cannot show is *when* each one fires and how they nest,
 which is what a progress UI actually has to model:
@@ -201,7 +202,7 @@ which is what a progress UI actually has to model:
 Two consequences are worth stating outright, because they break the obvious implementation:
 `StepStartedEvent` arrives **more than once** for the same step (once per attempt, from two
 different middlewares), while `StepCompletedEvent` arrives **once** — so pairing them one-to-one
-will leak. And a run that suspends still ends with `PipelineCompletedEvent`, but with `Success = false` and `ErrorMessage = "Suspended awaiting input"` (`Pipeline.cs:181-199`).
+will leak. And a run that suspends still ends with `PipelineCompletedEvent`, but with `Success = false` and `ErrorMessage = "Suspended awaiting input"` (`Pipeline.cs:203-216`).
 
 ### Declared but not yet emitted
 
@@ -223,8 +224,9 @@ fixed `step.progress` value. The core framework never sends it; the `FileTools` 
 
 Several events carry a `StepPath` in addition to `StepName`: `StepStartedEvent`,
 `StepCompletedEvent`, `StepValidationEvent`, `StepTimeoutEvent`, `StepCachedHitEvent`,
-`BranchStartedEvent`, `BranchCompletedEvent`, `PipelineSuspendedEvent`, `PipelineResumingEvent`,
-`PipelineResumedEvent`.
+`BranchStartedEvent`, `BranchCompletedEvent`, `PipelineResumingEvent`, `PipelineResumedEvent`.
+`PipelineSuspendedEvent` has no `StepPath`: it carries `TargetStepPath`, `IsBranchSuspension` and
+`BranchName`.
 The path mirrors `PipelineContext.CurrentStepPath` (`"MyLoop/Iter_2/Inner"`) and is what
 lets a UI place an event inside a nested or parallel execution tree.
 
@@ -240,6 +242,7 @@ public sealed record StepCompletedEvent : ProgressEventBase, IStepCompletedEvent
     public string? ErrorMessage { get; init; }
     public Dictionary<string, object?> AdditionalData { get; init; } = [];
     public IStepResult? StepResult { get; init; }
+    public string? Display { get; init; }   // see "Display text" below
 }
 ```
 
@@ -276,6 +279,7 @@ public sealed record ToolCompletedEvent : ProgressEventBase
     public TimeSpan Duration { get; init; }
     public string? ErrorMessage { get; init; }
     public Dictionary<string, object>? AdditionalData { get; init; }
+    public string? Display { get; init; }   // see "Display text" below
 }
 ```
 
@@ -317,6 +321,88 @@ public sealed record StepTimeoutEvent : ProgressEventBase
 > [Human in the Loop](human-in-the-loop.md).
 
 ---
+
+## Display text
+
+`StepStartedEvent`, `StepCompletedEvent`, `ToolStartedEvent` and `ToolCompletedEvent` have a
+`string? Display` property: the text that the step or tool **wants shown** to a person for that moment
+(for example "Querying sales for Acme" and "42 rows read"). It is null unless a template was declared;
+nothing changes for steps and tools that declare none. The other event types have no `Display`.
+
+### Declaring the templates
+
+| Where | How |
+|-------|-----|
+| A step (anything that derives from `StepBase`) | properties `DisplayStart` and `DisplayEnd`, settable per instance and `virtual` |
+| A tool that derives from `LlmTool` (and `McpToolWrapper`) | properties `DisplayStart` and `DisplayEnd` |
+| YAML, per step | `display: { start: "...", end: "..." }` (see [yaml-pipelines](yaml-pipelines.md)) |
+| The host, by name | register an `IDisplayTextProvider` in DI; `GetTemplate(DisplayKind kind, string name, DisplayPhase phase)` returns the template of a step (`Step`, `IStep.Name`) or a tool (`Tool`, `ITool.Name`), or null. It is for what the host cannot subclass or declare, for example tools described in a JSON catalog |
+
+The template declared by the step or tool wins over the provider's. A step added at run time through
+`NextSteps` gets the same treatment, because the events come from the middlewares and from `LlmTool.ExecuteAsync`.
+
+### Model of the template
+
+Templates use the same engine as prompts and `when` (`{{ x.y }}`, pipes, `?? default`; see
+`TemplateEngineExamples.md`) over the same `input` and `context`, so a path that works in a prompt works here.
+Lookups ignore case.
+
+| Event | Available |
+|-------|-----------|
+| Step start | `step` (`name`, `path`, `attempt`), `input` (the step input value, as in prompts), `context` (the `PipelineContext.Metadata`, keys lowercased), `data` (the event's `AdditionalData`) |
+| Step end | the same without `step.attempt` (the event is emitted once, after the retries), plus `output` (the result value), `success`, `error`, `durationMs` |
+| Tool start | `tool` (the name), `args` (the call arguments: a JSON object or array is parsed, anything else stays text), `context`, `data` |
+| Tool end | the same plus `result` (parsed to JSON when it is an object or an array, otherwise text), `success`, `error`, `durationMs` |
+
+`data` is the `AdditionalData` of the event **after** the step's or tool's own enrichment, so what an
+enricher adds is visible. A step that fails with an exception renders its end text with `output` absent.
+`RetryMiddleware` renders the start text of each retry with its own `step.attempt`.
+
+### Examples
+
+```csharp
+// Deterministic step
+step.DisplayStart = "Reading {{ input.fileName }} for {{ context.customer }}";
+step.DisplayEnd   = "{{ output.rows }} rows read in {{ durationMs }} ms";
+
+// LLM step: the same properties on BaseLlmStep and derived classes
+llmStep.DisplayStart = "Analysing attempt {{ step.attempt }}";
+llmStep.DisplayEnd   = "{{ success }}: {{ output.summary ?? no summary }}";
+
+// Tool
+tool.DisplayStart = "Querying {{ args.table }}";
+tool.DisplayEnd   = "{{ tool }}: {{ result.rows }} rows";
+```
+
+```csharp
+// Host catalog: templates by name, no subclassing
+services.AddSingleton<IDisplayTextProvider>(new MyCatalogProvider());
+```
+
+```yaml
+- id: extract
+  type: LlmStep
+  userPrompt: "..."
+  display:
+    start: "Extracting data from {{ input.fileName }}"
+    end: "{{ success }}"
+```
+
+### Guarantees and limits
+
+- Rendering **never throws and never delays the step**: on any error (a provider that throws, a model that
+  cannot be serialized) `Display` is null and a warning is logged under the category `AITaskAgent.Display`
+  with the step or tool name and the exception *type*, never the values.
+- With no template there is no cost: no model is built. With one, only the parts of the model whose name the
+  template mentions (`input`, `output`, `args`, `result`, `context`, `data`) are serialized.
+- The text is cut at 500 characters (`DisplayTextRenderer.MaxLength`) and the cut text ends with an ellipsis
+  character. A template that renders empty gives null.
+- File includes (`{{ include ... }}`, `@[path]`) are refused (null and a warning): a display text must not read files.
+- An event with `SuppressFromUser = true` is not rendered.
+- A hand-written `ITool` that does not extend `LlmTool` raises no events and therefore has no `Display`; it can
+  call `DisplayTextRenderer.ToolStart` and `ToolEnd` itself.
+- Not covered: pipeline and model-call events carry no `Display`; an `IStepCompletedEvent` that is not a
+  `StepCompletedEvent` is not rendered.
 
 ## Enriching Events in Custom Steps
 

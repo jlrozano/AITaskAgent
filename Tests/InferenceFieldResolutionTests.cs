@@ -34,7 +34,7 @@ public sealed class InferenceFieldResolutionTests
         public Task<LlmRequest> BuildAsync() =>
             BuildLlmRequestAsync(
                 new LlmStringStepResult(new EmptyStep("Seed")) { Content = "hola" },
-                new PipelineContext(),
+                new LlmPipelineContext(),
                 new ConversationContext(),
                 CancellationToken.None);
     }

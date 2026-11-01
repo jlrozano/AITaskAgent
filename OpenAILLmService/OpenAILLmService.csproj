@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Framework\AITaskAgent.csproj" />
+    <ProjectReference Include="..\AITaskAgent.Extensions.Llm\AITaskAgent.Extensions.Llm.csproj" />
   </ItemGroup>
 
 </Project>

@@ -225,6 +225,23 @@ for (int i = 0; i < items.Count; i++)
 }
 ```
 
+## Display text
+
+`StepStartedEvent`, `StepCompletedEvent`, `ToolStartedEvent` and `ToolCompletedEvent` have a `string? Display` property: the text a step or tool
+wants shown to a person for that moment. It is null unless a template was declared, and the other event types have no `Display`.
+
+- **Where the template comes from.** `StepBase.DisplayStart` / `DisplayEnd` for steps, `LlmTool.DisplayStart` / `DisplayEnd` for tools, YAML
+  `display: { start: ..., end: ... }`, or the host's `IDisplayTextProvider` (by name, for what it cannot subclass). The template the step or tool
+  declares wins over the provider's.
+- **Rendering.** `DisplayTextRenderer` renders it with the step's input, the context and the event's data. A text longer than 500 characters is
+  cut and ends with an ellipsis, and a template that uses a file include is rejected (a warning is logged and the event goes without text).
+- **Enriching.** `ObservabilityMiddleware` and `LlmTool` render the text only when `Display` is still null after the `Enrich*Event` hook, so an
+  enricher that sets `Display` keeps its text and nothing is rendered over it. `RetryMiddleware` also sets it on the `StepStartedEvent` it emits
+  for each retry.
+
+The full model of the template is in [Event system](../guides/event-system.md#display-text) and the template syntax examples in
+`AITaskAgent.Core/Support/Template/TemplateEngineExamples.md`.
+
 ## Best Practices
 
 1. **Unique EventType** - Use dot notation: `domain.action`

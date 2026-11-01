@@ -14,7 +14,7 @@ sequentially through a middleware chain. Resolve `IPipeline` — it is not a sta
 
 ### PipelineContext
 Shared state across all steps in a pipeline execution:
-- Conversation history (`Conversation`)
+- Conversation history (`Conversation`), **only in `LlmPipelineContext`** (assembly `AITaskAgent.Extensions.Llm`); the base `PipelineContext` has none
 - Step results cache (`StepResults`, keyed by step path)
 - Metadata dictionary (`Metadata`)
 - Event channel (`EventChannel`, `SendEventAsync`)
@@ -22,7 +22,9 @@ Shared state across all steps in a pipeline execution:
 - Service access (`ServiceProvider`)
 
 Built by `PipelineContextFactory`, which is registered in DI and also arms a static
-`PipelineContextFactory.Create()` entry point during `UseAITaskAgent()`.
+`PipelineContextFactory.Create()` entry point during `UseAITaskAgent()`. With `AddAITaskAgent()` the factory is the
+`LlmPipelineContextFactory`, so the context is an `LlmPipelineContext`; LLM steps require that type
+(`IStep.RequiredContext`) and the pipeline refuses to start with a plain `PipelineContext`.
 
 ### LlmRole
 The per-step LLM behaviour: provider, model, system prompt, inference settings, fallbacks. Roles
@@ -31,6 +33,15 @@ live in `LlmEnvironment.Roles` and replace the old "provider profile" concept.
 ### Middleware
 Wraps step execution to add cross-cutting concerns (observability, retry, timeout). Registered
 globally through `PipelineMiddlewareRegistry`.
+
+`StepBase` also exposes `Hooks` (a `StepHooks`; see [Steps](steps.md#hooks)) and `ResultValidators`.
+
+### Extension and plugin
+
+`IExtension` is the unit that adds services and steps to an application (`Register`, plus optional
+configuration members). `Info()` declares what the extension is going to register (empty by default);
+a host that loads it as a plugin compares it with what `Register` really registered. See
+[Custom extensions](../extensibility/custom-extensions.md).
 
 ## Step Lifecycle
 
@@ -52,6 +63,9 @@ The retry loop happens inside Observability's single call, so only the first att
 | `ITool` | `LlmTool` | LLM tools |
 | `ITools` | `AvailableTools` | Tool registry |
 | `IStepValidator` | *(none)* | Pluggable semantic validation |
+| `IResultValidator` | *(none)* | Validation of the result itself (`StepBase.AddResultValidator`) |
+| `IResume` | `StepBase` | Resuming after a suspension |
+| `IDisplayable` | `StepBase` | Display text (`DisplayStart` / `DisplayEnd`) |
 | `IEnrichable` | `StepBase` | Observability enrichment (composition via `StepBase.Enrichable`) |
 | `IFallbackable` | `StepBase` / `BaseLlmStep` | Provider fallback |
 | `ITemplateRendered` | `TinyTemplateRendered` | Prompt rendering |
@@ -80,8 +94,8 @@ see [Resilience](resilience.md).
 ## PipelineContext Usage
 
 ```csharp
-// Access conversation
-context.Conversation.AddUserMessage("Hello");
+// Access conversation (LlmPipelineContext only; inside a step use context.AsLlmContext(Name).Conversation)
+((LlmPipelineContext)context).Conversation.AddUserMessage("Hello");
 
 // Store metadata (reachable from TemplateLlmStep / YAML prompts as {{ context.userid }})
 context.Metadata["userId"] = "123";

@@ -1,1025 +1,1050 @@
-# Análisis de código: flujo de extremo a extremo y política de cada informe
+# Code analysis: end-to-end flow and report policy for each report
 
-Estado del código revisado a 2026-10-17, rama `consolidation`, con las correcciones de la prueba M y las referencias de tipos y
-campos del analizador Java. La fuente de verdad es el código; las cifras medidas son las de las fechas que se indican en su
-sitio. `CORE` abrevia `Samples/CodebaseAnalysis.Core`, `WEB`
-abrevia `Samples/CodebaseAnalysisWeb` y las rutas sin prefijo son relativas a la raíz del repositorio. Lo que no se ha
-podido verificar en el código se dice en su sitio. La preparación por subsistema (apartado 1.6.1) refleja el código a
-2026-10-04; lo medido en este documento es anterior a ella y describe el pipeline con `Mode = Off`.
+Code state reviewed as of 2026-10-17, branch `consolidation`, including the fixes from test M and the type and
+field references of the Java analyzer. On 2026-11-01 only these were re-verified against the code (working tree with uncommitted
+changes and the later chat, wiki, graph and knowledge-unit work): the citations to `AnalysisPipelineFactory.cs`, `ClaimAuditor.cs` and `ChatAgent.cs`, the pipeline
+steps of the summary, sections 1.6.2, 1.7 (tool list), 1.10 (pipeline limit), 1.11 (regeneration and the endpoint list) and 1.12 (the
+chat's tools and evidence). The rest is as of 2026-10-17 and has not been re-verified; the measured figures of section 1.14 and the templates of the
+appendix are not verifiable in the code. The source of truth is the code; the measured figures are those for the dates indicated in their place.
+`CORE` abbreviates `Samples/CodebaseAnalysis.Core`, `WEB`
+abbreviates `Samples/CodebaseAnalysisWeb`, and paths without a prefix are relative to the repository root. What could not be
+verified in the code is stated in place. The per-subsystem preparation (section 1.6.1) reflects the code as of
+2026-10-04; what is measured in this document predates it and describes the pipeline with `Mode = Off`.
 
-## Resumen
+## Summary
 
-La app analiza un repositorio en seis pasos del framework agrupados en cinco fases (`CORE/AnalysisPipelineFactory.cs:187-198`);
-con la preparación por subsistema, activa por defecto, son diez, porque cuatro pasos deterministas (inventario, mapa de
-dominios, plan de cobertura y presupuesto de tiempo) se suman a la fase de facetas (apartado 1.6.1). Un undécimo paso, la
-pasada compartida, solo existe con `CodebaseAnalysis:SharedPass:Enabled = true`, que está desactivado por defecto (apartado 1.6.2).
-`codebase-memory-mcp` (cbm) indexa el repositorio en su caché y el pipeline copia esa BD a `.codebase/codebase.db`, que
-es la única que se escribe a partir de ahí. Sobre la copia escriben la ingesta de Office y de Markdown, la
-reincorporación de documentos del usuario, el analizador Java nativo (`javac` en un proceso aparte), el plugin
-Struts/JSP y, si no hay enriquecedor nativo, DotNetEnricher (Roslyn, en un proceso aparte) o un fallback LLM. Un paso SQL determinista calcula una
-vez unas sesenta facetas en memoria, y nueve auditores LLM las reciben en paralelo, cada uno con su par de plantillas y
-siete tools de solo lectura sobre el grafo, el código y los documentos. Cada auditor escribe su informe en `reports/` al
-terminar, y una síntesis sin tools escribe `00_resumen_ejecutivo.md` a partir de los semáforos, los resúmenes y los
-índices de secciones. La web aloja ese mismo pipeline, enseña el progreso por fases, permite regenerar un informe
-fallido sobre el grafo existente y ofrece un chat que consulta el mismo grafo y los mismos informes y audita sus marcas
-`[V]`/`[D]`/`[I]` contra lo que leyeron sus tools en el turno.
+The app analyzes a repository in six framework steps grouped into five phases (`CORE/AnalysisPipelineFactory.cs:199-217`);
+with the per-subsystem preparation, enabled by default, there are ten, because four deterministic steps (inventory, domain map,
+coverage plan and time budget) are added to the facets phase (section 1.6.1). An eleventh step, the
+shared pass, only exists with `CodebaseAnalysis:SharedPass:Enabled = true`, which is disabled by default (section 1.6.2); with it the
+factory adds a twelfth, `KnowledgeUnitsStep` (without LLM, section 1.6.2). With `CodebaseAnalysis:Run:SkipReports = true` there are no
+reports or synthesis: the preparation keeps only the inventory and the domain map and a final step closes the pipeline
+(`CORE/AnalysisPipelineFactory.cs:209-212`, `:388-392`, `CORE/Hosting/AnalysisRunOptions.cs:84-93`).
+`codebase-memory-mcp` (cbm) indexes the repository in its cache and the pipeline copies that DB to `.codebase/codebase.db`, which
+is the only one written from that point on. Writing to the copy are the Office and Markdown ingestion, the
+re-incorporation of user documents, the native Java analyzer (`javac` in a separate process), the plugin
+Struts/JSP and, if there is no native enricher, DotNetEnricher (Roslyn, in a separate process) or an LLM fallback. A deterministic SQL step computes
+once roughly sixty facets in memory, and nine LLM auditors receive them in parallel, each with its pair of templates and
+seven read-only tools over the graph, the code and the documents. Each auditor writes its report to `reports/` when
+it finishes, and a synthesis without tools writes `00_resumen_ejecutivo.md` from the traffic lights, the summaries and the
+section indexes. The web hosts that same pipeline, shows progress by phase, allows regenerating a failed report
+over the existing graph, and offers a chat that queries the same graph and the same reports and audits its
+`[V]`/`[D]`/`[I]` marks against what its tools read in the turn.
 
-La política de análisis es común a los nueve auditores y está en `CORE/templates/_graph_rules.md:1-6`: el grafo sirve
-para la estructura, una arista resuelta por un enriquecedor es un dato y una heurística de cbm es una pista; en code
-smells, errores, seguridad y deuda el grafo y las facetas dicen dónde mirar y el veredicto exige leer el código; y
-«nadie lo llama» no prueba código muerto sin cruzar antes con `HANDLES`, las JSP y la configuración. La parte 2
-documenta, informe a informe, qué evidencia recibe cada auditor, de dónde sale cada tipo de conclusión y qué no puede
-ver, y termina con la agrupación que se propone y que sigue pendiente de aprobación.
+The analysis policy is common to the nine auditors and is in `CORE/templates/_graph_rules.md:1-6`: the graph serves
+for structure, an edge resolved by an enricher is a data point and a cbm heuristic is a lead; in code
+smells, errors, security and debt the graph and the facets say where to look and the verdict requires reading the code; and
+"nobody calls it" does not prove dead code without first cross-checking with `HANDLES`, the JSPs and the configuration. Part 2
+documents, report by report, what evidence each auditor receives, where each type of conclusion comes from and what it cannot
+see, and ends with the proposed grouping, which is still pending approval.
 
 ---
 
-# Parte 1. El flujo de un análisis
+# Part 1. The flow of an analysis
 
-![Flujo de un análisis: qué lee y qué escribe cada etapa, con la preparación por subsistema, la pasada compartida opcional y el modo A frente al B de los informes, sobre una única copia del grafo](../assets/images/analisis-flujo-extremo-a-extremo.png)
+![Analysis flow: what each stage reads and writes, with the per-subsystem preparation, the optional shared pass and the mode A versus B of the reports, over a single copy of the graph](../assets/images/analisis-flujo-extremo-a-extremo.png)
 
 <!-- Source: docs/assets/diagrams/analisis-flujo-extremo-a-extremo.excalidraw -->
 
-## 1.1 Mapa de etapas
+## 1.1 Stage map
 
-La tabla resume cada etapa; los apartados siguientes desarrollan solo lo que no cabe en ella. Los tiempos son los
-medidos en los documentos de diseño sobre el repositorio Java objetivo (`delta/Online`, 8420 ficheros); donde no hay
-medición se dice.
+The table summarizes each stage; the following sections expand only what does not fit in it. The times are the
+ones measured in the design documents on the target Java repository (`delta/Online`, 8420 files); where there is no
+measurement, it says so.
 
-| Etapa | Entra | Lee | Escribe | Tiempo medido | Si falla |
+| Stage | Input | Reads | Writes | Measured time | On failure |
 |---|---|---|---|---|---|
-| `DetectAndIndexGraphStep` | `AnalysisPipelineInput` | repositorio entero (cbm), `~/.cache/codebase-memory-mcp/<proyecto>.db` | `.codebase/codebase.db`, `backups/` con `ForceReindex` | cbm, 59-67 s en indexación completa y el paso entero 24,5 s sin reindexar (prueba M, apartado 1.14); el plan del enriquecimiento Java daba 157 s | excepción que corta el pipeline (`CORE/Steps/DetectAndIndexGraphStep.cs:49-55`, `:104-109`, `:428-444`) |
-| Ingesta Office, Markdown y conocimiento | dentro del paso anterior | `.accdb`/`.mdb`/`.docx`, `*.md`, `.codebase/knowledge/graph-sources.json` | nodos y aristas en la copia | sin medir | Office y Markdown avisan por fichero; el resto propaga |
-| `LanguageEnricherStep` | `GraphStatusResult` | disco (`RepositoryScan`), JDK, jars | copia del grafo, `enrichment_runs`, `.codebase/enrichment/java/` | con las referencias de tipos y campos, mediana de 166,6 s frente a 119,4 s sin ellas en la misma sesión (1,39 veces, apartado 1.14); 181,7 s con el plugin en la prueba M, con 1364 ficheros más de los que tenía cbm; en el diseño, unos 109 s y `javac` solo 66 s | aviso y fila `skipped`/`failed`; sigue con el grafo de cbm |
-| `DotNetEnricherStep` | `GraphStatusResult` | solución .NET o 15 ficheros clave (LLM) | copia del grafo, `enrichment_runs` | sin medir en un repositorio grande; unos 7 s el CLI sobre csharp-simple | CLI ausente → aviso y fallback, sin fila; código ≠ 0/2 o tiempo agotado → aviso, fila `failed` y fallback; con `Required` → corta |
-| `SqlFacetExtractorStep` | `GraphStatusResult` | copia del grafo, ficheros para fragmentos y secretos, documentos | `ReportFacetInput` en memoria y en el contexto | 45,9 s sobre el grafo con referencias (46,7 s en una copia sin el índice por label, apartado 1.6); 51,5 s en la prueba M | cada consulta fallida llega como nota «no es un conjunto vacío» |
-| `RepositoryInventoryStep` | `ReportFacetInput` | disco, copia del grafo, `enrichment_runs` | `reports/_repository_inventory.json` | sin medir | aviso; el input sale intacto (solo `Mode = Subsystems`) |
-| `DomainDiscoveryStep` | `ReportFacetInput` | inventario, copia del grafo, LLM (solo nombra) | `reports/_domain_map.json` | sin medir | aviso; sin LLM, nombres derivados del código |
-| `CoveragePlanningStep` | `ReportFacetInput` | mapa de dominios, plantillas de preguntas | `reports/_coverage_plan.json` | sin medir | aviso; plan vacío y los informes en modo B degradan a auditor normal |
-| `TimeBudgetStep` | `ReportFacetInput` | plan, inventario, mapa, `AuditorStepRegistry` | `Timeout` de cada informe y `reports/_time_budget.json` | sin medir | aviso; los pasos conservan el límite de la configuración |
-| `SharedPassStep` (solo con `SharedPass:Enabled = true`) | `ReportFacetInput` | mapa de dominios, grafo, código, LLM (roles `SharedPassReader` y `SharedPassJudge`) | registro de hallazgos en el grafo y en `reports/_shared_pass_registry.json` | sin medir en esta guía | aviso; el análisis sigue sin registro |
-| `ParallelReportsExecution` | `ReportFacetInput` | LLM, grafo, código, documentos | `reports/01…09_*.md` | sin medir para Java: en la prueba M Azure respondió `404 DeploymentNotFound` | una rama fallida no para la síntesis salvo que fallen todas |
-| `ExecutiveSynthesizerStep` | `ParallelResult` | LLM, informes en disco | `reports/00_resumen_ejecutivo.md` | sin medir | respuesta vacía → resumen de respaldo sin LLM |
+| `DetectAndIndexGraphStep` | `AnalysisPipelineInput` | whole repository (cbm), `~/.cache/codebase-memory-mcp/<proyecto>.db` | `.codebase/codebase.db`, `backups/` with `ForceReindex` | cbm, 59-67 s on full indexing and the whole step 24,5 s without reindexing (test M, section 1.14); the Java enrichment plan gave 157 s | exception that aborts the pipeline (`CORE/Steps/DetectAndIndexGraphStep.cs:49-55`, `:104-109`, `:428-444`) |
+| Office, Markdown and knowledge ingestion | inside the previous step | `.accdb`/`.mdb`/`.docx`, `*.md`, `.codebase/knowledge/graph-sources.json` | nodes and edges in the copy | not measured | Office and Markdown warn per file; the rest propagates |
+| `LanguageEnricherStep` | `GraphStatusResult` | disk (`RepositoryScan`), JDK, jars | copy of the graph, `enrichment_runs`, `.codebase/enrichment/java/` | with type and field references, median of 166,6 s versus 119,4 s without them in the same session (1,39 times, section 1.14); 181,7 s with the plugin in test M, with 1364 more files than cbm had; in the design, about 109 s and `javac` only 66 s | warning and a `skipped`/`failed` row; continues with the cbm graph |
+| `DotNetEnricherStep` | `GraphStatusResult` | .NET solution or 15 key files (LLM) | copy of the graph, `enrichment_runs` | not measured on a large repository; about 7 s for the CLI on csharp-simple | CLI missing → warning and fallback, no row; code ≠ 0/2 or timeout → warning, `failed` row and fallback; with `Required` → aborts |
+| `SqlFacetExtractorStep` | `GraphStatusResult` | copy of the graph, files for fragments and secrets, documents | `ReportFacetInput` in memory and in the context | 45,9 s on the graph with references (46,7 s in a copy without the per-label index, section 1.6); 51,5 s in test M | each failed query arrives as a note "not an empty set" |
+| `RepositoryInventoryStep` | `ReportFacetInput` | disk, copy of the graph, `enrichment_runs` | `reports/_repository_inventory.json` | not measured | warning; the input comes out intact (only `Mode = Subsystems`) |
+| `DomainDiscoveryStep` | `ReportFacetInput` | inventory, copy of the graph, LLM (names only) | `reports/_domain_map.json` | not measured | warning; without LLM, names derived from the code |
+| `CoveragePlanningStep` | `ReportFacetInput` | domain map, question templates | `reports/_coverage_plan.json` | not measured | warning; empty plan and mode-B reports degrade to a normal auditor |
+| `TimeBudgetStep` | `ReportFacetInput` | plan, inventory, map, `AuditorStepRegistry` | `Timeout` of each report and `reports/_time_budget.json` | not measured | warning; the steps keep the limit from the configuration |
+| `SharedPassStep` (only with `SharedPass:Enabled = true`) | `ReportFacetInput` | domain map, graph, code, LLM (roles `SharedPassReader` and `SharedPassJudge`) | findings registry in the graph and in `reports/_shared_pass_registry.json` | not measured in this guide | warning; the analysis continues without a registry |
+| `ParallelReportsExecution` | `ReportFacetInput` | LLM, graph, code, documents | `reports/01…09_*.md` | not measured for Java: in test M Azure responded `404 DeploymentNotFound` | a failed branch does not stop the synthesis unless all of them fail |
+| `ExecutiveSynthesizerStep` | `ParallelResult` | LLM, reports on disk | `reports/00_resumen_ejecutivo.md` | not measured | empty response → fallback summary without LLM |
 
-El plan da 157 s para cbm y la prueba M midió entre 59 y 67 s de indexación completa sobre el mismo repositorio; no
-consta a qué se debe la diferencia.
+The plan gives 157 s for cbm and test M measured between 59 and 67 s of full indexing on the same repository; it is not
+recorded what causes the difference.
 
-## 1.2 Detección e indexación con cbm
+## 1.2 Detection and indexing with cbm
 
-El paso deja en el contexto la entrada, la ruta de la BD y las rutas de conocimiento (`CORE/Steps/DetectAndIndexGraphStep.cs:37-39`),
-y con `ForceReindex` guarda antes en `<carpeta de la BD>/backups/<yyyyMMdd_HHmmss>/` una copia de la BD con sus
-`-wal`/`-shm`/`-journal` y de los diez informes del catálogo por nombre, que siguen en su sitio hasta que la indexación
-termina bien (si falla se restauran), mueve allí las exportaciones de Access y rota las copias hasta dejar
-`CodebaseAnalysis:Backups:Keep` (`:61-79`, `:190-278`). Indexa solo si no hay BD, si se fuerza
-o si la BD no tiene nodos estructurales (tipos, funciones, métodos, `CsProject`, `AccessTable` o `AccessQuery`,
-`:570-590`). La indexación ejecuta `codebase-memory-mcp cli index_repository`, toma el nombre de proyecto que el propio
-indexador informa por su salida (`:397-407`), copia `~/.cache/codebase-memory-mcp/<proyecto>.db` sobre la ruta de
-trabajo (`:435-456`) y apunta la versión de cbm (`--version`) en la copia, que entra en la huella de los enriquecedores
-(`:57-59`, `:536-550`). Nada del pipeline vuelve a abrir la BD de la caché: los enriquecedores lo comprueban antes de
-escribir (`CORE/Enrichment/EnrichmentMarks.cs:38-48`).
+The step leaves in the context the input, the DB path and the knowledge paths (`CORE/Steps/DetectAndIndexGraphStep.cs:37-39`),
+and with `ForceReindex` it first saves to `<carpeta de la BD>/backups/<yyyyMMdd_HHmmss>/` a copy of the DB with its
+`-wal`/`-shm`/`-journal` files and of the ten catalog reports by name, which stay in place until indexing
+finishes successfully (if it fails they are restored), moves the Access exports there and rotates the copies until only
+`CodebaseAnalysis:Backups:Keep` remain (`:61-79`, `:190-278`). It indexes only if there is no DB, if it is forced
+or if the DB has no structural nodes (types, functions, methods, `CsProject`, `AccessTable` or `AccessQuery`,
+`:570-590`). Indexing runs `codebase-memory-mcp cli index_repository`, takes the project name that the indexer itself
+reports in its output (`:397-407`), copies `~/.cache/codebase-memory-mcp/<proyecto>.db` over the working path
+(`:435-456`) and records the cbm version (`--version`) in the copy, which enters the enrichers' fingerprint
+(`:57-59`, `:536-550`). Nothing in the pipeline reopens the cache DB: the enrichers check it before
+writing (`CORE/Enrichment/EnrichmentMarks.cs:38-48`).
 
-Tras indexar se retiran los nodos bajo la carpeta de la BD, la de informes y `<repositorio>/.codebase`, porque cbm
-recorre también la salida del propio pipeline (`:465-508`), y, con grafo nuevo o heredado, los de `bin/`, `obj/` y los
-ficheros generados (`:95-96`, `:516-530`). `GraphSchema.EnsureAsync` añade las columnas duplicadas
-`file`/`file_path` y `line_start`/`start_line` que leen las facetas (`CORE/Support/GraphSchema.cs:61-68`). Si el grafo
-no tiene código ni hay artefactos Office, el paso lanza y el pipeline se para (`DetectAndIndexGraphStep.cs:104-109`). `CheckIfEnrichedAsync` decide
-si el código ya está enriquecido (nodos `CsProject` o propiedades `afferent_coupling`, `cyclomatic` o `in_cycle`), sin
-contar los nodos de Office, los del fallback LLM ni los marcados por el analizador Java (`DetectAndIndexGraphStep.cs:602-633`); esa marca solo la
-usa `DotNetEnricherStep`, y solo cuando `enrichment_runs` no tiene ninguna pasada suya.
+After indexing, the nodes under the DB folder, the reports folder and `<repositorio>/.codebase` are removed, because cbm
+also walks the output of the pipeline itself (`:465-508`), and, with a new or inherited graph, those of `bin/`, `obj/` and the
+generated files (`:95-96`, `:516-530`). `GraphSchema.EnsureAsync` adds the duplicate columns
+`file`/`file_path` and `line_start`/`start_line` that the facets read (`CORE/Support/GraphSchema.cs:61-68`). If the graph
+has no code and there are no Office artifacts, the step throws and the pipeline stops (`DetectAndIndexGraphStep.cs:104-109`). `CheckIfEnrichedAsync` decides
+whether the code is already enriched (`CsProject` nodes or properties `afferent_coupling`, `cyclomatic` or `in_cycle`), without
+counting the Office nodes, those from the LLM fallback or those marked by the Java analyzer (`DetectAndIndexGraphStep.cs:602-633`); that mark is used only by
+`DotNetEnricherStep`, and only when `enrichment_runs` has no pass of its own.
 
-**Límite MAX_PATH.** cbm no indexa los ficheros cuya ruta absoluta llega a 260 caracteres, el MAX_PATH de Windows: no
-deja ningún nodo en ese `file_path` y el paso no lo avisa. En la prueba M, con la copia del repositorio en una carpeta
-temporal de ruta larga, el analizador Java encontró 1364 ficheros más de los que tenía cbm y creó sus declaraciones como
-nodos nuevos. `JavaGraphWriter` cuenta esos ficheros y los de ruta larga en `details.cbm_match`, y el aviso del paso
-da la pista (apartado 1.4); para evitarlo, el repositorio tiene que estar en una ruta corta.
+**MAX_PATH limit.** cbm does not index files whose absolute path reaches 260 characters, the Windows MAX_PATH: it
+leaves no node for that `file_path` and the step does not warn about it. In test M, with the copy of the repository in a long-path temporary folder,
+the Java analyzer found 1364 more files than cbm had and created their declarations as
+new nodes. `JavaGraphWriter` counts those files and the long-path ones in `details.cbm_match`, and the step's warning
+gives the lead (section 1.4); to avoid it, the repository must be in a short path.
 
-## 1.3 Ingesta de Office, Markdown y conocimiento
+## 1.3 Office, Markdown and knowledge ingestion
 
-Las tres escriben dentro de `DetectAndIndexGraphStep` y con el mismo `project` que cbm:
+All three write inside `DetectAndIndexGraphStep` and with the same `project` as cbm:
 
-- **Office:** con algún `.accdb`, `.mdb` o `.docx` en el repositorio corre `IngestOfficeArtifactsStep` (`DetectAndIndexGraphStep.cs:111-121`), que
-  crea `Table`/`AccessTable`, `Query`/`AccessQuery`, `Module`, `Form`, `Report`, `Sub`/`Function`, `Flow` y `DocSection`,
-  con aristas `READS_TABLE`, `WRITES_TABLE`, `EXECUTES_QUERY`, `CALLS`, `HANDLES_EVENT`, `FLOW_ENTRY`, `FLOW_NEXT` y
-  `DOC_DESCRIBES` (`OfficeTools/Steps/IngestOfficeArtifactsStep.cs:436-713`). Escribe `dead_code_candidate`, `hotspot`,
-  `anti_pattern` y `detected_issues` en sus nodos (en código, `dead_code_candidate` lo escriben también DotNetEnricher y, en
-  Java, `JavaReachabilityWriter`, apartado 1.4; `hotspot` y `detected_issues`, DotNetEnricher), y calcula `fan_in` contando
-  todas las aristas entrantes (`:431`, `:720-740`, `:777-806`). Sus `CALLS` no llevan `enriched_by`.
-- **Markdown:** `WorkflowAndMarkdownEnricher` registra cada `.md` como `PromptTemplate` si la ruta contiene `template` o
-  el nombre termina en `_prompt.md`/`_system.md`, y como `DocSection` en otro caso, con título, encabezados y 800
-  caracteres de extracto (`CORE/Support/WorkflowAndMarkdownEnricher.cs:57-100`).
-- **Conocimiento del usuario:** si la web marcó fuentes para el grafo en `.codebase/knowledge/graph-sources.json`, se
-  reincorporan los documentos aportados y los informes propios, y se retiran los informes del catálogo, que vuelven tras
-  la síntesis con el contenido nuevo (`DetectAndIndexGraphStep.cs:128-172`). Cada fuente es un `UserDocument` con sus
-  `UserDocSection` (`HAS_SECTION`) y aristas `DOC_DESCRIBES` hacia el código que menciona
-  (`CORE/Knowledge/Graph/KnowledgeGraphIngestor.cs:13-29`). Si el run no llega a la síntesis, los informes retirados
-  vuelven en el `finally` de `CodebaseAnalysisPipeline` (`CORE/AnalysisPipelineFactory.cs:630-663`).
+- **Office:** if there is any `.accdb`, `.mdb` or `.docx` in the repository, `IngestOfficeArtifactsStep` runs (`DetectAndIndexGraphStep.cs:111-121`), which
+  creates `Table`/`AccessTable`, `Query`/`AccessQuery`, `Module`, `Form`, `Report`, `Sub`/`Function`, `Flow` and `DocSection`,
+  with edges `READS_TABLE`, `WRITES_TABLE`, `EXECUTES_QUERY`, `CALLS`, `HANDLES_EVENT`, `FLOW_ENTRY`, `FLOW_NEXT` and
+  `DOC_DESCRIBES` (`OfficeTools/Steps/IngestOfficeArtifactsStep.cs:436-713`). It writes `dead_code_candidate`, `hotspot`,
+  `anti_pattern` and `detected_issues` on its nodes (in code, `dead_code_candidate` is also written by DotNetEnricher and, in
+  Java, `JavaReachabilityWriter`, section 1.4; `hotspot` and `detected_issues`, DotNetEnricher), and computes `fan_in` counting
+  all incoming edges (`:431`, `:720-740`, `:777-806`). Its `CALLS` do not carry `enriched_by`.
+- **Markdown:** `WorkflowAndMarkdownEnricher` registers each `.md` as `PromptTemplate` if the path contains `template` or
+  the name ends in `_prompt.md`/`_system.md`, and as `DocSection` otherwise, with title, headings and an 800
+  character excerpt (`CORE/Support/WorkflowAndMarkdownEnricher.cs:57-100`).
+- **User knowledge:** if the web flagged sources for the graph in `.codebase/knowledge/graph-sources.json`, the
+  provided documents and own reports are re-incorporated, and the catalog reports are removed and return after
+  the synthesis with the new content (`DetectAndIndexGraphStep.cs:128-172`). Each source is a `UserDocument` with its
+  `UserDocSection` (`HAS_SECTION`) and `DOC_DESCRIBES` edges to the code it mentions
+  (`CORE/Knowledge/Graph/KnowledgeGraphIngestor.cs:13-29`). If the run does not reach the synthesis, the removed reports
+  return in the `finally` of `CodebaseAnalysisPipeline` (`CORE/AnalysisPipelineFactory.cs:661-664`, `:672-694`).
 
-Nadie en el repositorio escribe nodos `WorkflowStep`, así que `WorkflowStepsCatalog` llega siempre vacía; tampoco
-los escribe DotNetEnricher (`Samples/DotNetEnricher`).
+Nobody in the repository writes `WorkflowStep` nodes, so `WorkflowStepsCatalog` is always empty; nor
+does DotNetEnricher (`Samples/DotNetEnricher`).
 
-## 1.4 `LanguageEnricherStep`: analizador Java y plugin Struts/JSP
+## 1.4 `LanguageEnricherStep`: Java analyzer and Struts/JSP plugin
 
-El paso recorre el disco una vez (`RepositoryScan`), sin `.git`, `bin`, `obj`, `node_modules`, `.codebase`, `.gradle`,
-`.idea`, las salidas `target`/`build`/`out` en la raíz o junto a un fichero de build, ni las raíces de test, y deja
-`DetectedLanguages` en el contexto (`CORE/Steps/LanguageEnricherStep.cs:75-78`). La presencia de `.java` activa el
-analizador Java y la de algún `struts-config*.xml` el plugin, por ese orden, y si hay Java activo y alguno de los dos escribió, la alcanzabilidad Java
-(`JavaReachabilityWriter`, al final de este apartado) va detrás (`:80-102`). Su límite es
-`JavaAnalyzer:StepTimeoutSeconds` (3600 s) y no `CodebaseAnalysis:Timeouts:EnrichMinutes`, que es el de
+The step walks the disk once (`RepositoryScan`), skipping `.git`, `bin`, `obj`, `node_modules`, `.codebase`, `.gradle`,
+`.idea`, the `target`/`build`/`out` outputs at the root or next to a build file, nor the test roots, and leaves
+`DetectedLanguages` in the context (`CORE/Steps/LanguageEnricherStep.cs:75-78`). The presence of `.java` enables the
+Java analyzer and that of any `struts-config*.xml` the plugin, in that order, and if Java is active and either of them wrote, Java reachability
+(`JavaReachabilityWriter`, at the end of this section) runs afterwards (`:80-102`). Its limit is
+`JavaAnalyzer:StepTimeoutSeconds` (3600 s) and not `CodebaseAnalysis:Timeouts:EnrichMinutes`, which is the one of
 `DotNetEnricherStep` (`CORE/Enrichment/JavaAnalyzerOptions.cs:41-57`).
 
-### Analizador Java
+### Java analyzer
 
-`JavaAnalyzer.java` es un único fuente ejecutado con el *source launcher* del JDK configurado, sin paso de compilación
-ni binarios (`CORE/Enrichment/Java/JavaAnalyzer.java:1-17`). Compila en memoria con `--release 8 -proc:none
--implicit:none -Xmaxerrs 1000000 -nowarn` (`:645-646`), recorre los árboles con `TreePathScanner` y emite por fichero
-tipos, métodos con su `key` (`owner#nombre(FQN borrados)`), llamadas y creaciones con su destino, campos, referencias a
-tipos y campos y diagnósticos (`:21-50`). Es la versión 4 del analizador con el schema 3 (`:102-104`): el schema 3 añade a
-cada método los que sobrescribe o implementa (`overrides`), patrones de error (`issue`: `empty-catch`, `string-identity`,
-`undisposed-resource`, `null-return-deref` y `obsolete-api`) y comentarios (TODO y código comentado), y la versión 4, las
-constantes resueltas: credenciales con el valor enmascarado y el nombre de clase que se pasa a `Class.forName` o `loadClass`
-(`:52-67`). Desde el schema 2 las referencias no van una por uso: se agregan por fichero y
-por origen, destino, clase (`type` o `field`) y acceso (`read`, `write`, `readwrite`), con las líneas únicas y, en los
-tipos, los contextos del uso (parámetro, retorno, campo, local, `cast`, `instanceof`, genérico, acceso estático, `X.class`,
-anotación, `throws`, `catch`, `new` con constructor implícito y `new` de array). No se emiten los `import`, los tipos de
-`extends`/`implements`, que ya son jerarquía, ni las referencias de un tipo a sí mismo (`:31-50`, `:2160`, `:2235-2236`). El
-origen de cada destino se clasifica como `project` si sale de un fuente, `jdk` si viene de `ct.sym` o `jrt:`, `jar` en
-otro caso y `unresolved` con su motivo (`:2460-2473`); solo los de `project` llevan registro, y el resto se cuenta en el
-resumen. La complejidad ciclomática es 1 más cada `if`, bucle, `case` no `default`, `catch`, ternario, `&&` y `||`, sin
-entrar en clases anidadas (`:2475-2495`).
+`JavaAnalyzer.java` is a single source file run with the *source launcher* of the configured JDK, with no compilation step
+nor binaries (`CORE/Enrichment/Java/JavaAnalyzer.java:1-17`). It compiles in memory with `--release 8 -proc:none
+-implicit:none -Xmaxerrs 1000000 -nowarn` (`:645-646`), walks the trees with `TreePathScanner` and emits per file
+types, methods with their `key` (`owner#nombre(FQN borrados)`), calls and creations with their target, fields, references to
+types and fields and diagnostics (`:21-50`). It is version 4 of the analyzer with schema 3 (`:102-104`): schema 3 adds to
+each method those it overrides or implements (`overrides`), error patterns (`issue`: `empty-catch`, `string-identity`,
+`undisposed-resource`, `null-return-deref` and `obsolete-api`) and comments (TODO and commented-out code), and version 4, the
+resolved constants: credentials with the masked value and the class name passed to `Class.forName` or `loadClass`
+(`:52-67`). Since schema 2 references are not one per use: they are aggregated by file and
+by source, target, class (`type` or `field`) and access (`read`, `write`, `readwrite`), with unique lines and, for
+types, the usage contexts (parameter, return, field, local, `cast`, `instanceof`, generic, static access, `X.class`,
+annotation, `throws`, `catch`, `new` with implicit constructor and array `new`). The `import`s are not emitted, nor the types of
+`extends`/`implements`, which are already hierarchy, nor references of a type to itself (`:31-50`, `:2160`, `:2235-2236`). The
+source of each target is classified as `project` if it comes from a source file, `jdk` if it comes from `ct.sym` or `jrt:`, `jar` in
+any other case and `unresolved` with its reason (`:2460-2473`); only those of `project` are recorded, and the rest is counted in the
+summary. Cyclomatic complexity is 1 plus each `if`, loop, non-`default` `case`, `catch`, ternary, `&&` and `||`, without
+descending into nested classes (`:2475-2495`).
 
-`JavaAnalyzerRunner` compone el classpath con todos los `.jar` del repositorio más `JavaAnalyzer:ProvidedClasspath`
-(`CORE/Enrichment/Java/JavaAnalyzerRunner.cs:167-196`), deja `request.txt`, `java-analysis.jsonl` y
-`java-analyzer.log` en `<carpeta de la BD>/enrichment/java/` (`:93-95`) y mata el proceso al superar
-`JavaAnalyzer:TimeoutSeconds`, 900 s por defecto (`:329-338`). Aplicado el resultado, el paso borra `java-analysis.jsonl`
-salvo con `JavaAnalyzer:KeepIntermediate` (`LanguageEnricherStep.cs:216-237`). Sin JDK válido el paso avisa, retira igualmente el
-código de test y deja una fila `skipped` (`LanguageEnricherStep.cs:150-162`); cualquier otro fallo deja una fila
-`failed` y el grafo de cbm (`:205-213`). Con `JavaAnalyzer:Enabled = false` no hay pasada ni fila, pero el código de test
-se retira igual (`:83-88`).
+`JavaAnalyzerRunner` builds the classpath with all the `.jar` files in the repository plus `JavaAnalyzer:ProvidedClasspath`
+(`CORE/Enrichment/Java/JavaAnalyzerRunner.cs:167-196`), leaves `request.txt`, `java-analysis.jsonl` and
+`java-analyzer.log` in `<carpeta de la BD>/enrichment/java/` (`:93-95`) and kills the process when it exceeds
+`JavaAnalyzer:TimeoutSeconds`, 900 s by default (`:329-338`). Once the result is applied, the step deletes `java-analysis.jsonl`
+unless `JavaAnalyzer:KeepIntermediate` is set (`LanguageEnricherStep.cs:216-237`). Without a valid JDK the step warns, still removes the
+test code and leaves a `skipped` row (`LanguageEnricherStep.cs:150-162`); any other failure leaves a
+`failed` row and the cbm graph (`:205-213`). With `JavaAnalyzer:Enabled = false` there is no pass or row, but the test code
+is still removed (`:83-88`).
 
-### `JavaGraphWriter`: anclado en cbm
+### `JavaGraphWriter`: anchored in cbm
 
-![Anclado del analizador Java en los nodos de cbm: casado por QN, sobrecargas y sustitución de aristas](../assets/images/java-anclado-en-cbm.png)
+![Anchoring of the Java analyzer on the cbm nodes: matched by QN, overloads and edge replacement](../assets/images/java-anclado-en-cbm.png)
 
 <!-- Source: docs/assets/diagrams/java-anclado-en-cbm.excalidraw -->
 
-La escritura es .NET, en una transacción sobre la copia, y valida el resultado entero antes de tocar la BD: un JSONL
-sin `summary` final o de otra versión de contrato no escribe nada (`CORE/Enrichment/Java/JavaGraphWriter.cs:379-381`,
-`:579-584`); el lector acepta los schemas 1 a 3 (`CORE/Enrichment/Java/JavaAnalysisRecords.cs:572-578`). El orden es este (`JavaGraphWriter.cs:649-705`):
+The writing is .NET, in a transaction on the copy, and validates the whole result before touching the DB: a JSONL
+without a final `summary` or from another contract version writes nothing (`CORE/Enrichment/Java/JavaGraphWriter.cs:379-381`,
+`:579-584`); the reader accepts schemas 1 to 3 (`CORE/Enrichment/Java/JavaAnalysisRecords.cs:572-578`). The order is this (`JavaGraphWriter.cs:649-705`):
 
-1. **Salida anterior:** borra lo que escribió la pasada anterior de `JavaAnalyzer`, identificado por `enriched_by`.
-2. **Tests:** retira los nodos bajo las raíces de test (`testSourceDirectory` del `pom.xml`, `src/test/java`,
-   `JavaAnalyzer:TestRoots`) con sus aristas y vectores.
-3. **Carga:** lee los nodos de cbm de los ficheros analizados y los indexa por QN (`:857-898`).
-4. **Sustitución:** borra todas las `CALLS`, `INHERITS` e `IMPLEMENTS` cuyo origen es un nodo de esos ficheros y, con un
-   resultado de schema 2 o posterior, también las `USAGE` de cbm y las `USES_TYPE`, `READS` y `WRITES` que hubiera (`:361-367`,
-   `:672`, `:899-919`). Las `USAGE` de cbm casan el destino por nombre, como sus `CALLS`.
-5. **Tipos:** el QN se construye en .NET como `<proyecto>.<ruta sin extensión con / → .>.<cadena de tipos>`
-   (`:924-932`, `:1926`); si existe se parchea y si no se crea (`:920-959`). Desde la versión 5 de la escritura cada tipo
-   recibe además `type_role` e `is_public` (`:279-301`).
-6. **Métodos:** agrupa las declaraciones por tipo y nombre; el ancla es el `Method` de cbm con ese QN o, en interfaces y
-   enums, el `Function` que cbm crea en `<prefijo>.<nombre>` (`:1082`, `:1105`). Conserva el QN la declaración que contiene el
-   `start_line` del ancla, o la más cercana, y las demás se crean con sufijo de tipos simples (`…consultar(Hashtable,long)`),
-   o completos si colisionan, con `overload_of` y `DEFINES_METHOD` desde su tipo (`:992-1169`).
-7. **Campos:** cbm guarda cada campo como `Field` con el inicializador dentro del nombre (`nombreConexion = null`). Cada
-   campo del analizador casa con el `Field` del mismo tipo cuyo `name` es el nombre del campo o empieza por él seguido de
-   espacio, `=` o `[`; el nodo conserva su QN y recibe `field_name`, `type_fqn`, `accessibility`, `is_static`,
-   `is_final` y `docstring`. Si no casa, se crea `<QN del tipo>.<campo>` con `DEFINES` desde el tipo, y las constantes de
-   enum se anclan en el `Variable` de cbm, porque cbm no les crea `Field` (`:1170-1278`). Los `Variable` gemelos de cbm no
-   se tocan.
-8. **Jerarquía y llamadas:** `INHERITS`/`IMPLEMENTS` solo con destino de proyecto (los del JDK o de jars quedan en
-   `super_fqn`/`interfaces_fqn`), con `IMPLEMENTS` marcadas `is_inherited` hacia las interfaces del proyecto que una clase
-   recibe de su superclase, y una `CALLS` por par de nodos con `lines`, `count` y `kinds` (`:1279-1411`). Una llamada a un método de interfaz apunta al método de la interfaz; el despacho se deduce por
-   `IMPLEMENTS`. Los constructores implícitos y los destinos en clases anónimas o locales no tienen nodo y cuentan en
-   `unresolved` (`:1355-1411`); el `new` de un constructor implícito deja, además, una `USES_TYPE` al tipo.
-9. **Referencias:** una `USES_TYPE` por origen y tipo, con `lines`, `count` y `contexts`, y una `READS` o una `WRITES` por
-   origen y campo, con `lines` y `count`; un `++`, un `--` o un `op=` dan las dos. El origen es el método, el campo (su
-   tipo declarado o su inicializador) o el tipo (inicializadores y anotaciones), y una referencia cuyo origen no tiene
-   nodo se cuenta en `refs.unmatched`, sin arista (`:1412-1524`).
-10. **Sobrescrituras, métricas y hallazgos (schema 3):** una `OVERRIDES` del método al que sobrescribe o implementa,
-   cuando los dos tienen nodo; `fan_in`, `fan_out` y `hotspot` en los métodos con la semántica de `MetricsEnricher` de C#;
-   `detected_issues` e `issue_rules`, `todo_markers` y `commented_code`, y, con la versión 4 del analizador,
-   `hardcoded_secrets` (enmascarados) y `reflection_targets` (`:1531-1800`).
-11. **Registro:** deja la fila `ok` de `enrichment_runs` con recuentos, tiempos por fase y `details.cbm_match`, que separa
-   lo que no casa con cbm por causa: ficheros que cbm no indexó (`unindexed_files`, sin ningún nodo suyo en ese
-   `file_path`, y `unindexed_files_long_path`, los que llegan a 260 caracteres de ruta absoluta) y nombres que no casan
-   en los ficheros que sí indexó (`types_created_name_mismatch`, `methods_created_name_mismatch`,
-   `fields_created_name_mismatch`). Solo estos últimos marcan deriva (`drift_suspected`), con más del 5 % de tipos, de
-   métodos sin sobrecargas o de campos de clase (`:1-260`, `:808-830`). El paso avisa si lo que no casa en total pasa
-   del 5 % y dice cuál de las dos causas es; solo la segunda apunta a un cambio de versión de cbm, y la primera lleva la
-   pista del MAX_PATH si algún fichero la cumple (`CORE/Steps/LanguageEnricherStep.cs:309-310`, `:330-380`).
+1. **Previous output:** deletes what the previous `JavaAnalyzer` pass wrote, identified by `enriched_by`.
+2. **Tests:** removes the nodes under the test roots (`testSourceDirectory` of the `pom.xml`, `src/test/java`,
+   `JavaAnalyzer:TestRoots`) with their edges and vectors.
+3. **Load:** reads the cbm nodes of the analyzed files and indexes them by QN (`:857-898`).
+4. **Replacement:** deletes all `CALLS`, `INHERITS` and `IMPLEMENTS` whose source is a node from those files and, with a
+   schema 2 or later result, also cbm's `USAGE` and any `USES_TYPE`, `READS` and `WRITES` present (`:361-367`,
+   `:672`, `:899-919`). cbm's `USAGE` match the target by name, like its `CALLS`.
+5. **Types:** the QN is built in .NET as `<proyecto>.<ruta sin extensión con / → .>.<cadena de tipos>`
+   (`:924-932`, `:1926`); if it exists it is patched and if not it is created (`:920-959`). From version 5 of the writing, each type
+   also receives `type_role` and `is_public` (`:279-301`).
+6. **Methods:** groups the declarations by type and name; the anchor is the cbm `Method` with that QN or, in interfaces and
+   enums, the `Function` that cbm creates at `<prefijo>.<nombre>` (`:1082`, `:1105`). The QN is kept by the declaration that contains the
+   anchor's `start_line`, or the nearest one, and the others are created with a simple-type suffix (`…consultar(Hashtable,long)`),
+   or fully qualified if they collide, with `overload_of` and `DEFINES_METHOD` from their type (`:992-1169`).
+7. **Fields:** cbm stores each field as `Field` with the initializer inside the name (`nombreConexion = null`). Each
+   analyzer field matches the `Field` of the same type whose `name` is the field name or starts with it followed by
+   a space, `=` or `[`; the node keeps its QN and receives `field_name`, `type_fqn`, `accessibility`, `is_static`,
+   `is_final` and `docstring`. If it does not match, `<type QN>.<field>` is created with `DEFINES` from the type, and enum constants
+   are anchored on cbm's `Variable`, because cbm does not create a `Field` for them (`:1170-1278`). cbm's twin `Variable`s are not
+   touched.
+8. **Hierarchy and calls:** `INHERITS`/`IMPLEMENTS` only with a project target (those of the JDK or of jars stay in
+   `super_fqn`/`interfaces_fqn`), with `IMPLEMENTS` marked `is_inherited` toward the project interfaces that a class
+   receives from its superclass, and one `CALLS` per node pair with `lines`, `count` and `kinds` (`:1279-1411`). A call to an interface method points to the interface method; dispatch is inferred via
+   `IMPLEMENTS`. Implicit constructors and targets in anonymous or local classes have no node and are counted in
+   `unresolved` (`:1355-1411`); the `new` of an implicit constructor also leaves a `USES_TYPE` to the type.
+9. **References:** one `USES_TYPE` per source and type, with `lines`, `count` and `contexts`, and one `READS` or `WRITES` per
+   source and field, with `lines` and `count`; a `++`, a `--` or an `op=` yields both. The source is the method, the field (its
+   declared type or its initializer) or the type (initializers and annotations), and a reference whose source has no
+   node is counted in `refs.unmatched`, with no edge (`:1412-1524`).
+10. **Overrides, metrics and findings (schema 3):** an `OVERRIDES` from the method it overrides or implements,
+   when both have a node; `fan_in`, `fan_out` and `hotspot` on methods with the semantics of C#'s `MetricsEnricher`;
+   `detected_issues` and `issue_rules`, `todo_markers` and `commented_code`, and, with version 4 of the analyzer,
+   `hardcoded_secrets` (masked) and `reflection_targets` (`:1531-1800`).
+11. **Record:** leaves the `ok` row in `enrichment_runs` with counts, times per phase and `details.cbm_match`, which separates
+   what does not match cbm by cause: files cbm did not index (`unindexed_files`, with no node of its own at that
+   `file_path`, and `unindexed_files_long_path`, those reaching 260 characters of absolute path) and names that do not match
+   in the files it did index (`types_created_name_mismatch`, `methods_created_name_mismatch`,
+   `fields_created_name_mismatch`). Only these last ones flag drift (`drift_suspected`), with more than 5 % of types, of
+   methods without overloads or of class fields (`:1-260`, `:808-830`). The step warns if what does not match in total exceeds
+   5 % and says which of the two causes it is; only the second points to a cbm version change, and the first carries the
+   MAX_PATH lead if any file meets it (`CORE/Steps/LanguageEnricherStep.cs:309-310`, `:330-380`).
 
-Todo lo escrito lleva `enriched_by: ["JavaAnalyzer"]`, y eso es lo que `graph_neighbors` y las facetas leen como arista
-resuelta. Sobre el repositorio objetivo el resultado aceptado fue un 99,996 % de llamadas resueltas, ninguna `CALLS` de
-cbm en los ficheros analizados y 5488 sobrecargas creadas en `src/` (medición anterior a la prueba M). Con las referencias, sobre la
-copia de `C:\Users\juan.rozano\m\Online` (medido el 2026-09-29, con la versión 2 de la escritura): el 99,996 % de las referencias a tipos y campos del
-proyecto resueltas (23 sin resolver de 587 267), 253 753 `USES_TYPE`, 121 659 `READS` y 56 250 `WRITES`, ninguna `USAGE`
-de cbm en los `.java` (se sustituyeron 172 517) y 52 962 de 55 257 campos casados con un `Field` de cbm (95,85 %); los
-2295 restantes se crean. Dos pasadas dejan los mismos recuentos y la BD de `~/.cache` no cambia.
+Everything written carries `enriched_by: ["JavaAnalyzer"]`, and that is what `graph_neighbors` and the facets read as a
+resolved edge. On the target repository the accepted result was 99,996 % of calls resolved, no `CALLS` from
+cbm in the analyzed files and 5488 overloads created in `src/` (measurement prior to test M). With the references, on the
+copy of `C:\Users\juan.rozano\m\Online` (measured on 2026-09-29, with version 2 of the writing): 99,996 % of the references to project types and fields
+resolved (23 unresolved out of 587 267), 253 753 `USES_TYPE`, 121 659 `READS` and 56 250 `WRITES`, no `USAGE`
+from cbm in the `.java` files (172 517 were replaced) and 52 962 of 55 257 fields matched with a cbm `Field` (95,85 %); the
+remaining 2295 are created. Two passes leave the same counts and the DB in `~/.cache` does not change.
 
-### Plugin Struts/JSP
+### Struts/JSP plugin
 
-`StrutsJspWriter` lee con .NET los `struts-config*.xml`, las definiciones de Tiles y las JSP, sin compilar nada, y crea
-nodos `Route` (QN `__route__ANY__<path>`), `Jsp` y `TilesDefinition` con aristas `HANDLES`, `FORWARDS_TO`, `SUBMITS_TO`,
-`INCLUDES`, `RENDERS` y `EXTENDS_DEFINITION` (`CORE/Enrichment/Web/StrutsJspWriter.cs:72-76`, `:489`). La clase de
-cada acción se busca entre los `Class` del grafo por nombre y ruta del fichero, y si no aparece no hay `HANDLES`
-(`:509-510`, `:779`). Una JSP es sospechosa si importa algo que casa con `SuspiciousImportPatterns` (DAO, `java.sql`,
-`javax.sql`), si un scriptlet o una declaración usa un import de negocio o si su Java contiene SQL; el acceso a sesión
-se registra en `session_access` pero no la marca (`CORE/Enrichment/Web/JspScanner.cs:327-354`). Medido antes de la prueba M: 1736
-JSP, 1484 acciones y 26 JSP sospechosas con la regla afinada.
+`StrutsJspWriter` reads with .NET the `struts-config*.xml` files, the Tiles definitions and the JSPs, without compiling anything, and creates
+`Route` nodes (QN `__route__ANY__<path>`), `Jsp` and `TilesDefinition` with edges `HANDLES`, `FORWARDS_TO`, `SUBMITS_TO`,
+`INCLUDES`, `RENDERS` and `EXTENDS_DEFINITION` (`CORE/Enrichment/Web/StrutsJspWriter.cs:72-76`, `:489`). The class of
+each action is searched among the graph's `Class` nodes by name and file path, and if it does not appear there is no `HANDLES`
+(`:509-510`, `:779`). A JSP is suspicious if it imports something that matches `SuspiciousImportPatterns` (DAO, `java.sql`,
+`javax.sql`), if a scriptlet or a declaration uses a business import or if its Java contains SQL; session access
+is recorded in `session_access` but does not flag it (`CORE/Enrichment/Web/JspScanner.cs:327-354`). Measured before test M: 1736
+JSPs, 1484 actions and 26 suspicious JSPs with the refined rule.
 
-### `enrichment_runs` y repetición
+### `enrichment_runs` and repetition
 
-Cada enriquecedor se salta, con un mensaje, si ya hay una fila `ok` con su versión, la misma huella de indexación
-(`projects.name|indexed_at`, más `|cbm=<versión>` si la indexación la hizo el pipeline) y la misma huella de configuración
-(`LanguageEnricherStep.cs:132-148`, `CORE/Enrichment/EnrichmentRuns.cs:117-140`, `:178-190`). En Java la configuración que cuenta es la codificación, el
-classpath y las raíces de test; en Struts, además, la última pasada `ok` de Java, de modo que una pasada Java nueva
-repite el plugin (`LanguageEnricherStep.cs:401-405`). Una reindexación de cbm cambia `indexed_at` y obliga a repetir
-todo. La versión de la escritura Java es una constante manual, ahora la 5 (`JavaGraphWriter.cs:285`), y la del plugin, la 2
-(`StrutsJspWriter.cs:86`): editar `JavaAnalyzer.java` o el escritor sin subirla hace que la pasada se omita.
+Each enricher is skipped, with a message, if there is already an `ok` row with its version, the same indexing fingerprint
+(`projects.name|indexed_at`, plus `|cbm=<versión>` if the pipeline did the indexing) and the same configuration fingerprint
+(`LanguageEnricherStep.cs:132-148`, `CORE/Enrichment/EnrichmentRuns.cs:117-140`, `:178-190`). For Java the configuration that counts is the encoding, the
+classpath and the test roots; for Struts, also the last `ok` Java pass, so that a new Java pass
+repeats the plugin (`LanguageEnricherStep.cs:401-405`). A cbm reindexing changes `indexed_at` and forces everything to be repeated.
+The Java writing version is a manual constant, now 5 (`JavaGraphWriter.cs:285`), and the plugin's is 2
+(`StrutsJspWriter.cs:86`): editing `JavaAnalyzer.java` or the writer without bumping it makes the pass be skipped.
 
-La alcanzabilidad Java (`JavaReachabilityWriter`) corre al final del paso, sobre lo que han escrito el analizador y el
-plugin: escribe `is_reachable` y, en lo no alcanzado, `dead_code_candidate`, `dead_code_confidence` y `dead_code_reason`, con la
-misma semántica que `ReachabilityEnricher` de C#; las raíces son los `main`, lo anotado por un framework, las clases de las
-rutas de Struts, las que nombra un XML de configuración, un literal de `Class.forName` o una JSP, y lo que puede instanciarse
-por reflexión queda como dudoso (`low`). No escribe aristas ni deja fila en `enrichment_runs`: cada pasada recalcula sus
-marcas (`CORE/Enrichment/Java/JavaReachabilityWriter.cs:38-64`, `LanguageEnricherStep.cs:436-462`).
+Java reachability (`JavaReachabilityWriter`) runs at the end of the step, over what the analyzer and the
+plugin have written: it writes `is_reachable` and, on what is not reachable, `dead_code_candidate`, `dead_code_confidence` and `dead_code_reason`, with the
+same semantics as C#'s `ReachabilityEnricher`; the roots are the `main` methods, whatever a framework annotates, the classes of the
+Struts routes, those named by a configuration XML, a `Class.forName` literal or a JSP, and what can be instantiated
+by reflection is left as doubtful (`low`). It writes no edges and leaves no row in `enrichment_runs`: each pass recalculates its
+marks (`CORE/Enrichment/Java/JavaReachabilityWriter.cs:38-64`, `LanguageEnricherStep.cs:436-462`).
 
-## 1.5 `DotNetEnricherStep` y el fallback LLM
+## 1.5 `DotNetEnricherStep` and the LLM fallback
 
-Si `LanguageEnricherStep` encontró Java y no C#, el paso lo dice y devuelve la entrada sin CLI ni LLM
-(`CORE/Steps/DotNetEnricherStep.cs:54-64`). En otro caso, deshabilitado va al fallback (`:69-73`); con una pasada `ok`
-de `DotNetEnricher` en `enrichment_runs` sobre la misma indexación y configuración no hace nada (`:94-101`), y tampoco
-con el grafo ya enriquecido y sin ninguna pasada registrada (`:102-106`); sin `.sln`/`.slnx` va al fallback (`:108-113`).
-Si no, lanza como proceso el CLI del repositorio (`Samples/DotNetEnricher`, que el build deja en `dotnet-enricher/`
-junto a la app; `:220-245`) con la raíz del repositorio, la restauración de paquetes de `DotNetEnricher:Restore` y
-`RestoreTimeoutSeconds` y, solo si se configura `DotNetEnricher:ProjectName`, el proyecto; sin él lo resuelve el propio CLI
-por mayoría en `nodes` (`:193-209`). El CLI escribe en una sola transacción y registra su pasada. Si no se encuentra, el paso
-avisa y pasa al fallback sin dejar fila; si sale con un código distinto de 0 y 2 o supera `DotNetEnricher:TimeoutSeconds`,
-el paso lo mata, avisa, deja una fila `failed` y pasa al fallback; con `DotNetEnricher:Required` cualquiera de los tres casos
-para el análisis (`:115-186`). El fallback, `SemanticEnrichmentStep`, envía al rol
-`Enricher` hasta 15 ficheros de rutas, controladores o DI y vuelca el JSON que devuelve; el código impone las marcas
-(`origin: ai_enricher`, `enriched_by: SemanticEnricherAgent`) y solo deja pasar propiedades semánticas de una lista
-blanca, nunca métricas (`CORE/Steps/SemanticEnrichmentStep.cs:36-47`). Sin ficheros de entrada no llama al modelo
-(`:82-91`) y con una fila `ok` sobre la misma indexación y los mismos ficheros tampoco (`:101-106`). Sus aristas salen en
-`graph_neighbors` como «estimada por LLM» y no cuentan como resueltas en las facetas
+If `LanguageEnricherStep` found Java and not C#, the step says so and returns the input without CLI or LLM
+(`CORE/Steps/DotNetEnricherStep.cs:54-64`). Otherwise, if disabled, it goes to the fallback (`:69-73`); with an `ok`
+`DotNetEnricher` pass in `enrichment_runs` over the same indexing and configuration it does nothing (`:94-101`), nor does it
+when the graph is already enriched and no pass is recorded (`:102-106`); without `.sln`/`.slnx` it goes to the fallback (`:108-113`).
+Otherwise, it launches as a process the repository's CLI (`Samples/DotNetEnricher`, which the build places in `dotnet-enricher/`
+next to the app; `:220-245`) with the repository root, the package restore from `DotNetEnricher:Restore` and
+`RestoreTimeoutSeconds` and, only if `DotNetEnricher:ProjectName` is set, the project; without it the CLI itself resolves it
+by majority in `nodes` (`:193-209`). The CLI writes in a single transaction and records its pass. If it is not found, the step
+warns and moves to the fallback without leaving a row; if it exits with a code other than 0 and 2 or exceeds `DotNetEnricher:TimeoutSeconds`,
+the step kills it, warns, leaves a `failed` row and moves to the fallback; with `DotNetEnricher:Required` any of the three cases
+stops the analysis (`:115-186`). The fallback, `SemanticEnrichmentStep`, sends to the role
+`Enricher` up to 15 files of routes, controllers or DI and dumps the JSON it returns; the code enforces the marks
+(`origin: ai_enricher`, `enriched_by: SemanticEnricherAgent`) and only lets through semantic properties from an
+allowlist, never metrics (`CORE/Steps/SemanticEnrichmentStep.cs:36-47`). Without input files it does not call the model
+(`:82-91`) and neither does it with an `ok` row over the same indexing and the same files (`:101-106`). Its edges appear in
+`graph_neighbors` as «estimated by LLM» and do not count as resolved in the facets
 (`CORE/Tools/GraphNeighborsTool.cs:464`, `CORE/Steps/SqlFacetExtractorStep.cs:752-753`).
 
-## 1.6 Facetas SQL (`SqlFacetExtractorStep`)
+## 1.6 SQL facets (`SqlFacetExtractorStep`)
 
-El paso abre la copia, detecta el ecosistema por las extensiones de los ficheros del grafo y por algunas etiquetas
-(`CORE/Steps/SqlFacetExtractorStep.cs:1258-1375`) y calcula unas sesenta facetas, cada consulta con `LIMIT` y un `ORDER BY`
-determinista; las que consumen lo que escriben los compiladores (`detected_issues`, código muerto, campos, DI, autenticación
-de rutas, TODO, código comentado, duplicados, secretos y destinos de reflexión) están en `CORE/Support/CompilerFactsFacets.cs`
-y dan totales más los elementos más relevantes. El resultado es un
-único `ReportFacetInput` que vive en memoria y en el contexto (`:674`) y que reciben todos los auditores; cada
-plantilla de prompt elige qué placeholders incluye, y esa elección es la que fija qué faceta va a qué informe (la
-matriz está en el apartado 2.1). Tres propiedades de diseño afectan a todos los informes:
+The step opens the copy, detects the ecosystem by the extensions of the graph's files and by some labels
+(`CORE/Steps/SqlFacetExtractorStep.cs:1258-1375`) and computes about sixty facets, each query with `LIMIT` and an `ORDER BY`
+deterministic; those that consume what the compilers write (`detected_issues`, dead code, fields, DI, authentication
+of routes, TODO, commented-out code, duplicates, secrets and reflection targets) are in `CORE/Support/CompilerFactsFacets.cs`
+and give totals plus the most relevant items. The result is a
+single `ReportFacetInput` that lives in memory and in the context (`:674`) and that all auditors receive; each
+prompt template chooses which placeholders it includes, and that choice is what fixes which facet goes to which report (the
+matrix is in section 2.1). Three design properties affect all reports:
 
-- **Lo desconocido no es cero:** `ZeroFaninClasses` solo lista tipos con `fan_in` conocido e igual a 0 (`:221-256`),
-  `UnvalidatedRoutes` solo `auth_required = false` (`:346-360`) y las rutas sin dato dicen `desconocido`
-  (`:106-117`, `:467-476`). Una consulta que falla llega como `[] /* Faceta no disponible por un error SQL …: no es un
+- **Unknown is not zero:** `ZeroFaninClasses` only lists types with a known `fan_in` equal to 0 (`:221-256`),
+  `UnvalidatedRoutes` only `auth_required = false` (`:346-360`) and routes without data show `desconocido`
+  (`:106-117`, `:467-476`). A failing query arrives as `[] /* Faceta no disponible por un error SQL …: no es un
   conjunto vacío */` (`:946-947`).
-- **Métricas calculadas con procedencia:** si falta la propiedad, `fan_in`/`fan_out` salen de `CALLS` resueltas (con
-  `enriched_by` distinto del fallback LLM y solo en nodos marcados por el mismo enriquecedor), `method_count` de
-  `DEFINES_METHOD`, `cyclomatic_total` como suma si todos los métodos la tienen y la LOC del rango de líneas, en tablas
-  temporales de la conexión; cada valor dice su origen en `*_source` (`:719-886`). En un tipo no cuentan sus llamadas
-  internas, y su `fan_in` suma los orígenes de sus `USES_TYPE` resueltas desde otros tipos, sin el propio tipo, sus
-  métodos ni sus campos (`:781`, `:820`).
-- **Referencias Java en el código muerto:** con `USES_TYPE` en el grafo, `ZeroFaninClasses` ya no exige que el tipo
-  declare constructor, porque el `new` con el implícito deja arista; sin ellas lo sigue exigiendo. Quedan fuera, además,
-  los tipos que Struts instancia por reflexión: el `form_type` y el `action_type` de sus `Route`, comparados por FQN con
-  el `fqn` del tipo (`:246-249`). `UnreadFields` da hasta 30 campos `private` que no son `static final` y no tienen
-  ninguna `READS` entrante, con cuántos orígenes los escriben (`:258-273`, `CORE/Support/CompilerFactsFacets.cs:320-328`), y
-  aparte salen su recuento y los que solo se escriben (`UnreadFieldsSummary`, `WriteOnlyFields`). Con la alcanzabilidad
-  (`JavaReachabilityWriter` en Java, `ReachabilityEnricher` en C#), `DeadCodeCandidates`, `DeadCodeSummary` y
-  `DeadPrivateMethods` leen `dead_code_candidate` sin repetir los miembros de un tipo candidato ni lo que sobrescribe un
-  contrato (`CompilerFactsFacets.cs:247-317`).
-- **Código adjunto:** `HighCyclomaticMethods`, `CriticalHotspotsExceptions` y `HotspotsRanking` adjuntan el fragmento
-  del disco de sus primeros elementos (diez en los dos rankings y seis o cuatro en los hotspots críticos), con 70 líneas como
-  máximo (`:148`, `:496`, `CompilerFactsFacets.cs:201`, `:208`, `SqlFacetExtractorStep.cs:1056-1070`).
-- **Candidatos agrupados por patrón (tanda C):** las consultas de `ZeroFaninClasses` y `UnreadFields` leen todos los
-  candidatos, hasta 20 000 (`:234-256`, `:263-273`, `:1085`), y `GroupedFacetAsync` los agrupa (`:1096-1134`): tokens CamelCase del
-  nombre (en un campo, el del tipo que lo declara), el prefijo o sufijo de tokens con más miembros mientras llegue a 10,
-  alargado un token mientras conserve el 80 % (`CORE/Support/DeadCodeGrouping.cs:54-57`, `:81-120`) y, con los que quedan,
-  los directorios con 10 o más. Los grupos van en `ZeroFaninGroups` y `UnreadFieldGroups` con patrón, recuento, prefijo,
-  sufijo, directorio y paquete comunes y tres ejemplos; sus miembros ya no salen en las listas, que muestran los 20 y 30
-  primeros de los sueltos.
-- **Instanciación dinámica (tanda C):** `DynamicInstantiationSites` sale de recorrer en disco los `.java` y `.cs` del
-  `RepositoryScan` (sin raíces de test ni carpeta de informes, `:1188-1215`) con expresiones regulares sobre el texto sin
-  comentarios: `Class.forName`, `newInstance`, `getDeclaredConstructor` y `ServiceLoader.load` en Java y
-  `Activator.CreateInstance`, `GetType` y `Assembly.Load*` en C#, con argumento no literal y no sobre `X.class`
-  (`CORE/Support/DynamicInstantiationScanner.cs:63-104`, `:302-306`). Suma las clases de `class="…"`, `type="…"` y
-  `<…-class>` de los XML que no son de build (`:176-188`). El cruce marca `likely_dynamic` un grupo cuyo sufijo, prefijo
-  o paquete aparece en la línea de un sitio, en las cinco anteriores o en un literal del fichero del sitio, si un literal
-  junto al sitio es la pieza fija del nombre compuesto (un final de tokens del sufijo, como `+ "Impl"`), o si la
-  configuración nombra algún miembro (`DeadCodeGrouping.cs:218-298`); un candidato suelto nombrado lleva
-  `named_in_configuration`. Es una heurística, y las dos facetas lo dicen en su `note`. En la copia del repositorio
-  objetivo encuentra 52 sitios, entre ellos los `Class.forName` de la factoría de DAO
-  (`src/geo/DAO/utilidades/UtilidadesDAO.java:206`, `:481`), y 2409 clases nombradas, en 5,5 s con caché y 44 s en frío.
+- **Metrics computed with provenance:** if the property is missing, `fan_in`/`fan_out` come from resolved `CALLS` (with
+  `enriched_by` other than the LLM fallback and only on nodes marked by the same enricher), `method_count` from
+  `DEFINES_METHOD`, `cyclomatic_total` as a sum if all methods have it, and the LOC of the line range, in temporary tables
+  of the connection; each value states its origin in `*_source` (`:719-886`). For a type, its internal calls do not count, and its
+  `fan_in` adds the sources of its resolved `USES_TYPE` from other types, excluding the type itself, its
+  methods or its fields (`:781`, `:820`).
+- **Java references in dead code:** with `USES_TYPE` in the graph, `ZeroFaninClasses` no longer requires that the type
+  declare a constructor, because the `new` with the implicit one leaves an edge; without them it still requires it. Also excluded
+  are the types Struts instantiates by reflection: the `form_type` and the `action_type` of its `Route`s, compared by FQN with
+  the type's `fqn` (`:246-249`). `UnreadFields` gives up to 30 `private` fields that are not `static final` and have no
+  incoming `READS`, with how many sources write them (`:258-273`, `CORE/Support/CompilerFactsFacets.cs:320-328`), and
+  separately their count and those that are only written (`UnreadFieldsSummary`, `WriteOnlyFields`). With reachability
+  (`JavaReachabilityWriter` in Java, `ReachabilityEnricher` in C#), `DeadCodeCandidates`, `DeadCodeSummary` and
+  `DeadPrivateMethods` read `dead_code_candidate` without repeating the members of a candidate type or what overrides a
+  contract (`CompilerFactsFacets.cs:247-317`).
+- **Attached code:** `HighCyclomaticMethods`, `CriticalHotspotsExceptions` and `HotspotsRanking` attach the fragment
+  from disk of their first items (ten in the two rankings and six or four in the critical hotspots), with 70 lines as
+  maximum (`:148`, `:496`, `CompilerFactsFacets.cs:201`, `:208`, `SqlFacetExtractorStep.cs:1056-1070`).
+- **Candidates grouped by pattern (batch C):** the queries of `ZeroFaninClasses` and `UnreadFields` read all the
+  candidates, up to 20 000 (`:234-256`, `:263-273`, `:1085`), and `GroupedFacetAsync` groups them (`:1096-1134`): CamelCase tokens of the
+  name (for a field, that of the type declaring it), the prefix or suffix of tokens with the most members while it reaches 10,
+  extended by one token while it keeps 80 % (`CORE/Support/DeadCodeGrouping.cs:54-57`, `:81-120`) and, with those left over,
+  the directories with 10 or more. The groups go in `ZeroFaninGroups` and `UnreadFieldGroups` with pattern, count, prefix,
+  suffix, common directory and package, and three examples; their members no longer appear in the lists, which show the first 20 and 30
+  of the ungrouped ones.
+- **Dynamic instantiation (batch C):** `DynamicInstantiationSites` comes from walking the `.java` and `.cs` files of the
+  `RepositoryScan` on disk (without test roots or the reports folder, `:1188-1215`) with regular expressions over the text without
+  comments: `Class.forName`, `newInstance`, `getDeclaredConstructor` and `ServiceLoader.load` in Java and
+  `Activator.CreateInstance`, `GetType` and `Assembly.Load*` in C#, with a non-literal argument and not on `X.class`
+  (`CORE/Support/DynamicInstantiationScanner.cs:63-104`, `:302-306`). It adds the classes from `class="…"`, `type="…"` and
+  `<…-class>` of the XML files that are not build files (`:176-188`). The cross-check flags `likely_dynamic` a group whose suffix, prefix
+  or package appears on the line of a site, in the five preceding ones or in a literal of the site's file, if a literal
+  next to the site is the fixed part of the compound name (a token ending of the suffix, such as `+ "Impl"`), or if the
+  configuration names any member (`DeadCodeGrouping.cs:218-298`); a named loose candidate carries
+  `named_in_configuration`. It is a heuristic, and both facets say so in their `note`. In the copy of the repository
+  target it finds 52 sites, among them the `Class.forName` of the DAO factory
+  (`src/geo/DAO/utilidades/UtilidadesDAO.java:206`, `:481`), and 2409 named classes, in 5,5 s with cache and 44 s cold.
 
-Dos facetas no salen del SQL: `HardcodedSecrets` recorre en disco los ficheros que referencia el grafo y enmascara el
-valor (`:609`), y `ProvidedDocumentation` es el índice de hasta 30 documentos subidos con `useInAnalysis`
-(`CORE/Steps/ProvidedDocumentationFacet.cs:19-21`). El paso tiene 5 minutos fijos (`SqlFacetExtractorStep.cs:25`).
+Two facets do not come from SQL: `HardcodedSecrets` walks on disk the files the graph references and masks the
+value (`:609`), and `ProvidedDocumentation` is the index of up to 30 uploaded documents with `useInAnalysis`
+(`CORE/Steps/ProvidedDocumentationFacet.cs:19-21`). The step has a fixed 5-minute limit (`SqlFacetExtractorStep.cs:25`).
 
-En la prueba M tardó 51,5 s sobre una copia de 1 676 672 KB (el tamaño que da el log al copiarla de cbm). Una causa se ha comprobado en el esquema: cbm trae su propio
-`idx_nodes_label` sobre `(project, label)`, y el `CREATE INDEX IF NOT EXISTS idx_nodes_label ON nodes(label)` de
-`GraphSchema` no hacía nada en la copia, así que cada consulta por label sin `project`, que son casi todas las facetas,
-recorría la tabla de nodos entera. El índice tiene ahora nombre propio, `idx_graph_nodes_label`
-(`CORE/Support/GraphSchema.cs:47`, `:51-55`). En una BD sintética de 289 200 nodos y 328 MB, una consulta por label bajó de
-1 s a menos de 40 ms, las de métodos de 1,2 a 0,65 s, y crear el índice costó 1,1 s. Sobre la BD real, ya con las
-referencias (305 895 nodos y 1 484 566 aristas), el paso tardó 45,9 s con el índice y 46,7 s en una copia sin él, con
-las mismas facetas: ahí el índice no cambia nada apreciable. De esos 46 s, unos 24 son de `PrepareDerivedMetricsAsync`,
-las métricas calculadas en tablas temporales.
-Siguen sin índice las doce consultas que filtran solo por propiedades JSON (código muerto, hotspots, patrones, Martin,
-ciclos, comunidades, cobertura documental, obsoletos y puntos de extensión), cada una un recorrido completo de nodos con
-`json_extract`, que son la siguiente candidata, y las de aristas por tipo, porque un índice más en `edges` encarecería
-la escritura del analizador Java.
+In test M it took 51,5 s on a copy of 1 676 672 KB (the size the log reports when copying it from cbm). One cause has been checked in the schema: cbm brings its own
+`idx_nodes_label` on `(project, label)`, and the `CREATE INDEX IF NOT EXISTS idx_nodes_label ON nodes(label)` from
+`GraphSchema` did nothing on the copy, so every query by label without `project`, which is almost all the facets,
+scanned the whole nodes table. The index now has its own name, `idx_graph_nodes_label`
+(`CORE/Support/GraphSchema.cs:47`, `:51-55`). On a synthetic DB of 289 200 nodes and 328 MB, a query by label dropped from
+1 s to under 40 ms, the method queries from 1,2 to 0,65 s, and creating the index cost 1,1 s. On the real DB, already with the
+references (305 895 nodes and 1 484 566 edges), the step took 45,9 s with the index and 46,7 s on a copy without it, with
+the same facets: there the index changes nothing noticeable. Of those 46 s, about 24 belong to `PrepareDerivedMetricsAsync`,
+the metrics computed in temporary tables.
+Still without an index are the twelve queries that filter only by JSON properties (dead code, hotspots, patterns, Martin,
+cycles, communities, documentary coverage, obsolete and extension points), each a full scan of nodes with
+`json_extract`, which is the next candidate, and the edges-by-type ones, because one more index on `edges` would make
+the Java analyzer's writing more expensive.
 
-## 1.6.1 Preparación por subsistema y modos A y B
+## 1.6.1 Per-subsystem preparation and modes A and B
 
-Los informes de dominio recibían un universo grande de candidatos y un único contexto con un tope de iteraciones de tools: en
-un repositorio grande recorrían pocas partes funcionales y resumían una muestra local bien citada como si fuera el
-conjunto (la hipótesis de trabajo del diseño de la preparación, sin contrastar todavía con una medición real). Con `CodebaseAnalysis:Preparation:Mode = Subsystems` (el valor por defecto; el
-otro es `Off`, que deja el pipeline como en los apartados anteriores, sin pasos nuevos ni artefactos) cuatro pasos
-`IStep<ReportFacetInput, ReportFacetInput>` van tras `SqlFacetExtractorStep` y antes de los informes, en la fase `facets`
-(`CORE/AnalysisPipelineFactory.cs:357-375`, `CreatePreparationSteps`). Cada uno devuelve el mismo input con campos de texto
-rellenos, escribe su artefacto en `reports/`, nunca falla duro (un problema interno es un aviso y los siguientes
-trabajan sin ese dato; solo se propaga la cancelación) y tiene un límite fijo: 10, 20, 5 y 5 minutos.
+The domain reports received a large universe of candidates and a single context with a cap on tool iterations: in
+a large repository they covered few functional parts and summarized a well-cited local sample as if it were the
+whole set (the working hypothesis of the preparation design, not yet checked against a real measurement). With `CodebaseAnalysis:Preparation:Mode = Subsystems` (the default value; the
+other is `Off`, which leaves the pipeline as in the previous sections, without new steps or artifacts) four
+`IStep<ReportFacetInput, ReportFacetInput>` steps run after `SqlFacetExtractorStep` and before the reports, in the `facets` phase
+(`CORE/AnalysisPipelineFactory.cs:379-400`, `CreatePreparationSteps`). Each one returns the same input with text fields
+filled in, writes its artifact to `reports/`, never fails hard (an internal problem is a warning and the following
+work without that data; only cancellation propagates) and has a fixed limit: 10, 20, 5 and 5 minutes.
 
-| Paso | LLM | Escribe | Qué hace |
+| Step | LLM | Writes | What it does |
 |---|---|---|---|
-| `RepositoryInventoryStep` | no | `_repository_inventory.json` | módulos por fichero de build, ficheros y líneas por *source set* (`production`, `test`, `qa`, `debug`, `generated`, `samples`, `unknown`), puntos de entrada, tablas, ficheros de configuración, estado por lenguaje, cobertura del grafo (ficheros en disco frente a ficheros con nodos, con la deriva de cbm que mide el analizador Java) y líneas de producción contadas en disco |
-| `DomainDiscoveryStep` | solo nombra | `_domain_map.json` | subsistemas por estructura (carpetas, paquetes, Struts), comunidades que calcula él mismo sobre el grafo agregado a nivel de tipo y fusión por vocabulario de los nombres (sin los `StopTokens`); cada fichero de producción en un subsistema o en `unassigned` |
-| `CoveragePlanningStep` | no | `_coverage_plan.json` | puntúa los subsistemas con `Preparation:Weights` por el perfil de cada informe (`Preparation:ReportProfiles`: cada informe elige sus K), excluye test, qa y generado y elige K por informe en modo B más una cola larga, con los excluidos y su motivo, las preguntas de la investigación y la evidencia mínima |
-| `TimeBudgetStep` | no | `_time_budget.json` | calcula el tiempo de cada informe con `CodebaseAnalysis:TimeBudget` y lo escribe en su `Timeout` |
+| `RepositoryInventoryStep` | no | `_repository_inventory.json` | modules per build file, files and lines per *source set* (`production`, `test`, `qa`, `debug`, `generated`, `samples`, `unknown`), entry points, tables, configuration files, status per language, graph coverage (files on disk versus files with nodes, with the cbm drift the Java analyzer measures) and production lines counted on disk |
+| `DomainDiscoveryStep` | names only | `_domain_map.json` | subsystems by structure (folders, packages, Struts), communities it computes itself over the graph aggregated at type level and merging by name vocabulary (without the `StopTokens`); each production file in a subsystem or in `unassigned` |
+| `CoveragePlanningStep` | no | `_coverage_plan.json` | scores the subsystems with `Preparation:Weights` by each report's profile (`Preparation:ReportProfiles`: each report chooses its K), excludes test, qa and generated, and chooses K per report in mode B plus a long tail, with the excluded ones and their reason, the investigation questions and the minimum evidence |
+| `TimeBudgetStep` | no | `_time_budget.json` | computes the time of each report with `CodebaseAnalysis:TimeBudget` and writes it to its `Timeout` |
 
-El LLM que nombra los subsistemas (sub-step `DomainNaming`, rol `FunctionalAuditor`, sin tools) recibe un resumen de cada
-uno y devuelve nombre, descripción y prioridad; su salida se valida en código: no puede descartar ni inventar
-subsistemas, y lo que no responda de forma coherente conserva un nombre derivado del código (`name_origin`: `llm` o
-`derived`). Se decidió que el mapa sea determinista y el LLM solo nombre porque un LLM que descubra los dominios desde
-cero reintroduce la variabilidad que se quiere medir; el coste es que un repositorio sin referencias resueltas en el
-grafo da un mapa por estructura (`basis` `structure_only`). Las comunidades las calcula el paso y no se leen de cbm, y el
-vocabulario sirve para reunir una capacidad repartida entre ramas distantes del árbol de paquetes, que agrupar solo por
-paquete partiría en fragmentos. El presupuesto no es una constante: el tiempo de una investigación es
-`clamp(base + k · miles de líneas del subsistema)`, el de la consolidación de un informe en modo B
-`clamp(base + k · subsistemas elegidos)` y el de un auditor en modo A `clamp(base + k · miles de líneas de producción)`,
-con los coeficientes por defecto del código (`CORE/Preparation/TimeBudgetOptions.cs:45-51`), que son **provisionales**. El JSON del
-sample (`CORE/appsettings.analysis.json:71-75`) los pone todos a 0, y una pieza de 0 minutos es sin límite
-(`CORE/Preparation/TimeBudgetCalculator.cs:150-152`), igual que los `Timeouts` del mismo JSON (apartado 1.10). `TimeBudgetStep`
-escribe `Timeout` directamente en los pasos que la factoría registra en un `AuditorStepRegistry` por pipeline, sin
-estáticos. Si la suma dividida por la concurrencia efectiva supera `PipelineMinutes`, recorta subsistemas de los
-informes en modo B (primero los de menor puntuación) y avisa; si el límite de `ReportsMinutes` del conjunto no cabe en lo
-presupuestado, lo sube con un aviso y nunca lo baja.
+The LLM that names the subsystems (sub-step `DomainNaming`, role `FunctionalAuditor`, no tools) receives a summary of each
+one and returns name, description and priority; its output is validated in code: it cannot discard or invent
+subsystems, and whatever it does not answer coherently keeps a name derived from the code (`name_origin`: `llm` or
+`derived`). It was decided that the map be deterministic and the LLM only name, because an LLM that discovers the domains from
+scratch reintroduces the variability one wants to measure; the cost is that a repository without resolved references in the
+graph yields a structure-based map (`basis` `structure_only`). The step computes the communities and they are not read from cbm, and the
+vocabulary serves to gather a capability spread across distant branches of the package tree, which grouping by package alone
+would split into fragments. The budget is not a constant: the time of an investigation is
+`clamp(base + k · thousands of lines of the subsystem)`, that of the consolidation of a report in mode B
+`clamp(base + k · chosen subsystems)` and that of an auditor in mode A `clamp(base + k · thousands of production lines)`,
+with the code's default coefficients (`CORE/Preparation/TimeBudgetOptions.cs:45-51`), which are **provisional**. The JSON of the
+sample (`CORE/appsettings.analysis.json:71-75`) sets them all to 0, and a piece of 0 minutes is unlimited
+(`CORE/Preparation/TimeBudgetCalculator.cs:150-152`), as do the `Timeouts` in the same JSON (section 1.10). `TimeBudgetStep`
+writes `Timeout` directly into the steps that the factory registers in an `AuditorStepRegistry` per pipeline, without
+statics. If the sum divided by the effective concurrency exceeds `PipelineMinutes`, it trims subsystems from the
+mode-B reports (lowest-scored first) and warns; if the `ReportsMinutes` limit of the set does not fit in what
+was budgeted, it raises it with a warning and never lowers it.
 
-**Modo B** (`CoveragePlanner.ModeBReports`): `AnalisisFuncional`, `FlujosEndToEnd`, `ErroresYBugs` y
-`ArquitecturaAcoplamiento`. Por fuera es el mismo paso `Auditor_<tipo>` con el mismo contrato (un `.md`, el mismo
-nombre y su `analysis-meta`); por dentro es un `SubsystemInvestigationReportStep`, que sigue el patrón de
-`VerifyReportStep` (invoca sus sub-steps con `ExecuteStepAsync` y un token propio, sin middleware). Por cada subsistema
-elegido lanza una investigación `Investigation_<tipo>_<id>` con el mismo prompt de sistema y las mismas tools que el
-auditor y su plantilla `report_<informe>_investigacion_prompt.md`, hasta `MaxParallelInvestigations` a la vez, y cada una
-devuelve **texto plano con citas** sin escribir ficheros; su nota se guarda en la copia del grafo como `InvestigationNote`
-(lo detalla el apartado 3.3.1 del README de la CLI). Después consolida con el paso de auditor de siempre, que sigue siendo
-el único punto de escritura del informe (nombre de fichero, `analysis-meta`, procedencia, `report.written`), con dos
-propiedades nuevas de `ReportFacetInput` en su prompt, `investigation_notes` y `coverage_summary`, y el informe acaba con un
-apartado `## Cobertura` (cubiertos, excluidos con su motivo y no cubiertos). Una investigación que falla o supera su tiempo
-es un aviso y deja ese subsistema «no cubierto»; si fallan todas, falla el informe con el error del paso. Sin subsistemas
-elegidos el informe se escribe como un auditor normal. **Modo A**: los otros cinco informes (02, 03, 07, 08 y 09) siguen
-siendo un único auditor, que recibe `repository_inventory`, `domain_map` y `coverage_plan` en el prompt y un protocolo de
-cobertura por subsistemas con el mismo apartado «Cobertura», solo si el plan trae subsistemas elegidos. El motor de plantillas
-no tiene condicionales (solo interpola `{{ x }}` e incluye ficheros), así que las plantillas están redactadas para que un
-bloque vacío no estorbe.
+**Mode B** (`CoveragePlanner.ModeBReports`): `AnalisisFuncional`, `FlujosEndToEnd`, `ErroresYBugs` and
+`ArquitecturaAcoplamiento`. From the outside it is the same `Auditor_<tipo>` step with the same contract (a `.md`, the same
+name and its `analysis-meta`); internally it is a `SubsystemInvestigationReportStep`, which follows the pattern of
+`VerifyReportStep` (invokes its sub-steps with `ExecuteStepAsync` and its own token, no middleware). For each subsystem
+chosen it launches an investigation `Investigation_<tipo>_<id>` with the same system prompt and the same tools as the
+auditor and its template `report_<informe>_investigacion_prompt.md`, up to `MaxParallelInvestigations` at a time, and each one
+returns **plain text with citations** without writing files; its note is stored in the graph copy as `InvestigationNote`
+(detailed in section 3.3.1 of the CLI README). Then it consolidates with the usual auditor step, which remains
+the only write point of the report (file name, `analysis-meta`, provenance, `report.written`), with two
+new properties of `ReportFacetInput` in its prompt, `investigation_notes` and `coverage_summary`, and the report ends with a
+`## Cobertura` section (covered, excluded with their reason, and not covered). An investigation that fails or exceeds its time
+is a warning and leaves that subsystem as «no cubierto»; if all of them fail, the report fails with the error of the step. Without subsystems
+chosen, the report is written as a normal auditor. **Mode A**: the other five reports (02, 03, 07, 08 and 09) still
+are a single auditor, which receives `repository_inventory`, `domain_map` and `coverage_plan` in the prompt and a per-subsystem coverage protocol
+with the same «Cobertura» section, only when the plan includes chosen subsystems. The template engine
+has no conditionals (it only interpolates `{{ x }}` and includes files), so the templates are written so that an
+empty block does no harm.
 
-Los artefactos empiezan por `_`: no son informes del catálogo, y por eso ni se listan, ni se sirven por la API de la web, ni se
-copian a `backups/`. Se serializan en `snake_case` con `schema_version`, `generated_at` y `graph_fingerprint`, y el mismo grafo
-y el mismo disco dan los mismos bytes salvo la marca de tiempo y lo que nombra el LLM. `ReportValidator` añade la
-comprobación `coverage` (un informe en modo B al que el plan del disco eligió subsistemas lleva el apartado «Cobertura» y
-nombra cada uno; solo avisa) y la síntesis ejecutiva recibe un resumen de cobertura por informe, construido sin LLM con el plan
-y los apartados «Cobertura» de los informes (`CORE/Preparation/SynthesisCoverage.cs`), para no presentar como completo un
-análisis con subsistemas sin cubrir. La regeneración (apartado 1.11) incluye estos pasos: recalcula el inventario, el plan y
-el presupuesto y reutiliza el mapa de `reports/_domain_map.json` si su huella coincide con la del grafo, sin volver a
-nombrar. Lo que este apartado no puede afirmar: que los informes en modo B salgan mejor (no hay medición con un LLM real; los
-tests usan un LLM falso), ni que los coeficientes de tiempo, el umbral de fusión por vocabulario (`VocabularyMergeThreshold`)
-o el tamaño mínimo de un subsistema (`MinSubsystemFiles`) sean los adecuados: se calibran con una medición sobre un
-repositorio grande que está pendiente.
+Artifacts start with `_`: they are not catalog reports, and therefore they are neither listed, nor served by the web API, nor
+copied to `backups/`. They are serialized in `snake_case` with `schema_version`, `generated_at` and `graph_fingerprint`, and the same graph
+and the same disk yield the same bytes except the timestamp and what the LLM names. `ReportValidator` adds the
+`coverage` check (a mode-B report for which the disk plan chose subsystems carries the «Cobertura» section and
+names each one; it only warns) and the executive synthesis receives a coverage summary per report, built without LLM from the plan
+and the «Cobertura» sections of the reports (`CORE/Preparation/SynthesisCoverage.cs`), so as not to present as complete an
+analysis with uncovered subsystems. Regeneration (section 1.11) includes these steps: it recalculates the inventory, the plan and
+the budget, and reuses the map in `reports/_domain_map.json` if its fingerprint matches the graph's, without calling the LLM again to name
+them. What this section cannot claim: that mode-B reports come out better (there is no measurement with a real LLM; the
+tests use a fake LLM), nor that the time coefficients, the vocabulary merge threshold (`VocabularyMergeThreshold`)
+or the minimum size of a subsystem (`MinSubsystemFiles`) are the right ones: they are calibrated with a measurement on a
+large repository that is still pending.
 
-## 1.6.2 Pasada compartida (`SharedPassStep`, desactivada por defecto)
+## 1.6.2 Shared pass (`SharedPassStep`, disabled by default)
 
-Con `CodebaseAnalysis:SharedPass:Enabled = true` (el JSON del sample trae `false`, `CORE/appsettings.analysis.json:76-94`) la
-factoría añade un paso tras la preparación y antes de los informes (`CORE/AnalysisPipelineFactory.cs:191-194`), en la fase
-`facets` (`CORE/Progress/AnalysisEventMapper.cs:51-53`). Reparte el código en lotes por subsistema del mapa de dominios, lee
-cada lote con una llamada al rol `SharedPassReader`, consolida los hallazgos sin LLM con una severidad por rúbrica, los revisa
-con el rol `SharedPassJudge` y guarda el registro en la copia del grafo y en `reports/_shared_pass_registry.json`
-(`CORE/Steps/SharedPassStep.cs:15-30`, `CORE/SharedPass/SharedPassRegistry.cs:11-24`). Devuelve el mismo `ReportFacetInput`: los
-nueve informes no consumen todavía ese registro. No falla duro: sin mapa de dominios, con un rol sin precio (sin precio no hay
-tope de coste) o con un error interno avisa y el análisis sigue sin registro; sus topes de coste, llamadas, tokens y el plazo
-`MaxMinutes` son uno para la ejecución entera, y el paso no tiene `Timeout` del motor para no perder lo gastado. Apagada, no
-existe el paso ni se piden sus roles.
+With `CodebaseAnalysis:SharedPass:Enabled = true` (the sample JSON sets `false`, `CORE/appsettings.analysis.json:76-94`) the
+factory adds a step after the preparation and before the reports (`CORE/AnalysisPipelineFactory.cs:203-208`), in the
+`facets` phase (`CORE/Progress/AnalysisEventMapper.cs:51-53`). It splits the code into batches per subsystem of the domain map, reads
+each batch with one call to the `SharedPassReader` role, consolidates the findings without LLM with a severity per rubric, reviews them
+with the `SharedPassJudge` role and saves the registry in the graph copy and in `reports/_shared_pass_registry.json`
+(`CORE/Steps/SharedPassStep.cs:15-30`, `CORE/SharedPass/SharedPassRegistry.cs:11-24`). It returns the same `ReportFacetInput`: the
+nine reports do not yet consume that registry. It does not fail hard: without a domain map, with a role that has no price (without a price there is no
+cost cap) or with an internal error it warns and the analysis continues without a registry; its caps on cost, calls, tokens and the
+`MaxMinutes` deadline are one for the entire run, and the step has no engine `Timeout` so as not to lose what was spent. When disabled, it does not
+exist: no step, and its roles are not requested. Right after it the factory adds `KnowledgeUnitsStep` (`CORE/AnalysisPipelineFactory.cs:207`),
+without LLM: for each subsystem with batches read it merges the saved batches and writes `<unidades>/<unitId>/unit.json` and `unit.md`; it does not fail
+hard and does nothing with the pass disabled (`CORE/SharedPass/KnowledgeUnitsStep.cs:27-38`, `:66`). The chat reads those units with `list_units`
+and `read_unit` (section 1.12) and the web serves them (section 1.11); the design is in `docs/knowledge-layer/ANALISIS-Y-SPEC.md`.
 
-## 1.7 Los nueve auditores en paralelo
+## 1.7 The nine auditors in parallel
 
-Con `Mode = Off`, y con `Mode = Subsystems` para los cinco informes en modo A, cada informe pedido es un `CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult>` con su rol, sus
-plantillas `report_<prefijo>_system.md` y `_prompt.md`, un límite de `AuditorMinutes` (15 en el código; 0, sin límite, en el
-JSON del sample) y un tope de iteraciones de tools de `CodebaseAnalysis:Auditors:MaxToolIterations`, 12 en el código y 100
-en el JSON del sample, también para `FlowsAuditor` por `MaxToolIterationsByRole` (`CORE/AnalysisPipelineFactory.cs:406-449`,
-`:535-561`, `CORE/Models/AnalysisPipelineInput.cs:33`, `CORE/appsettings.analysis.json:22-27`). Todos van en
-`TolerantReportsParallelStep`, con `ReportsMinutes` (60 en el código, 0 en el JSON) para el
-conjunto y `CodebaseAnalysis:Reports:MaxParallelAuditors` como tope de concurrencia; con 0, el valor por defecto, corre
-una rama por procesador (`Framework/Core/Steps/ParallelStep.cs:60`). Las siete tools son las mismas para los nueve
-(`CORE/AnalysisPipelineFactory.cs:530-533`); con `Mode = Subsystems`, los cuatro informes en modo B (apartado 1.6.1) son un
-envoltorio con el mismo nombre `Auditor_<tipo>` y sus investigaciones usan esas mismas tools:
+With `Mode = Off`, and with `Mode = Subsystems` for the five reports in mode A, each requested report is a `CustomStatelessTemplateLlmStep<ReportFacetInput, SingleReportResult>` with its role, its
+templates `report_<prefijo>_system.md` and `_prompt.md`, a limit of `AuditorMinutes` (15 in the code; 0, unlimited, in the
+sample JSON) and a cap on tool iterations of `CodebaseAnalysis:Auditors:MaxToolIterations`, 12 in the code and 100
+in the sample JSON, also for `FlowsAuditor` via `MaxToolIterationsByRole` (`CORE/AnalysisPipelineFactory.cs:431-474`,
+`:565-594`, `CORE/Models/AnalysisPipelineInput.cs:43`, `:82-83`, `CORE/appsettings.analysis.json:22-27`). All go into
+`TolerantReportsParallelStep`, with `ReportsMinutes` (60 in the code, 0 in the JSON) for the
+set and `CodebaseAnalysis:Reports:MaxParallelAuditors` as the concurrency cap; with 0, the default value, one branch runs per
+processor (`AITaskAgent.Core/Steps/ParallelStep.cs:61`). The seven tools are the same for all nine, plus the ones the analysis profile adds in `ExtraAuditorToolNames`
+(`CORE/AnalysisPipelineFactory.cs:556-559`, `:562-563`); with `Mode = Subsystems`, the four mode-B reports (section 1.6.1) are a
+wrapper with the same name `Auditor_<tipo>` and their investigations use those same tools:
 
-| Tool | Qué da | Qué no da |
+| Tool | What it provides | What it does not provide |
 |---|---|---|
-| `view_file` | hasta 800 líneas del fichero, decodificadas con la regla del repositorio (`FileTools/Tools/ViewFileTool.cs:19`, `:90`) | nada del grafo |
-| `view_code_item` | el código de un tipo, método o campo por su nombre, con su `Location`; en C# con Roslyn y fuera de C# con los `ICodeItemLocator` que registra la app: el rango del nodo del grafo y, sin grafo o sin nodo, las llaves del `.java` (`FileTools/Tools/ViewCodeItemTool.cs:34`, `:116-122`, `CORE/Hosting/AnalysisToolRegistration.cs:41-42`) | una sobrecarga ambigua: la lista con la ruta que elige cada una (`Clase.metodo(int,String)`), sin código (`ViewCodeItemTool.cs:154-158`); en Java no ve campos sin grafo ni métodos de clases anónimas |
-| `grep_search` | hasta 50 líneas con fichero y número, por orden ordinal de ruta, con un último elemento `Truncated` si llega al tope; sin `.git`, `bin`, `obj`, `node_modules`, la carpeta de la BD ni la de informes, binarios ni ficheros de más de 1 MB, y líneas cortadas a 300 caracteres (`FileTools/Tools/GrepSearchTool.cs:37-50`, `:177`, `:233-241`) | estructura: es texto |
-| `graph_search` | nodos por etiqueta, nombre o QN con sus propiedades útiles y, con `include_code`, su código leído del disco (`CORE/Tools/GraphSearchTool.cs:20-21`, `:305`) | vecinos |
-| `graph_neighbors` | vecinos por `CALLS`, `INHERITS`, `IMPLEMENTS`, `OVERRIDES`, `DEFINES_METHOD`, `HANDLES`, las aristas Struts/JSP y, en Java, `USES_TYPE`, `READS` y `WRITES`, y, del análisis, `QUERIES`, `MODIFIES`, `CITES`, `CONTAINS`, `DEPENDS_ON` y `ABOUT`, con la procedencia de cada arista y un filtro `line` que deja las aristas con esa línea (`CORE/Tools/GraphNeighborsTool.cs:35-42`, `:134`, `:455-470`) | código; `OVERRIDES` y `THROWS` solo si se piden |
-| `graph_domain` | rutas con su clase (`HANDLES`), registros DI y atributos y, además, las vistas `projects`, `contracts`, `subsystems`, `tables`, `findings` y `llm_contracts` (`CORE/Tools/GraphDomainTool.cs:30`, `:107-117`); sin `auth_required`, la autenticación sale «❔ Desconocida» (`:150-156`) | anotaciones Java: `attributes` es de C# |
-| `read_document` | un documento subido, entero o por sección | nada del código |
+| `view_file` | up to 800 lines of the file, decoded with the repository's rule (`FileTools/Tools/ViewFileTool.cs:19`, `:90`) | nothing from the graph |
+| `view_code_item` | the code of a type, method or field by its name, with its `Location`; in C# with Roslyn and outside C# with the `ICodeItemLocator`s the app registers: the range of the graph node and, without a graph or node, the braces of the `.java` (`FileTools/Tools/ViewCodeItemTool.cs:34`, `:116-122`, `CORE/Hosting/AnalysisToolRegistration.cs:41-42`) | an ambiguous overload: the list with the path each one chooses (`Clase.metodo(int,String)`), without code (`ViewCodeItemTool.cs:154-158`); in Java it does not see fields without a graph nor methods of anonymous classes |
+| `grep_search` | up to 50 lines with file and number, in ordinal path order, with a last element `Truncated` if it reaches the cap; without `.git`, `bin`, `obj`, `node_modules`, the DB folder or the reports folder, binaries or files over 1 MB, and lines cut at 300 characters (`FileTools/Tools/GrepSearchTool.cs:37-50`, `:177`, `:233-241`) | structure: it is text |
+| `graph_search` | nodes by label, name or QN with their useful properties and, with `include_code`, their code read from disk (`CORE/Tools/GraphSearchTool.cs:20-21`, `:305`) | neighbors |
+| `graph_neighbors` | neighbors via `CALLS`, `INHERITS`, `IMPLEMENTS`, `OVERRIDES`, `DEFINES_METHOD`, `HANDLES`, the Struts/JSP edges and, in Java, `USES_TYPE`, `READS` and `WRITES`, and, from the analysis, `QUERIES`, `MODIFIES`, `CITES`, `CONTAINS`, `DEPENDS_ON` and `ABOUT`, with the provenance of each edge and a `line` filter that keeps the edges with that line (`CORE/Tools/GraphNeighborsTool.cs:35-42`, `:134`, `:455-470`) | code; `OVERRIDES` and `THROWS` only if requested |
+| `graph_domain` | routes with their class (`HANDLES`), DI registrations and attributes and, in addition, the views `projects`, `contracts`, `subsystems`, `tables`, `findings` and `llm_contracts` (`CORE/Tools/GraphDomainTool.cs:30`, `:107-117`); without `auth_required`, authentication comes out as «❔ Desconocida» (`:150-156`) | Java annotations: `attributes` is C# |
+| `read_document` | an uploaded document, whole or by section | nothing from the code |
 
-Al agotar el tope de tools el auditor no falla: repite sobre la misma conversación, sin tools, con un mensaje que le
-pide redactar el informe con lo reunido y señalar lo no verificado; lo mismo si el bucle de herramientas se corta
-(`CORE/Steps/CustomStatelessTemplateLlmStep.cs:99-112`, `:205-225`, `CORE/AnalysisPipelineFactory.cs:516-519`). Un fallo del
-proveedor pasa al fallback del rol; un resultado con error no se escribe como informe (`CustomStatelessTemplateLlmStep.cs:114-120`).
-Con el protocolo de notas (`CodebaseAnalysis:NoteProtocol`, activo por defecto en los auditores, la consolidación y las
-investigaciones, `CORE/Notes/NoteProtocolOptions.cs:14-35`), cada resultado de tool llega marcado `[Rn]` y el modelo lo
-sustituye en la conversación por su nota `<nota r="Rn">`; con 12 resultados sin anotar la tool deja de devolver datos nuevos y,
-tras 5 turnos así, el paso corta el bucle y redacta sin tools (`CORE/Notes/NoteTagHandler.cs:9-17`, `NoteProtocolTool.cs:8-12`,
-`CORE/AnalysisPipelineFactory.cs:559-560`). Antes de escribir, el paso quita los marcadores de las notas, el texto previo
-al título y un H1 que sea solo el nombre del
-fichero, lee la línea `analysis-meta` y, si el informe declara `critical` o es el de errores, lo recalcula desde la
-matriz de severidad y corrige la línea (`:141-144`, `:296-312`). Después añade a esa línea la procedencia del informe
-(`:150-151`): `generated_at`, `model` y `provider` del rol, `response_model` si el
-servicio dice que respondió otro, `system_sha` y `prompt_sha` (SHA-256 corto de cada plantilla renderizada sin datos,
-con las inclusiones resueltas), `graph` (la huella de indexación de cbm), `enrichment` (las filas `ok` de
-`enrichment_runs` con esa huella) y `app` (`CORE/Support/ReportProvenance.cs:51-120`). La huella y las filas las deja
-en el contexto el paso de facetas (`CORE/Steps/SqlFacetExtractorStep.cs:65`). Los lectores de la línea parten por `;` y
-por el primer `=` e ignoran las claves que no conocen, así que el semáforo y `critical` no cambian
-(`ReportProvenanceTests.cs`). El informe se escribe en disco en cuanto termina su auditor y se emite `report.written`
+When the tool cap is exhausted the auditor does not fail: it repeats over the same conversation, without tools, with a message that asks it to
+write the report with what it has gathered and flag what is unverified; the same happens if the tool loop is cut
+(`CORE/Steps/CustomStatelessTemplateLlmStep.cs:99-112`, `:205-225`, `CORE/AnalysisPipelineFactory.cs:542-545`). A failure of the
+provider goes to the role's fallback; a result with an error is not written as a report (`CustomStatelessTemplateLlmStep.cs:114-120`).
+With the notes protocol (`CodebaseAnalysis:NoteProtocol`, enabled by default in the auditors, the consolidation and the
+investigations, `CORE/Notes/NoteProtocolOptions.cs:14-35`), each tool result arrives marked `[Rn]` and the model
+replaces it in the conversation with its note `<nota r="Rn">`; with 12 unannotated results the tool stops returning new data and,
+after 5 turns like that, the step cuts the loop and writes without tools (`CORE/Notes/NoteTagHandler.cs:9-17`, `NoteProtocolTool.cs:8-12`,
+`CORE/AnalysisPipelineFactory.cs:590-591`). Before writing, the step removes the note markers, the text before
+the title and an H1 that is only the name of the
+file, reads the `analysis-meta` line and, if the report declares `critical` or is the errors report, recalculates it from the
+severity matrix and corrects the line (`:141-144`, `:296-312`). Then it adds the report's provenance to that line
+(`:150-151`): `generated_at`, the role's `model` and `provider`, `response_model` if the
+service says another one responded, `system_sha` and `prompt_sha` (short SHA-256 of each rendered template without data,
+with the inclusions resolved), `graph` (the cbm indexing fingerprint), `enrichment` (the `ok` rows of
+`enrichment_runs` with that fingerprint) and `app` (`CORE/Support/ReportProvenance.cs:51-120`). The fingerprint and the rows are left
+in the context by the facets step (`CORE/Steps/SqlFacetExtractorStep.cs:65`). The readers of the line split on `;` and
+on the first `=` and ignore the keys they do not know, so the traffic light and `critical` do not change
+(`ReportProvenanceTests.cs`). The report is written to disk as soon as its auditor finishes and `report.written` is emitted
 (`CustomStatelessTemplateLlmStep.cs:154-172`).
 
-## 1.8 Síntesis ejecutiva
+## 1.8 Executive synthesis
 
-`ExecutiveSynthesizerStep` no tiene tools. Toma los informes de esta ejecución, los de tipos no ejecutados que estén en
-disco (marcados como de una ejecución anterior) y los fallidos con su motivo (`CORE/Steps/ExecutiveSynthesizerStep.cs:107-184`).
-De cada informe manda al rol `ExecutiveSynthesizer` el semáforo, el recuento `critical` si lo hay, un fragmento de
-resumen y hasta 30 encabezados `##`/`###` (`:66`, `:337-405`), junto con las métricas globales de las facetas (`:190-231`) y
-los hallazgos graves que otro informe califica menos graves sobre el mismo código (`SeverityContrast`, `:186-188`). Los
-defectos críticos son los del informe de errores, o «no disponible» si no hay dato (`:233-240`). Si el modelo no
-devuelve texto, escribe un resumen de respaldo sin LLM (`:271-275`). Antes de escribir el `00` le añade la misma
-procedencia que a los informes, con `fallback=true` si el resumen es el de respaldo (`:278-282`). Con la preparación por subsistema, recibe además un resumen de cobertura por informe (apartado 1.6.1, `:242-248`). Después
-reincorpora al grafo los informes del catálogo que estaban marcados (`:293-302`).
+`ExecutiveSynthesizerStep` has no tools. It takes the reports of this run, those of types not run that are on
+disk (marked as from a previous run) and the failed ones with their reason (`CORE/Steps/ExecutiveSynthesizerStep.cs:107-184`).
+For each report it sends the `ExecutiveSynthesizer` role the traffic light, the `critical` count if there is one, a summary excerpt
+and up to 30 `##`/`###` headings (`:66`, `:337-405`), together with the global metrics of the facets (`:190-231`) and
+the serious findings that another report rates less serious on the same code (`SeverityContrast`, `:186-188`). The
+critical defects are those of the errors report, or «no disponible» if there is no data (`:233-240`). If the model does not
+return text, it writes a fallback summary without LLM (`:271-275`). Before writing the `00` it adds the same
+provenance as the reports, with `fallback=true` if the summary is the fallback one (`:278-282`). With the per-subsystem preparation, it also receives a coverage summary per report (section 1.6.1, `:242-248`). Then
+it re-incorporates into the graph the catalog reports that were marked (`:293-302`).
 
-## 1.8.1 Verificación a demanda (`VerifyReportStep`, rol `ReportVerifier`)
+## 1.8.1 On-demand verification (`VerifyReportStep`, role `ReportVerifier`)
 
-Verificar no es una etapa del análisis: es un botón por informe, junto a «Regenerar», que comprueba un informe ya escrito
-contra el código y reescribe lo que el código contradice. `POST /api/analysis/{runId}/verify` (`{ reports[], synthesis }`)
-reutiliza el camino de regenerar: la misma ejecución en memoria vuelve a `running` con el mismo `runId` y el mismo log, emite
-`run.verification_started` y cierra con otro `run.completed`; las exclusiones son las de regenerar (404, 409
-`analysis_running`, `chat_turn_running`, `knowledge_operation_running`, `run_from_other_workspace`). Su pipeline
-(`AnalysisPipelineFactory.CreateVerificationPipeline`) es `PrepareRegenerationStep` (comprueba el grafo y retira del grafo los
-informes, que vuelven en el `finally` del pipeline), un `Verify_<Tipo>` por informe en paralelo bajo `MaxParallelAuditors` y,
-si se pide, la síntesis. No calcula facetas.
+Verifying is not a stage of the analysis: it is a button per report, next to «Regenerar», which checks a report already written
+against the code and rewrites what the code contradicts. `POST /api/analysis/{runId}/verify` (`{ reports[], synthesis }`)
+reuses the regenerate path: the same in-memory run returns to `running` with the same `runId` and the same log, emits
+`run.verification_started` and closes with another `run.completed`; the exclusions are those of regenerate (404, 409
+`analysis_running`, `chat_turn_running`, `knowledge_operation_running`, `run_from_other_workspace`). Its pipeline
+(`AnalysisPipelineFactory.CreateVerificationPipeline`) is `PrepareRegenerationStep` (checks the graph and removes from the graph the
+reports, which return in the pipeline's `finally`), one `Verify_<Tipo>` per report in parallel under `MaxParallelAuditors` and,
+if requested, the synthesis. It does not compute facets.
 
-Cada `Verify_<Tipo>` hace tres cosas. Prepara: valida el informe con `ReportValidator.CreateContentValidator` y arma **un único
-texto** para `{{ input }}` con cuatro bloques (`<borrador>`, `<fallos_validacion>`, `<recuentos>` con las cifras que el
-borrador afirma, y `<evidencias>` con el código que rodea a cada cita que resuelve); las secuencias `@[` se neutralizan porque
-el motor de plantillas expande `@[ruta]` también en el texto interpolado. Llama al rol `ReportVerifier` (`gpt-6-sol`,
-`reasoning_effort: none`) con `view_file`, `view_code_item`, `grep_search` y `graph_neighbors`, en una conversación nueva y con
-`CodebaseAnalysis:Timeouts:VerifierMinutes` (10 en el código, `CORE/Hosting/AnalysisTimeouts.cs:43`; 0, sin límite, en el JSON del
-sample) como límite. Cierra: interpreta la respuesta (`SIN CAMBIOS`, o el informe
-completo con el apartado final «Cambios de la verificación»), restaura la línea `analysis-meta` del original, valida el
-resultado y escribe con `ReportWriter.Update`, que guarda el original como `baseline`; «Deshacer verificación» llama al
-`restore` de siempre con el `previousVersionId` de `report.verified`. La línea `analysis-meta` gana
+Each `Verify_<Tipo>` does three things. It prepares: it validates the report with `ReportValidator.CreateContentValidator` and builds **a single
+text** for `{{ input }}` with four blocks (`<borrador>`, `<fallos_validacion>`, `<recuentos>` with the figures the
+draft asserts, and `<evidencias>` with the code surrounding each citation that resolves); the `@[` sequences are neutralized because
+the template engine also expands `@[ruta]` in interpolated text. It calls the `ReportVerifier` role (`gpt-6-sol`,
+`reasoning_effort: none`) with `view_file`, `view_code_item`, `grep_search` and `graph_neighbors`, in a new conversation and with
+`CodebaseAnalysis:Timeouts:VerifierMinutes` (10 in the code, `CORE/Hosting/AnalysisTimeouts.cs:43`; 0, unlimited, in the JSON of the
+sample) as the limit. It closes: it interprets the response (`SIN CAMBIOS`, or the report
+complete with the final «Cambios de la verificación» section), restores the `analysis-meta` line of the original, validates the
+result and writes with `ReportWriter.Update`, which saves the original as `baseline`; «Deshacer verificación» calls the
+usual `restore` with the `previousVersionId` of `report.verified`. The `analysis-meta` line gains
 `verification=ok|corrected(n)|warnings(m)`.
 
-Reglas del cierre: si el verificador falla, no responde a tiempo, se corta por longitud o devuelve algo inservible (sin título,
-sin el apartado, o menos de la mitad del original), el fichero no se toca y el carril lo dice con el motivo. Si declara
-cambios pero el texto no cambia, se toma como sin cambios. El apartado «Cambios de la verificación» queda fuera de la
-validación determinista: nombra a propósito citas erróneas e identificadores de hallazgos ya existentes. Verificar no cambia
-`failedReports` y la síntesis no se rehace sola (casilla opcional; la SPA avisa de que puede quedar desfasada).
+Closing rules: if the verifier fails, does not respond in time, is cut off by length or returns something unusable (without a title,
+without the section, or less than half of the original), the file is not touched and the lane says so with the reason. If it declares
+changes but the text does not change, it is taken as no changes. The «Cambios de la verificación» section is outside the
+deterministic validation: it deliberately names erroneous citations and identifiers of findings that already exist. Verifying does not change
+`failedReports`, and the synthesis is not redone automatically (optional checkbox; the SPA warns that it may be out of date).
 
-## 1.9 Informes y demás ficheros en disco
+## 1.9 Reports and other files on disk
 
-| Ruta | Quién escribe | Contenido |
+| Path | Who writes it | Content |
 |---|---|---|
-| `reports/01…09_*.md` | cada auditor al terminar | informe con la línea `<!-- analysis-meta: health=…; critical=…; generated_at=…; model=…; … -->` al final, con la procedencia del apartado 1.7 |
-| `reports/00_resumen_ejecutivo.md` | síntesis | resumen y dashboard, con la misma línea de procedencia |
-| `reports/_repository_inventory.json`, `_domain_map.json`, `_coverage_plan.json`, `_time_budget.json` | los cuatro pasos de la preparación (solo con `Mode = Subsystems`) | inventario del repositorio, subsistemas y asignación de ficheros, plan de cobertura por informe en modo B y tiempos asignados (apartado 1.6.1); no son informes del catálogo y no se copian a `backups/` |
-| `reports/_shared_pass_registry.json` | pasada compartida (solo con `SharedPass:Enabled = true`) | registro de hallazgos de la pasada (apartado 1.6.2); no es un informe del catálogo |
-| `reports/_run_meta.json` | anfitrión (CLI o web) al terminar | consumo LLM de la ejecución: llamadas, tokens de entrada y salida y coste, en total y por paso (apartado 1.13) |
-| `reports/_validation.json` | anfitrión (CLI o web) al terminar, y `--validate-reports` | validación determinista de los informes: citas, identificadores, hallazgos graves, nombres del grafo, procedencia y Mermaid (apartado 1.15) |
-| `reports/custom/*.md` | chat (`create_report`) | informes propios; el pipeline no los toca ni los lee |
-| `.codebase/codebase.db` | detección, ingestas, enriquecedores | copia del grafo con `enrichment_runs` |
-| `.codebase/enrichment/java/` | analizador Java | `request.txt`, `java-analysis.jsonl` (1003 MB en el repositorio objetivo con las referencias y 744 MB sin ellas; se borra en cuanto se aplica al grafo, salvo con `JavaAnalyzer:KeepIntermediate`) y `java-analyzer.log` |
-| `.codebase/enrichment/dotnet-restore/` | DotNetEnricher | `project.assets.json` y salidas de la restauración de paquetes, fuera del repositorio analizado |
-| `.codebase/backups/<fecha>/` | `ForceReindex` | copia de la BD e informes anteriores y la exportación de Access; se conservan las `CodebaseAnalysis:Backups:Keep` (5) más recientes |
-| `.codebase/report-history/` | web y chat | versiones; el pipeline escribe el informe y la web guarda la versión `baseline` al modificarlo después |
-| `<LogsPath>/analysis-pipeline-<fecha>.log` (por defecto `logs/`) | anfitrión | log del análisis, con `--debug` los cuerpos de las peticiones |
+| `reports/01…09_*.md` | each auditor when it finishes | report with the `<!-- analysis-meta: health=…; critical=…; generated_at=…; model=…; … -->` line at the end, with the provenance of section 1.7 |
+| `reports/00_resumen_ejecutivo.md` | synthesis | summary and dashboard, with the same provenance line |
+| `reports/_repository_inventory.json`, `_domain_map.json`, `_coverage_plan.json`, `_time_budget.json` | the four preparation steps (only with `Mode = Subsystems`) | repository inventory, subsystems and file assignment, coverage plan per report in mode B and assigned times (section 1.6.1); they are not catalog reports and are not copied to `backups/` |
+| `reports/_shared_pass_registry.json` | shared pass (only with `SharedPass:Enabled = true`) | findings registry of the pass (section 1.6.2); it is not a catalog report |
+| `reports/_run_meta.json` | host (CLI or web) when finished | LLM usage of the run: calls, input and output tokens and cost, in total and per step (section 1.13) |
+| `reports/_validation.json` | host (CLI or web) when finished, and `--validate-reports` | deterministic validation of the reports: citations, identifiers, serious findings, graph names, provenance and Mermaid (section 1.15) |
+| `reports/custom/*.md` | chat (`create_report`) | own reports; the pipeline neither touches nor reads them |
+| `.codebase/codebase.db` | detection, ingestions, enrichers | copy of the graph with `enrichment_runs` |
+| `.codebase/enrichment/java/` | Java analyzer | `request.txt`, `java-analysis.jsonl` (1003 MB on the target repository with references and 744 MB without them; deleted as soon as it is applied to the graph, unless `JavaAnalyzer:KeepIntermediate`) and `java-analyzer.log` |
+| `.codebase/enrichment/dotnet-restore/` | DotNetEnricher | `project.assets.json` and package restore outputs, outside the analyzed repository |
+| `.codebase/backups/<fecha>/` | `ForceReindex` | copy of the DB and previous reports and the Access export; the most recent `CodebaseAnalysis:Backups:Keep` (5) are kept |
+| `.codebase/report-history/` | web and chat | versions; the pipeline writes the report and the web saves the `baseline` version when it is modified afterwards |
+| `<LogsPath>/analysis-pipeline-<fecha>.log` (default `logs/`) | host | analysis log; with `--debug` the request bodies |
 
-## 1.10 Límites de tiempo
+## 1.10 Time limits
 
-Todos los límites del análisis están en `CodebaseAnalysis:Timeouts`, en minutos, y 0 los quita
-(`CORE/Hosting/AnalysisTimeouts.cs:25-58`). Las cifras entre paréntesis son los valores por defecto del código; el JSON del
-sample los pone todos a 0, es decir, sin límite (`CORE/appsettings.analysis.json:28-36`). `PipelineMinutes` (240) lo aplica `CodebaseAnalysisPipeline` con su propio
-token y al motor le llega `Timeout.InfiniteTimeSpan`, de modo que un corte por tiempo termina con un error que nombra la
-clave y no con «A task was canceled.» (`CORE/AnalysisPipelineFactory.cs:598-629`). Los de paso son `DetectMinutes` (15),
-`EnrichMinutes` (20, solo `DotNetEnricherStep` con su fallback), `ReportsMinutes` (60), `AuditorMinutes` (15), `SynthesisMinutes` (15)
-y `VerifierMinutes` (10, el verificador de un informe);
-el analizador Java usa `JavaAnalyzer:TimeoutSeconds` (900) y `StepTimeoutSeconds` (3600), y las facetas y la
-preparación de una regeneración, 5 minutos fijos. Con la preparación por subsistema, `AuditorMinutes` y `ReportsMinutes` son el
-punto de partida: `TimeBudgetStep` escribe el límite de cada informe según el tamaño del código y puede subir el del
-conjunto, y los cuatro pasos de preparación tienen los suyos fijos (apartado 1.6.1). Por debajo, el proveedor OpenAI corta cada intento sin respuesta a los
-600 s y cada silencio de streaming a los 120 s, configurables por proveedor o rol
-(`OpenAILLmService/OpenAILlmService.cs:174-193`); el JSON del sample baja el del proveedor `AzureOpenAI` a 300 s
-(`RequestTimeoutSeconds`) y da 300 s de inactividad a los roles del chat. Con los valores por defecto del código un intento
-colgado consumiría 10 de los 15 minutos del auditor.
+All analysis limits are set in `CodebaseAnalysis:Timeouts`, in minutes, and 0 removes them
+(`CORE/Hosting/AnalysisTimeouts.cs:25-58`). The figures in parentheses are the code's default values; the JSON of the
+sample sets all of them to 0, that is, no limit (`CORE/appsettings.analysis.json:28-36`). `PipelineMinutes` (240) is applied by `CodebaseAnalysisPipeline` with its own
+token, and the engine receives `Timeout.InfiniteTimeSpan`, so a time cutoff ends with an error that names the
+key and not with «A task was canceled.» (`CORE/AnalysisPipelineFactory.cs:629-665`). The per-step ones are `DetectMinutes` (15),
+`EnrichMinutes` (20, only `DotNetEnricherStep` with its fallback), `ReportsMinutes` (60), `AuditorMinutes` (15), `SynthesisMinutes` (15)
+and `VerifierMinutes` (10, the verifier of a report);
+the Java analyzer uses `JavaAnalyzer:TimeoutSeconds` (900) and `StepTimeoutSeconds` (3600), and the facets and the
+preparation of a regeneration, 5 fixed minutes. With subsystem preparation, `AuditorMinutes` and `ReportsMinutes` are the
+starting point: `TimeBudgetStep` writes the limit of each report according to the size of the code and can raise the one
+for the whole set, and the four preparation steps have their own fixed ones (section 1.6.1). Below that, the OpenAI provider cuts each attempt without a response at
+600 s and each streaming silence at 120 s, configurable per provider or role
+(`OpenAILLmService/OpenAILlmService.cs:174-193`); the sample JSON lowers the `AzureOpenAI` provider's to 300 s
+(`RequestTimeoutSeconds`) and gives the chat roles 300 s of inactivity. With the code's default values, a hung attempt
+would consume 10 of the auditor's 15 minutes.
 
-Al arrancar cada análisis o regeneración se vuelcan los límites efectivos, una línea por grupo:
-`CodebaseAnalysis:Timeouts` con los dos fijos, `JavaAnalyzer`, los plazos LLM de los roles del análisis agrupados por
-valor y con su origen (`[rol]`, `[proveedor]` o `[servicio]`) y `AITaskAgent:Timeouts`, el del framework que no aparece
-en ningún JSON (`CORE/Hosting/EffectiveLimits.cs:23-41`, `CORE/Hosting/AnalysisRunner.cs:132-137`). Van por el reporter, así
-que la web los guarda en el log de la ejecución y en su registro de eventos; la CLI los escribe también en su fichero de
-log (`Samples/CodebaseAnalysisPipeline/Program.cs:202`). La web vuelca al arrancar los del chat: el turno y los plazos de su rol
+At the start of each analysis or regeneration the effective limits are dumped, one line per group:
+`CodebaseAnalysis:Timeouts` with the two fixed ones, `JavaAnalyzer`, the LLM timeouts of the analysis roles grouped by
+value and with their origin (`[rol]`, `[proveedor]` or `[servicio]`), and `AITaskAgent:Timeouts`, the framework's, which does not appear
+in any JSON (`CORE/Hosting/EffectiveLimits.cs:23-41`, `CORE/Hosting/AnalysisRunner.cs:132-137`). They go through the reporter, so
+the web stores them in the run log and in its event record; the CLI also writes them to its log file
+log (`Samples/CodebaseAnalysisPipeline/Program.cs:202`). The web dumps the chat's at startup: the turn and the timeouts of its role
 (`WEB/Hosting/AnalysisHost.cs:30-31`).
 
-## 1.11 La web
+## 1.11 The web
 
-La web ejecuta el mismo pipeline a través de `AnalysisRunner` y no reimplementa nada. El progreso se agrupa en cinco
-fases por el nombre del paso (`CORE/Progress/AnalysisEventMapper.cs:33-61`): `detect`, `enrich` (los dos
-enriquecedores y el sub-step LLM del fallback), `facets` (también `PrepareRegenerationStep`, los cuatro pasos de la
-preparación con el sub-step `DomainNaming` y, si está activa, la pasada compartida con sus sub-steps de lectura y juez), `reports` (el paralelo, cada `Auditor_<tipo>` y cada
-`Investigation_<tipo>_<id>`) y `synthesis`. La fase `enrich` se abre con el primer paso y solo la cierra el `step.completed`
-de `DotNetEnricherStep`. La SPA mantiene un carril por informe: las investigaciones de un informe en modo B no emiten
-`step.started` ni `step.completed` (se invocan sin middleware) y sus eventos de LLM y de tools suman al carril del informe por
-su campo `report`. La fase `facets` la cierra `SqlFacetExtractorStep`, como siempre, y la reabre el primer paso de
-preparación; solo la da por terminada `TimeBudgetStep` (con `Mode = Off` esos pasos no existen y la cierra el de facetas), de
-modo que sigue en marcha durante el nombrado de los subsistemas (`WEB/ClientApp/src/state/runReducer.ts:35-43`,
-`PREPARATION_STEPS`). `SharedPassStep` no está en esa lista, así que con la pasada compartida activa la SPA da la fase por
-cerrada en `TimeBudgetStep` mientras la pasada sigue corriendo (deducido del código, sin reproducir). Los timeouts son los del apartado 1.10, leídos de la misma configuración.
+The web runs the same pipeline through `AnalysisRunner` and reimplements nothing. Progress is grouped into five
+phases by step name (`CORE/Progress/AnalysisEventMapper.cs:33-61`): `detect`, `enrich` (the two
+enrichers and the LLM sub-step of the fallback), `facets` (also `PrepareRegenerationStep`, the four preparation steps of the
+preparation with the `DomainNaming` sub-step and, if active, the shared pass with its reading and judge sub-steps), `reports` (the parallel one, each `Auditor_<tipo>` and each
+`Investigation_<tipo>_<id>`) and `synthesis`. The `enrich` phase opens with the first step and is closed only by the `step.completed`
+of `DotNetEnricherStep`. The SPA keeps one lane per report: investigations of a report in mode B do not emit
+`step.started` or `step.completed` (they are invoked without middleware), and their LLM and tool events add to the report's lane through
+its `report` field. The `facets` phase is closed by `SqlFacetExtractorStep`, as always, and reopened by the first
+preparation step; only `TimeBudgetStep` ends it (with `Mode = Off` those steps do not exist and the facets step closes it), so
+it keeps running during the naming of the subsystems (`WEB/ClientApp/src/state/runReducer.ts:35-43`,
+`PREPARATION_STEPS`). `SharedPassStep` is not in that list, so with the shared pass active the SPA closes the phase at
+`TimeBudgetStep` while the pass keeps running (inferred from the code, not reproduced). The timeouts are those of section 1.10, read from the same configuration.
 
-![Ciclo de regeneración de un informe sobre la misma ejecución](../assets/images/regeneracion-informe-ciclo.png)
+Besides the analysis, reports and chat endpoints, the web registers (`WEB/Program.cs:170-181`) the chat, wiki, graph and knowledge-unit routes added later, only listed here:
+
+| Endpoints | File | Detail |
+|---|---|---|
+| `/api/wiki/*`: `index`, `pages` (read, create, edit, `verify`, `archive`, `reject`), `drafts`, `search`, `sources`, `generate`, `memory` | `WEB/Api/WikiEndpoints.cs:25-172` | — |
+| `/api/graph/*`: `capabilities`, `summary`, `gaps`, `flows`, `deps`, `di`, `metrics`, `neighborhood`, `impact`, `symbol`, `search`, `explore`, `webchain` (read-only) | `WEB/Api/GraphEndpoints.cs:24-83` | — |
+| `GET /api/units`, `GET /api/units/{id}`, `POST /api/units/publish` (read-only except publish, which rebuilds the derived graph and embedding copies) | `WEB/Api/UnitsEndpoints.cs:60`, `:71`, `:87` | `docs/knowledge-layer/ANALISIS-Y-SPEC.md` |
+| `chat-protocol/1` under `/api/chat/protocol/sessions/{id}`: `messages`, `cancel`, `turns/{turnId}/events` (additive to `/api/chat/*`) | `WEB/Api/ChatProtocolEndpoints.cs:40-97` | — |
+| `/api/chat/roles`, `/api/chat/sessions/{id}/turns/{turnId}/trace`, `/api/chat/read-roots` | `WEB/Api/ChatEndpoints.cs:62-122` | — |
+
+![Regeneration cycle of a report on the same run](../assets/images/regeneracion-informe-ciclo.png)
 
 <!-- Source: docs/assets/diagrams/regeneracion-informe-ciclo.excalidraw -->
 
-La regeneración continúa la misma ejecución. El botón «Regenerar» sale en los carriles `failed`, `cancelled` o `succeeded`
-cuando no hay ejecución en curso y el repositorio abierto es el de la ejecución
+Regeneration continues the same run. The «Regenerar» button appears in the `failed`, `cancelled` or `succeeded` lanes
+when there is no run in progress and the open repository is the one of the run
 (`WEB/ClientApp/src/state/runReducer.ts:1118-1121`, `WEB/ClientApp/src/components/AuditorGrid.tsx:121`,
-`WEB/ClientApp/src/components/AnalysisTab.tsx:116`). Llama a
-`POST /api/analysis/{runId}/regenerate` (`WEB/Api/AnalysisEndpoints.cs:42`), que devuelve 404 si la ejecución no es la
-última en memoria, 400 con una lista vacía o un informe desconocido y 409 si hay ejecución, turno de chat u operación de
-conocimiento en curso, si no hay repositorio o si es de otro (`WEB/Analysis/AnalysisRunManager.cs:127-225`). La
-ejecución vuelve a `running`, emite `run.regeneration_started` y sigue con el mismo log y el mismo `seq`. El pipeline
-reducido es `PrepareRegenerationStep` → `SqlFacetExtractorStep` → los cuatro pasos de la preparación (con
-`Mode = Subsystems`; el mapa de dominios se reutiliza del disco si coincide con el grafo) → los auditores pedidos → la
-síntesis si se marca (`CORE/AnalysisPipelineFactory.cs:208-244`); no detecta, no indexa y no enriquece, así que el informe se basa en el grafo
-de ahora. `PrepareRegenerationStep` falla si no hay BD o no tiene grafo estructural y retira del grafo los informes del
-catálogo marcados (`CORE/Steps/PrepareRegenerationStep.cs:43-59`). Al terminar, `failedReports` es el de antes, menos
-los regenerados con `report.written`, más los pedidos en la ejecución original que no tienen informe en ninguna de sus
-partes (`AnalysisRunManager.cs:234-241`, `:340-398`). La regeneración sigue dependiendo de la ejecución en memoria: tras
-reiniciar el servidor no hay ejecución ni botón. Rehacer un informe correcto sí es posible, porque el botón sale también en
-los carriles terminados con éxito.
+`WEB/ClientApp/src/components/AnalysisTab.tsx:116`). It calls
+`POST /api/analysis/{runId}/regenerate` (`WEB/Api/AnalysisEndpoints.cs:42`), which returns 404 if the run is not the
+last one in memory, 400 with an empty list or an unknown report, and 409 if there is a run, chat turn or knowledge operation in
+progress, if there is no repository or if it belongs to another one (`WEB/Analysis/AnalysisRunManager.cs:127-225`). The
+run goes back to `running`, emits `run.regeneration_started` and continues with the same log and the same `seq`. The pipeline
+reduced is `PrepareRegenerationStep` → `SqlFacetExtractorStep` → the four preparation steps (with
+`Mode = Subsystems`; the domain map is reused from disk if it matches the graph) → the requested auditors → the
+synthesis if checked (`CORE/AnalysisPipelineFactory.cs:256-264`); it does not detect, index or enrich, so the report is based on the graph
+as it is now. `PrepareRegenerationStep` fails if there is no DB or it has no structural graph, and removes from the graph the reports of the
+catalog marked for it (`CORE/Steps/PrepareRegenerationStep.cs:43-59`). At the end, `failedReports` is the previous one, minus
+those regenerated with `report.written`, plus those requested in the original run that have no report in any of their
+parts (`AnalysisRunManager.cs:234-241`, `:340-398`). Regeneration still depends on the run in memory: after
+restarting the server there is no run and no button. Redoing a correct report is possible, because the button also appears in
+the lanes that finished successfully.
 
-## 1.12 El chat
+## 1.12 The chat
 
-Un turno es un paso LLM con prompt literal y diecisiete tools: las siete del auditor más `view_file_outline`, `list_dir`,
-`find_by_name`, `list_reports`, `read_report`, `create_report`, `update_report`, `list_documents`, `describe_image` y
-`semantic_search` (`CORE/Chat/ChatAgent.cs:103-109`). Consulta la misma copia del grafo y los mismos informes que el
-análisis, y la web impide que convivan un turno y un análisis, porque este sobrescribe la BD y mueve los informes. El
-límite del turno es `CodebaseAnalysis:Chat:TurnTimeoutMinutes` (5), aplicado con su propio token (`:210`).
+A turn is one LLM step with a literal prompt and nineteen fixed tools: the seven of the auditor plus `view_file_outline`, `list_dir`,
+`find_by_name`, `list_reports`, `read_report`, `create_report`, `update_report`, `list_documents`, `describe_image`,
+`semantic_search`, `list_units` and `read_unit` (`CORE/Chat/ChatAgent.cs:105-112`). It adds, only when they apply, the four wiki tools
+(`wiki_search`, `wiki_get_page`, `wiki_list_pages`, `wiki_propose_page`) if the workspace has a wiki and they are registered
+(`ChatAgent.cs:251-264`, `CORE/Wiki/ToolsForChat.cs:75-76`), `ask_user` if the host allows questions (`ChatAgent.cs:269-272`) and the
+`ExtraTools` of the workspace (`ChatAgent.cs:276`). It queries the same copy of the graph and the same reports as the
+analysis, and the web prevents a turn and an analysis from coexisting, because the latter overwrites the DB and moves the reports. The
+turn limit is `CodebaseAnalysis:Chat:TurnTimeoutMinutes` (5), applied with its own token (`CORE/Chat/ChatAgent.cs:233-237`).
 
-El modelo que responde se elige en la interfaz, por sesión, entre los de `CodebaseAnalysis:Chat:Models`; cada uno es un rol de
-`AITaskAgent:LlmProviders:Roles` con su proveedor, su `Model` y sus `Options` (`CORE/Chat/ChatModelCatalog.cs`).
-`ChatSession.ModelId` guarda la elección y se puede cambiar entre turnos; cada turno guarda `ModelId` y el deployment que
-contestó. Qué modelos trae el sample, qué `Options` necesita cada uno y los avisos de arranque están en el README de la web
+The model that answers is chosen in the interface, per session, from among those in `CodebaseAnalysis:Chat:Models`; each one is a role of
+`AITaskAgent:LlmProviders:Roles` with its provider, its `Model` and its `Options` (`CORE/Chat/ChatModelCatalog.cs`).
+`ChatSession.ModelId` stores the choice and it can be changed between turns; each turn stores `ModelId` and the deployment that
+answered. Which models the sample includes, which `Options` each one needs and the startup warnings are in the web README
 («Modelos del chat»).
 
-La plantilla `CORE/templates/chat_system.md` obliga a marcar cada hecho sobre el sistema: `[V]` si se leyó en el código
-en ese turno, con `ruta:línea`; `[D]` si sale de un informe o documento, con `nombre › sección`; `[I]` si se infiere.
-El grafo no es código leído: para marcar `[V]` algo que dice `graph_neighbors` hay que abrir la línea con `view_file`.
-Para «dónde se usa esta clase o este campo» la plantilla manda a las `USES_TYPE`, `READS` y `WRITES` entrantes, y para
-«qué hay en la línea N» a `graph_neighbors` con `line: N` y `direction: out` sobre el método que la contiene
+The template `CORE/templates/chat_system.md` requires marking every fact about the system: `[V]` if it was read in the code
+in that turn, with `path:line`; `[D]` if it comes from a report or document, with `name › section`; `[I]` if it is inferred.
+The graph is not code that was read: to mark `[V]` something that `graph_neighbors` says, the line must be opened with `view_file`.
+For «where this class or this field is used» the template points to the incoming `USES_TYPE`, `READS` and `WRITES`, and for
+«what is on line N» to `graph_neighbors` with `line: N` and `direction: out` on the method that contains it
 (`CORE/templates/chat_system.md:13`).
-Al cerrar el turno `ClaimAuditor` recorre las marcas y las contrasta con la evidencia que dejaron los resultados de las
-tools (`CORE/Chat/ClaimAuditor.cs:398-454`):
+When the turn closes, `ClaimAuditor` goes through the marks and checks them against the evidence left by the results of the
+tools (`CORE/Chat/ClaimAuditor.cs:386-478`):
 
-- `view_file` aporta el tramo que enseñó; `view_code_item`, solo el tramo `Location` de cada nodo devuelto, y nada
-  de una lista de sobrecargas, que no enseña código;
-  `grep_search`, las líneas con coincidencia; `graph_search`, solo los tramos de `include_code`.
-- `read_report` y `read_document` aportan el informe o documento leído, que es lo que respalda un `[D]`.
-- `graph_neighbors`, `graph_domain` y la tabla de `graph_search` no aportan evidencia aunque citen `ruta:línea`.
-- Un resultado que empieza por `Error`, `TOOL_ERROR` o `TOOL_CALL_ERROR` no cuenta (`:457-468`).
+- `view_file` provides the span it showed; `view_code_item`, only the `Location` span of each returned node, and nothing
+  from a list of overloads, which shows no code;
+  `grep_search`, the lines with a match; `graph_search`, only the spans of `include_code`.
+- `read_report`, `read_document` and `read_unit` provide the report, document or unit read, which is what backs a `[D]`
+  (`:463-476`, source resolution in `:270-304`; a unit is cited by title or id, with or without the `unit:` prefix).
+- `graph_neighbors`, `graph_domain` and the `graph_search` table provide no evidence even if they cite `path:line`; neither do the
+  tools with no `case` in that `switch` (`:418-477`), such as `list_units` or the `wiki_*` ones.
+- A result that starts with `Error`, `TOOL_ERROR` or `TOOL_CALL_ERROR` does not count (`:401-402`, `:484-491`).
 
-Una marca sin respaldo queda `unchecked` con el motivo (no se leyó, se leyó en parte, esas líneas no existen, el
-fichero no existe o falta la referencia) y nunca se rechaza la respuesta (`:86-135`). La comprobación es de cobertura:
-«verificado» significa que las líneas citadas se leyeron en el turno, no que lo afirmado coincida con ellas.
+A mark without support stays `unchecked` with the reason (not read, read in part, those lines do not exist, the
+file does not exist or the reference is missing) and the answer is never rejected (`:87-135`). The check is one of coverage:
+«verified» means that the cited lines were read in the turn, not that what is stated matches them.
 
-## 1.13 Quién lee las fuentes y cuántas veces
+## 1.13 Who reads the sources and how many times
 
-El repositorio se lee en disco varias veces y cada lectura paga su coste por separado. cbm lo recorre entero una vez;
-`RepositoryScan`, la ingesta Markdown, la búsqueda de artefactos Office y, con `ForceReindex`, la copia de seguridad lo vuelven a recorrer;
-`javac` vuelve a leer y compilar todos los `.java` (66 s en el repositorio objetivo). Las facetas se calculan una sola
-vez y las comparten los nueve auditores, pero cada auditor abre ficheros bajo demanda con sus tools, sin caché
-compartida, y paga en tokens el código que lee, aunque otro auditor ya lo haya leído (el protocolo de notas del apartado 1.7
-acota lo que se reenvía de cada resultado, y la pasada compartida, desactivada, es el intento de leer una vez). Hasta la prueba M, además, la
-plantilla de sistema y la de prompt de cada auditor incluían las dos `_common_rules.md`, y cada uno recibía esas reglas
-dos veces; ahora solo las incluye el prompt (corregido, apartado 2.13). La única medición de tokens es de la ejecución del 27/09 sobre TestAgenteAnalisis (262 nodos): unos 545 000 tokens entre
-los nueve auditores y la síntesis, 231 535 de ellos en el de arquitectura, y el volumen lo explica el reenvío del
-historial en cada iteración de tools (medido en la auditoría del 2026-09-29). Las
-facetas van en JSON compacto desde la tanda B: la sangría era el 21 % de sus caracteres en el grafo sintético de los
+The repository is read from disk several times, and each read pays its cost separately. cbm walks through it entirely once;
+`RepositoryScan`, the Markdown ingestion, the Office artifact search and, with `ForceReindex`, the backup walk it again;
+`javac` re-reads and compiles all the `.java` files (66 s in the target repository). The facets are computed once
+and shared by the nine auditors, but each auditor opens files on demand with its tools, with no shared cache,
+and pays in tokens for the code it reads, even if another auditor has already read it (the note protocol of section 1.7
+limits what is forwarded from each result, and the shared pass, disabled, is the attempt to read once). Until test M, moreover, the
+system template and each auditor's prompt template included both `_common_rules.md`, and each one received those rules
+twice; now only the prompt includes them (corrected, section 2.13). The only token measurement is from the 27/09 run on TestAgenteAnalisis (262 nodes): about 545 000 tokens across
+the nine auditors and the synthesis, 231 535 of them in the architecture one, and the volume is explained by the forwarding of the
+history on each tool iteration (measured in the audit of 2026-09-29). The
+facets have been in compact JSON since batch B: indentation was 21 % of their characters in the synthetic graph of the
 tests (`CORE/Steps/SqlFacetExtractorStep.cs:939-941`).
 
-Desde la tanda B cada ejecución cuenta su consumo. El evento final de cada llamada lleva los tokens de entrada y de
-salida, los de entrada servidos desde la caché del proveedor y el coste (`Framework/Observability/Events/LlmResponseEvent.cs:43-59`,
-`Framework/LLM/Steps/BaseLlmStep.LlmInvocation.cs:602`, `:822`), y `LlmUsageTracker` los suma por paso y en total
-(`CORE/Progress/LlmUsageTracker.cs:84-135`). La web lo manda en el `usage` de `run.completed` y la SPA lo enseña en el resumen
-(`WEB/Analysis/AnalysisRunManager.cs:478`, `:528`, `:580`), la CLI lo imprime al terminar
-(`Samples/CodebaseAnalysisPipeline/Program.cs:225`, `:364-369`), y los dos lo escriben en `reports/_run_meta.json`
-(`CORE/Reports/RunMetaFile.cs:48-57`). El coste sale de los precios de `AITaskAgent:LlmProviders:Providers:<p>:Models`,
-que enlaza el framework (`CORE/Hosting/LlmRoleFactory.cs:76`, `:98-99` los vuelca en el log). El JSON del sample trae los
-precios de los modelos del proveedor `AzureOpenAI` salvo `gpt-oss-120b`, que los lleva a `null`
-(`CORE/appsettings.analysis.json:191-249`); un modelo sin precio deja el coste en `null`, no en 0.
+Since batch B each run counts its consumption. The final event of each call carries the input and output tokens,
+the input tokens served from the provider's cache and the cost (`AITaskAgent.Extensions.Llm/Observability/Events/LlmResponseEvent.cs:44-59`,
+`AITaskAgent.Extensions.Llm/Steps/BaseLlmStep.LlmInvocation.cs:821-824`, `:897-900`, streaming path; the non-streaming one was not re-read), and `LlmUsageTracker` adds them up per step and in total
+(`CORE/Progress/LlmUsageTracker.cs:84-135`). The web sends it in the `usage` of `run.completed` and the SPA shows it in the summary
+(`WEB/Analysis/AnalysisRunManager.cs:478`, `:528`, `:580`), the CLI prints it when it finishes
+(`Samples/CodebaseAnalysisPipeline/Program.cs:225`, `:364-369`), and both write it to `reports/_run_meta.json`
+(`CORE/Reports/RunMetaFile.cs:48-57`). The cost comes from the prices in `AITaskAgent:LlmProviders:Providers:<p>:Models`,
+which the framework binds (`CORE/Hosting/LlmRoleFactory.cs:76`, `:98-99` dump them to the log). The sample JSON carries the
+prices of the models of the `AzureOpenAI` provider except `gpt-oss-120b`, which it sets to `null`
+(`CORE/appsettings.analysis.json:191-249`); a model without a price leaves the cost at `null`, not 0.
 
-## 1.14 Mediciones del análisis completo (prueba M, 2026-09-29)
+## 1.14 Measurements of the full analysis (test M, 2026-09-29)
 
-La prueba M ejecutó el análisis completo sobre una copia de `delta/Online` (8420 ficheros `.java`, 265 343 nodos y
-1 093 434 aristas de cbm, copia de trabajo de 1 676 672 KB según el log) desde la CLI y desde la web, sin escribir en `C:\BBVA`. Llegó hasta
-los auditores: Azure respondió `404 DeploymentNotFound` a los nueve en unos 5 s, porque el recurso no tenía los
-deployments del modelo, así que todo lo que exige el LLM sigue pendiente. La copia estaba en una carpeta temporal de
-ruta larga, y cbm no indexó los ficheros que pasaban del MAX_PATH (apartado 1.2); la prueba se repetirá con la copia
-en `C:\Users\juan.rozano\m\Online`. Las cifras de este apartado son de la versión 2 de la escritura Java y anteriores a la
-alcanzabilidad Java, a las facetas de `CompilerFactsFacets` y a la preparación por subsistema: con el código actual
-`dead_code_candidates`, `hotspots_ranking` y `critical_hotspots_exceptions` ya no tienen por qué llegar vacías en Java
-(apartados 1.4 y 1.6), y los tiempos no se han vuelto a medir.
+Test M ran the full analysis on a copy of `delta/Online` (8420 `.java` files, 265 343 cbm nodes and
+1 093 434 cbm edges, working copy of 1 676 672 KB according to the log) from the CLI and from the web, without writing to `C:\BBVA`. It reached
+the auditors: Azure answered `404 DeploymentNotFound` to all nine in about 5 s, because the resource did not have the
+model's deployments, so everything that requires the LLM is still pending. The copy was in a temporary folder with a
+long path, and cbm did not index the files that exceeded MAX_PATH (section 1.2); the test will be repeated with the copy
+in `C:\Users\juan.rozano\m\Online`. The figures in this section are from version 2 of the Java writing and predate the
+Java reachability, the `CompilerFactsFacets` facets and subsystem preparation: with the current code
+`dead_code_candidates`, `hotspots_ranking` and `critical_hotspots_exceptions` no longer have to come back empty in Java
+(sections 1.4 and 1.6), and the timings have not been measured again.
 
-| Medida | De dónde sale | Valor |
+| Measure | Source | Value |
 |---|---|---|
-| Tiempo de `DetectAndIndexGraphStep` (cbm, copia, ingestas) | eventos `step.completed` o log | cbm, 59-67 s en indexación completa; el paso entero, 24,5 s sin reindexar |
-| Tiempo de `LanguageEnricherStep` (proceso Java, escritura, plugin) | `enrichment_runs.duration_ms`, `details.write_timings_ms` | 181,7 s: el proceso Java 94,6 s, la escritura en el grafo 1 min 8 s y el plugin Struts/JSP 14,9 s; el analizador leyó 1364 ficheros más de los que tenía cbm |
-| Tiempo de `SqlFacetExtractorStep` sobre la BD completa | log | 51,5 s, antes del índice por label (apartado 1.6) |
-| Facetas vacías o con error en el caso Java | prompts del log `--debug` | ninguna con error SQL; vacías al menos `flows_catalog`, `flow_steps_graph`, `workflow_steps_catalog`, `prompt_templates_catalog`, `dead_code_candidates`, `dependency_cycles`, `layer_violations`, `architectural_communities`, `hotspots_ranking`, `critical_hotspots_exceptions`, `unvalidated_routes` y `obsolete_elements` (esta, antes de leer `annotations`) |
-| Tamaño del primer prompt de cada auditor | log `--debug` | entre 18 000 y 38 000 tokens, unos 234 000 entre los nueve |
-| Tiempo por auditor y del paralelo | eventos de `Auditor_<tipo>` | pendiente: exige LLM |
-| Tiempo de la síntesis | log | pendiente: exige LLM |
-| Tokens de prompt y de respuesta por auditor, con las iteraciones de tools | `bySource` de `reports/_run_meta.json` o `usage` de `run.completed` (apartado 1.13) | pendiente: exige LLM; el coste, además, sale null hasta configurar los precios del contrato |
-| Iteraciones de tools por auditor y auditores que agotaron el tope | log («agotó su tope de herramientas») | pendiente: exige LLM |
-| Ficheros y líneas leídos por más de un auditor | argumentos de `view_file` y `graph_search` con `include_code` | pendiente: exige LLM |
-| Calidad por informe: hallazgos confirmados, falsos positivos y ausencias | revisión manual contra el código | pendiente: exige LLM |
+| Time of `DetectAndIndexGraphStep` (cbm, copy, ingestion) | `step.completed` events or log | cbm, 59-67 s on full indexing; the whole step, 24,5 s without reindexing |
+| Time of `LanguageEnricherStep` (Java process, writing, plugin) | `enrichment_runs.duration_ms`, `details.write_timings_ms` | 181,7 s: the Java process 94,6 s, the graph write 1 min 8 s and the Struts/JSP plugin 14,9 s; the analyzer read 1364 more files than cbm had |
+| Time of `SqlFacetExtractorStep` over the full DB | log | 51,5 s, before the per-label index (section 1.6) |
+| Empty or error facets in the Java case | prompts in the `--debug` log | none with SQL error; empty at least `flows_catalog`, `flow_steps_graph`, `workflow_steps_catalog`, `prompt_templates_catalog`, `dead_code_candidates`, `dependency_cycles`, `layer_violations`, `architectural_communities`, `hotspots_ranking`, `critical_hotspots_exceptions`, `unvalidated_routes` and `obsolete_elements` (this one, before reading `annotations`) |
+| Size of the first prompt of each auditor | `--debug` log | between 18 000 and 38 000 tokens, about 234 000 across the nine |
+| Time per auditor and of the parallel run | events of `Auditor_<tipo>` | pending: requires LLM |
+| Time of the synthesis | log | pending: requires LLM |
+| Prompt and response tokens per auditor, with the tool iterations | `bySource` of `reports/_run_meta.json` or `usage` of `run.completed` (section 1.13) | pending: requires LLM; the cost, moreover, comes out null until the contract prices are configured |
+| Tool iterations per auditor and auditors that exhausted the cap | log («agotó su tope de herramientas») | pending: requires LLM |
+| Files and lines read by more than one auditor | arguments of `view_file` and `graph_search` with `include_code` | pending: requires LLM |
+| Quality per report: confirmed findings, false positives and omissions | manual review against the code | pending: requires LLM |
 
-**Referencias de tipos y campos (tarea 4 del plan, 2026-09-29).** Sin LLM, con el arnés de `LanguageEnricherStep` sobre
-copias nuevas de la BD de cbm de `C:\Users\juan.rozano\m\Online` (ruta corta: cbm indexó los 8420 ficheros), y las
-facetas con un arnés de `SqlFacetExtractorStep` sobre la BD enriquecida. v1 es el código anterior a las referencias
-(schema 1) y v2 el actual; las pasadas se alternaron para repartir la carga de la máquina, que no estaba en reposo.
+**Type and field references (task 4 of the plan, 2026-09-29).** Without LLM, with the `LanguageEnricherStep` harness on new copies
+of the cbm DB from `C:\Users\juan.rozano\m\Online` (short path: cbm indexed the 8420 files), and the facets with a
+`SqlFacetExtractorStep` harness over the enriched DB. v1 is the code before the references
+(schema 1) and v2 the current one; the passes were alternated to spread the load on the machine, which was not idle.
 
-| Medida | Valor |
+| Measure | Value |
 |---|---|
-| `LanguageEnricherStep` completo, mediana de 6 pares alternos | v1 119,4 s, v2 166,6 s: 1,39 veces (criterio 5, límite 1,5). Los tres primeros pares dieron 1,55 y los tres siguientes, en orden v2 → v1, 1,41; el par con la máquina más tranquila, 129,3 frente a 121,4 s (1,07). Las pasadas lentas de las dos versiones coinciden con la copia de 1 GB de la BD tardando 8-10 s en vez de 0,4, así que la dispersión es de la carga de disco de la máquina, no del paso |
-| Dónde está la diferencia (medianas de los 6 pares) | proceso Java 88 s en v2 frente a 66 s en v1 (en el par tranquilo, 64,6 frente a 67,4); escritura 72 frente a 43 s, con `refs` de 6 a 13 s y `read` y `replace_cbm_edges` más largos por el JSONL y las `USAGE`. Quitar las `READS` a constantes `static final` ahorraría 56 003 de las 431 662 aristas nuevas (13 %) a cambio de no saber dónde se usa cada constante; no se ha hecho |
-| Escritura en el grafo (v2, primera pasada) | 51,5 s: `read` 10,3, `replace_cbm_edges` 8,6, `calls` 8,0, `commit` 7,0, `refs` 6,9 y el resto por debajo de 3 s cada una |
-| `java-analysis.jsonl` | 1003 MB, frente a 744 MB sin referencias (1,35 veces) |
-| Aristas nuevas | 253 753 `USES_TYPE`, 121 659 `READS` y 56 250 `WRITES`; sustituidas 522 487 `CALLS`, 172 517 `USAGE`, 2202 `WRITES` y 1 `INHERITS` de cbm |
-| Referencias del proyecto resueltas | 99,996 % (23 sin resolver de 587 267); 38 sin arista porque su origen no tiene nodo |
-| Campos casados con un `Field` de cbm | 95,85 % (52 962 de 55 257); 2295 creados, 0 sin nodo |
-| Repetición | dos pasadas, mismos recuentos por tipo de arista y de nodo; la BD de `~/.cache` con la misma huella SHA-256 |
-| `SqlFacetExtractorStep` | 45,9 s con el índice por label y 46,7 s sin él; 24 s en `PrepareDerivedMetricsAsync` |
-| `ZeroFaninClasses` | 817 tipos (salen 20); 851 sin la exclusión de Struts y 638 con la regla anterior del constructor declarado. De 5 revisados leyendo la copia, 3 verdaderos (`DAOAgendaLiquidacionOracleImplOrig`, `GeneradorSaldosNaim`, `PaymentExcelExporter`), 1 falso (`DAOAgendaRenovacionInteresOracleImpl`, instanciado por la factoría de DAO) y 1 sin decidir (`InformeResultados`, que el `pom.xml` empaqueta en un jar propio) |
-| `UnreadFields` | 154 campos (salen 30); 5 de 5 revisados son verdaderos: 2 sin ninguna lectura, 1 leído solo dentro de un comentario de bloque y 2 que solo se escriben (sin getter) |
+| `LanguageEnricherStep` complete, median of 6 alternating pairs | v1 119,4 s, v2 166,6 s: 1,39 times (criterion 5, limit 1,5). The first three pairs gave 1,55 and the next three, in order v2 → v1, 1,41; the pair with the calmest machine, 129,3 against 121,4 s (1,07). The slow passes of both versions coincide with the 1 GB copy of the DB taking 8-10 s instead of 0,4, so the spread comes from the machine's disk load, not from the step |
+| Where the difference lies (medians of the 6 pairs) | Java process 88 s in v2 against 66 s in v1 (in the calm pair, 64,6 against 67,4); writing 72 against 43 s, with `refs` from 6 to 13 s and `read` and `replace_cbm_edges` longer due to the JSONL and the `USAGE`. Turning the `READS` into `static final` constants would save 56 003 of the 431 662 new edges (13 %) at the cost of not knowing where each constant is used; this has not been done |
+| Graph writing (v2, first pass) | 51,5 s: `read` 10,3, `replace_cbm_edges` 8,6, `calls` 8,0, `commit` 7,0, `refs` 6,9 and the rest under 3 s each |
+| `java-analysis.jsonl` | 1003 MB, against 744 MB without references (1,35 times) |
+| New edges | 253 753 `USES_TYPE`, 121 659 `READS` and 56 250 `WRITES`; replaced 522 487 `CALLS`, 172 517 `USAGE`, 2202 `WRITES` and 1 `INHERITS` from cbm |
+| Project references resolved | 99,996 % (23 unresolved out of 587 267); 38 without an edge because their origin has no node |
+| Fields matched to a cbm `Field` | 95,85 % (52 962 out of 55 257); 2295 created, 0 without a node |
+| Repetition | two passes, same counts by edge and node type; the DB in `~/.cache` with the same SHA-256 fingerprint |
+| `SqlFacetExtractorStep` | 45,9 s with the label index and 46,7 s without it; 24 s in `PrepareDerivedMetricsAsync` |
+| `ZeroFaninClasses` | 817 types (20 leave); 851 without the Struts exclusion and 638 with the previous declared-constructor rule. Of 5 reviewed by reading the copy, 3 true (`DAOAgendaLiquidacionOracleImplOrig`, `GeneradorSaldosNaim`, `PaymentExcelExporter`), 1 false (`DAOAgendaRenovacionInteresOracleImpl`, instantiated by the DAO factory) and 1 undecided (`InformeResultados`, which the `pom.xml` packages in its own jar) |
+| `UnreadFields` | 154 fields (30 leave); 5 of 5 reviewed are true: 2 with no read at all, 1 read only inside a block comment and 2 that are only written (no getter) |
 
 
-## 1.15 Evaluación determinista de los informes
+## 1.15 Deterministic evaluation of the reports
 
-`ReportValidator` (`CORE/Reports/ReportValidator.cs`) comprueba sin LLM que los informes del catálogo cumplen lo que piden
-las plantillas: que cada `ruta:línea` citada existe y está en rango, que las citas `nombre › sección` apuntan a algo que
-existe, que los identificadores siguen el formato `NN-CAT-nnn` de `_common_rules.md` (o `CAT-nnn` en informes anteriores) y no
-se repiten, que cada hallazgo P0 o P1 cita al menos una ubicación real, que los nombres cualificados citados están en el grafo,
-que la línea `analysis-meta` lleva semáforo y procedencia (modelo, SHA de las plantillas y huella del grafo) y que los bloques
-Mermaid usan los tipos de `_mermaid_guidelines.md`; además avisa, sin error, de un informe de auditoría sin citas de código
-(`citations_required`), de un informe en modo B sin el apartado «Cobertura» (`coverage`) y de rutas que declara la configuración
-y no existen (`declared_paths`) (`CORE/Reports/ReportValidation.cs:14-50`). La tabla de comprobaciones, qué es error y qué aviso y el formato de
-`_validation.json` están en el apartado 3.9 del README de la CLI. Corre al final del análisis y de la regeneración, sin
-bloquear, y a demanda con `--validate-reports` en la CLI o `GET /api/reports/validation` en la web.
+`ReportValidator` (`CORE/Reports/ReportValidator.cs`) checks without an LLM that the catalog reports meet what the templates require:
+that each cited `path:line` exists and is in range, that the `name › section` citations point to something that
+exists, that the identifiers follow the `NN-CAT-nnn` format of `_common_rules.md` (or `CAT-nnn` in earlier reports) and are not
+repeated, that each P0 or P1 finding cites at least one real location, that the qualified names cited are in the graph,
+that the `analysis-meta` line carries a traffic light and provenance (model, SHA of the templates and graph fingerprint) and that the blocks
+Mermaid use the types of `_mermaid_guidelines.md`; it also warns, without an error, about an audit report with no code citations
+(`citations_required`), about a mode B report without the «Cobertura» section (`coverage`) and about paths that the configuration declares
+and that do not exist (`declared_paths`) (`CORE/Reports/ReportValidation.cs:14-50`). The table of checks, which are errors and which are warnings, and the format of
+`_validation.json` are in section 3.9 of the CLI README. It runs at the end of the analysis and of the regeneration, without
+blocking, and on demand with `--validate-reports` in the CLI or `GET /api/reports/validation` in the web.
 
-Mide la forma del informe, no si sus hallazgos son ciertos: una cita válida dice que la línea existe, no que diga lo que el
-informe afirma. Para lo segundo está la lista de hallazgos esperados por repositorio (`expected-findings.json`, plantilla en
-`CORE/evaluation/expected-findings.template.json`), que da la cobertura y los hallazgos no esperados, a revisar a mano como
-posibles falsos positivos. La lista la escribe quien evalúa; no hay ninguna rellena. Dos limitaciones del diseño: la escala
-P0-P3 solo la define la plantilla de errores, así que en los demás informes la comprobación de hallazgos graves se aplica
-solo si el informe usa esa escala por su cuenta (el 08 la usa como prioridad del plan); y las citas se resuelven por sufijo
-cuando la ruta viene incompleta, que es lo que hacen los informes de Access (`CGAR.bas:12`), con una cita ambigua si el
-nombre casa con varios ficheros.
+It measures the shape of the report, not whether its findings are true: a valid citation says that the line exists, not that it says what the
+report claims. For the latter there is the list of expected findings per repository (`expected-findings.json`, template in
+`CORE/evaluation/expected-findings.template.json`), which gives coverage and the unexpected findings, to be reviewed by hand as
+possible false positives. The list is written by whoever evaluates; none is filled in. Two design limitations: the P0-P3 scale
+is defined only by the errors template, so in the other reports the check for serious findings applies
+only if the report uses that scale on its own (08 does, as the plan's priority); and citations are resolved by suffix
+when the path is incomplete, which is what the Access reports do (`CGAR.bas:12`), with an ambiguous citation if the
+name matches several files.
 
-**Primera medida (2026-09-30), informes de TestAgenteAnalisis del 28 y 29/09.** Los nueve informes que hay, sin el 02,
-son anteriores a la procedencia de la tanda B, así que los nueve fallan `metadata` por eso y solo por eso.
+**First measurement (2026-09-30), TestAgenteAnalisis reports of 28 and 29/09.** The nine reports there are, without 02,
+predate the provenance of batch B, so all nine fail `metadata` for that reason alone.
 
-| Informe | Citas válidas | Hallazgos (P0/P1) | Nombres del grafo encontrados | Problemas |
+| Report | Valid citations | Findings (P0/P1) | Graph names found | Problems |
 |---|---|---|---|---|
-| 00 Resumen ejecutivo | 0 de 0 | 0 | 0 de 0 | `flowchart TB` |
-| 01 Análisis funcional | 0 de 0 | 10 (0) | 43 de 43 | `flowchart TB` |
-| 03 Código muerto | 29 de 29 | 6 (0) | 9 de 9 | — |
-| 04 Flujos end-to-end | 0 de 0 | 0 | 77 de 77 | — |
-| 05 Errores y bugs | 34 de 34 | 8 (4) | 0 de 0 | — |
-| 06 Arquitectura | 27 de 27 | 8 (0) | 3 de 3 | — |
-| 07 APIs y seguridad | 9 de 9 | 3 (0) | 0 de 0 | `SEC-002` en tres filas de una tabla |
-| 08 Deuda técnica | 40 de 40 | 10 (4) | 4 de 4 | — |
-| 09 Inyección de dependencias | 25 de 25 | 6 (0) | 1 de 1 | — |
+| 00 Executive summary | 0 of 0 | 0 | 0 of 0 | `flowchart TB` |
+| 01 Functional analysis | 0 of 0 | 10 (0) | 43 of 43 | `flowchart TB` |
+| 03 Dead code | 29 of 29 | 6 (0) | 9 of 9 | — |
+| 04 End-to-end flows | 0 of 0 | 0 | 77 of 77 | — |
+| 05 Errors and bugs | 34 of 34 | 8 (4) | 0 of 0 | — |
+| 06 Architecture | 27 of 27 | 8 (0) | 3 of 3 | — |
+| 07 APIs and security | 9 of 9 | 3 (0) | 0 of 0 | `SEC-002` in three rows of one table |
+| 08 Technical debt | 40 of 40 | 10 (4) | 4 of 4 | — |
+| 09 Dependency injection | 25 of 25 | 6 (0) | 1 of 1 | — |
 
-Las 164 citas existen y están en rango, y en las tres revisadas a mano la línea dice lo que afirma el informe: el `Const
-Password` literal de `SEC-001` en `MMapNetWorkDrive.bas:6`, el `set nocout on` de `BUG-003` en `CConnectionSQL.bas:22` y el
-`MontarFiltro` completo de `CGAR.bas:155-255`. Lo más grave está en otra parte. El 01 y el 04 no citan ni una línea de
-código, así que sus flujos y casos de uso solo se pueden contrastar por nombres del grafo, que existen todos. Y los
-identificadores chocan entre informes: `SEC-001` a `SEC-003` son hallazgos distintos en el 05 y en el 07 (`SEC-002` es una
-inyección SQL P0 en uno y tres consultas sin autenticación declarada en el otro), igual que `ARC-001` y `ARC-002` en el 06 y
-el 08, y el 00 los cita sin decir de qué informe son. Entonces `_common_rules.md` pedía identificadores únicos solo dentro del
-informe; ahora el formato lleva el número del informe delante (`05-SEC-002`), que los hace únicos en todo el análisis
+The 164 citations exist and are in range, and in the three checked by hand the line says what the report claims: the `Const
+Password` literal of `SEC-001` in `MMapNetWorkDrive.bas:6`, the `set nocout on` of `BUG-003` in `CConnectionSQL.bas:22` and the
+full `MontarFiltro` of `CGAR.bas:155-255`. The more serious issue lies elsewhere. 01 and 04 do not cite a single line of
+code, so their flows and use cases can only be checked against graph names, all of which exist. And the
+identifiers clash between reports: `SEC-001` to `SEC-003` are different findings in 05 and in 07 (`SEC-002` is a
+P0 SQL injection in one and three queries without declared authentication in the other), the same as `ARC-001` and `ARC-002` in 06 and
+08, and 00 cites them without saying which report they belong to. So `_common_rules.md` required identifiers unique only within the
+report; now the format carries the report number in front (`05-SEC-002`), which makes them unique across the whole analysis
 (`CORE/templates/_common_rules.md:42`).
 
 ---
 
-# Parte 2. Política de análisis de cada informe
+# Part 2. Analysis policy for each report
 
-## 2.1 Reglas comunes y fuentes de evidencia
+## 2.1 Common rules and sources of evidence
 
-Cada auditor recibe tres bloques comunes. `_common_rules.md`, incluida solo en la plantilla de prompt, fija el formato de entrega, la adaptación al ecosistema
-detectado, que un conjunto vacío no prueba una ausencia (`CORE/templates/_common_rules.md:22-24`), el estilo, los
-identificadores `PREFIJO-NNN` y la línea `analysis-meta`. `_graph_rules.md` es la regla de fiabilidad, incluida en las
-nueve plantillas de sistema y no en la de la síntesis. `_provided_documentation.md` inserta el índice de documentos del
-usuario y dice que son contexto y no prueba nada sobre el código (`CORE/templates/_provided_documentation.md:3`).
+Each auditor receives three common blocks. `_common_rules.md`, included only in the prompt template, sets the delivery format, the adaptation to the ecosystem
+detected, that an empty set does not prove an absence (`CORE/templates/_common_rules.md:22-24`), the style, the
+`PREFIJO-NNN` identifiers and the `analysis-meta` line. `_graph_rules.md` is the reliability rule, included in the
+nine system templates and not in the synthesis one. `_provided_documentation.md` inserts the index of the user's
+documents and states that they are context and prove nothing about the code (`CORE/templates/_provided_documentation.md:3`).
 
-Para describir de dónde sale cada conclusión se usan cinco fuentes, con la fiabilidad que les da la regla:
+To describe where each conclusion comes from, five sources are used, with the reliability the rule gives them:
 
-- **F, facetas deterministas:** propiedades y cálculos SQL del apartado 1.6. Son datos si su propiedad la escribió un
-  enriquecedor nativo o un cálculo sobre aristas resueltas; indican dónde mirar, no un veredicto.
-- **R, grafo resuelto:** aristas con `enriched_by` de `JavaAnalyzer` o `StrutsJspPlugin` (y de los enriquecedores de DotNetEnricher en C#).
-  Son datos sobre la estructura.
-- **H, grafo heurístico:** aristas sin marca, que `graph_neighbors` etiqueta «heurística cbm», o «ingesta Office» si su
-  nodo de origen lo escribió OfficeTools (`CORE/Tools/GraphNeighborsTool.cs:71-73`, `:466-470`). En Java quedan pocas,
-  porque el analizador sustituye las `CALLS`, `INHERITS`, `IMPLEMENTS` y `USAGE` de los ficheros analizados; son pistas.
-- **C, lectura de código:** `view_file`, `graph_search` con `include_code` o el `code_snippet` de una faceta. Es la
-  única fuente que sostiene un veredicto sobre un defecto.
-- **D, documentos del usuario:** índice y `read_document`. Orientan sobre la intención; si discrepan del código, manda
-  el código.
+- **F, deterministic facets:** SQL properties and calculations from section 1.6. They are data if their property was written by a
+  native enricher or a calculation over resolved edges; they indicate where to look, not a verdict.
+- **R, resolved graph:** edges with `enriched_by` from `JavaAnalyzer` or `StrutsJspPlugin` (and from the DotNetEnricher enrichers in C#).
+  They are data about the structure.
+- **H, heuristic graph:** unmarked edges, which `graph_neighbors` labels «heurística cbm», or «ingesta Office» if their
+  source node was written by OfficeTools (`CORE/Tools/GraphNeighborsTool.cs:71-73`, `:466-470`). In Java there are few,
+  because the analyzer replaces the `CALLS`, `INHERITS`, `IMPLEMENTS` and `USAGE` of the analyzed files; they are leads.
+- **C, code reading:** `view_file`, `graph_search` with `include_code` or a facet's `code_snippet`. It is the
+  only source that supports a verdict on a defect.
+- **D, user documents:** index and `read_document`. They guide on intent; if they disagree with the code, the
+  code prevails.
 
-La tabla siguiente es la matriz de facetas por informe, sacada de los placeholders de cada plantilla de prompt, con la
-disponibilidad de cada faceta en un repositorio Java deducida de qué código escribe la propiedad que lee. DotNetEnricher
-no corre en Java; en Java escriben propiedades el analizador (`cyclomatic`, `fan_in`/`fan_out`/`hotspot` de los métodos,
-`detected_issues` con cinco reglas, `todo_markers`, `commented_code`, Javadoc, `annotations`, `hardcoded_secrets`,
-`reflection_targets`, `type_role` y aristas `OVERRIDES`; `CORE/Enrichment/Java/JavaGraphWriter.cs:278-285`, `:320-328`) y
-`JavaReachabilityWriter`, que corre al final de `LanguageEnricherStep` y escribe `is_reachable` y `dead_code_candidate` con
-su confianza y su motivo (`CORE/Enrichment/Java/JavaReachabilityWriter.cs:38-72`, `CORE/Steps/LanguageEnricherStep.cs:445`).
-«vacía en Java» es una inferencia sobre el código disponible, no una medición. Las cifras («50 de 1484», «20 de 817»…) son
-de la prueba M o de la tarea 4 de referencias (apartado 1.14), anteriores a las versiones 3-5 del analizador. Los cinco
-informes en modo A reciben además `repository_inventory`, `domain_map` y `coverage_plan`, y los cuatro en modo B
-`investigation_notes` y `coverage_summary` (apartado 1.6.1).
+The following table is the facet matrix per report, taken from the placeholders of each prompt template, with the
+availability of each facet in a Java repository inferred from which code writes the property it reads. DotNetEnricher
+does not run in Java; in Java the analyzer writes properties (`cyclomatic`, `fan_in`/`fan_out`/`hotspot` of the methods,
+`detected_issues` with five rules, `todo_markers`, `commented_code`, Javadoc, `annotations`, `hardcoded_secrets`,
+`reflection_targets`, `type_role` and `OVERRIDES` edges; `CORE/Enrichment/Java/JavaGraphWriter.cs:278-285`, `:320-328`) and
+`JavaReachabilityWriter`, which runs at the end of `LanguageEnricherStep` and writes `is_reachable` and `dead_code_candidate` with
+its confidence and its reason (`CORE/Enrichment/Java/JavaReachabilityWriter.cs:38-72`, `CORE/Steps/LanguageEnricherStep.cs:445`).
+«empty in Java» is an inference about the available code, not a measurement. The figures («50 of 1484», «20 of 817»…) are
+from test M or from reference task 4 (section 1.14), earlier than versions 3-5 of the analyzer. The five
+reports in mode A also receive `repository_inventory`, `domain_map` and `coverage_plan`, and the four in mode B
+`investigation_notes` and `coverage_summary` (section 1.6.1).
 
-| Faceta | Consulta (`SqlFacetExtractorStep.cs`) | Informes | En Java |
+| Facet | Query (`SqlFacetExtractorStep.cs`) | Reports | In Java |
 |---|---|---|---|
-| `metrics_summary` | `:79-86` | 01 | con datos |
-| `routes_summary` / `routes_catalog` | `:108-117`, `:466` | 01, 07 | 50 de 1484 acciones, `auth_required` desconocido |
-| `flows_summary`, `flows_catalog`, `flow_steps_graph` | `:119-125`, `:305-315` | 01, 04 | vacías: solo Office y, en C#, DotNetEnricher escriben `Flow` |
-| `domain_entities_summary` | `:128-137` | 01 | 50 tipos por `fan_in` calculado |
-| `workflow_steps_catalog` | `:623-630` | 01, 04 | vacía siempre |
-| `prompt_templates_catalog`, `documentation_and_prompts` | `:632-648` | 01, 04 | los `.md` del repositorio |
-| `high_cyclomatic_methods` | `:140-149` | 02 | 30 métodos por `cyclomatic` de `javac`, 10 con código |
-| `bloated_classes`, `complex_classes` | `:151-159`, `:525-534` | 02, 08 | LOC por rango de líneas, `method_count` y `cyclomatic_total` calculados |
-| `coupling_metrics` | `:161-169` | 02 | `fan_in`/`fan_out` de los métodos escritos por el analizador; en los tipos, calculados de `CALLS` resueltas y `fan_in` también de `USES_TYPE` |
-| `duplicate_summary`, `duplicate_candidates` | `:172-179`, `CompilerFactsFacets.DuplicatesAsync` | 02 | pares `SIMILAR_TO` que calcula cbm, si los trae; sin verificar en el repositorio objetivo |
-| `dead_code_candidates`, `dead_code_summary`, `dead_private_methods` | `:184-192`, `CompilerFactsFacets.DeadCodeAsync` | 03 | con datos: `dead_code_candidate` de `JavaReachabilityWriter`, sin repetir los miembros de un tipo candidato ni los que sobrescriben (`OVERRIDES`); sin medir |
-| `unused_di_registrations` | `:195-208` | 03, 09 | vacía: sin `DiRegistration` |
-| `orphan_routes` / `orphan_routes_list` | `:210-219`, `:484` | 03, 07 | acciones Struts sin `HANDLES`, 20 |
-| `struts_actions_without_handler` | `:287-302` | 03, 07 | 30, con el motivo |
-| `zero_fanin_classes` | `:234-256` | 03 | 20 de 817 en el repositorio objetivo (los 20 primeros sin grupo desde la tanda C), con `fan_in` calculado de `CALLS` y `USES_TYPE`, sin los que Struts instancia por reflexión |
-| `unread_fields` | `:263-273` | 02, 03 | 30 de 154 campos privados sin `READS` en el repositorio objetivo (los 30 primeros sin grupo desde la tanda C) |
-| `unread_fields_summary`, `write_only_fields` | `:276-283`, `CompilerFactsFacets.UnreadFieldsAsync` | 02, 03 | recuento y campos privados que solo se escriben |
-| `zero_fanin_groups`, `unread_field_groups` | `:234`, `:263`, `DeadCodeGrouping` | 03; 02 solo la de campos | grupos de candidatos con patrón común, con `likely_dynamic` y su evidencia; sin medir sobre el grafo del repositorio objetivo |
-| `dynamic_instantiation_sites` | `:229-232`, `DynamicInstantiationScanner` | 03 | escaneo de disco: 52 sitios y 2409 clases nombradas en la copia del repositorio objetivo |
-| `reflection_targets` | `:612-620`, `CompilerFactsFacets.ReflectionTargetsAsync` | 03 | nombres de clase de `Class.forName`/`loadClass` que `javac` resuelve como constantes, con `*` por tramo no constante |
-| `route_handlers_mapping` | `:317-323` | 04 | 50 `HANDLES` del plugin |
-| `unresolved_forwards` | `:325`, `:899` | 04, 05 | 30 de `enrichment_runs.details` |
-| `di_resolutions` | `:327-333` | 04 | `IMPLEMENTS` resueltas, 50 |
-| `critical_hotspots_exceptions` | `:337-344`, `CompilerFactsFacets.CriticalHotspotsAsync` | 05 | con datos: `hotspot` y `detected_issues` del analizador; `throws` no lo escribe nadie en Java |
-| `unvalidated_routes` | `:348-360` | 05 | vacía: el plugin no escribe `auth_required` |
-| `route_auth_summary` | `:362-369`, `CompilerFactsFacets.RouteAuthSummaryAsync` | 05, 07 | recuento de rutas por autenticación; en Struts todas en `unknown`, porque el plugin no escribe `auth_required` |
-| `suspicious_jsps` | `:374-388` | 05, 06, 08 | 25 de las JSP sospechosas |
-| `detected_issues_summary`, `suspect_patterns` | `:390-401`, `CompilerFactsFacets.IssuesAsync` | 05 | con datos: las reglas `empty-catch`, `string-identity`, `undisposed-resource`, `null-return-deref` y `obsolete-api` del analizador, por cupo según su peso |
-| `hardcoded_secrets` | `:597-609` | 05, 07 | escaneo de disco |
-| `resolved_secrets` | `:612-620`, `CompilerFactsFacets.ResolvedSecretsAsync` | 05, 07 | credenciales constantes que resuelve `javac`, con el valor enmascarado |
-| `project_components` | `:404-411` | 06 | sin verificar: depende de si cbm crea `Package` o `Module` |
-| `martin_instability_metrics`, `dependency_cycles`, `layer_violations` | `:413-439` | 06 | vacías en Java: solo DotNetEnricher escribe `instability`, `in_cycle` y `layer_violation` |
-| `architectural_communities` | `:456-463` | 06 | vacía en Java: `community_id` no lo escribe nadie del repositorio para Java (sin verificar si cbm lo trae) |
-| `type_hierarchy` | `:443-454` | 06 | 30 supertipos con resueltas y heurísticas |
-| `routes_security_matrix`, `routes_contracts` | `:467-482` | 07 | filas con `auth_required` desconocido y contratos nulos |
-| `hotspots_ranking` | `:487-497` | 08 | con datos: `hotspot` de los métodos, que escribe el analizador |
-| `doc_coverage_metrics` | `:500`, `CompilerFactsFacets.DocCoverageSql` | 08 | con datos: Javadoc reconocido por el analizador (`docstring_source`) |
-| `todo_markers`, `commented_code` | `:502-510` | 08 | con datos: los escribe el analizador |
-| `obsolete_elements` | `:514-522` | 08 | los `@Deprecated` del analizador (`annotations`), además de `is_obsolete` y el `[Obsolete]` de C#; en la prueba M llegó vacía porque aún no leía `annotations` |
-| `di_registrations_catalog`, `di_lifetimes_mapping`, `di_summary`, `captive_dependencies`, `extension_points_catalog`, `config_adapters_mapping` | `:537-575`, `:390-401` | 09 | vacías: `DiRegistration` y `captive-dependency` solo salen de DotNetEnricher o del fallback LLM, que en Java no corren |
-| `creational_candidates` | `:581-595` | 09 | 60 por nombre, ordenados por `fan_in` |
-| `provided_documentation` | `ProvidedDocumentationFacet` | 01-09 | la que haya subido el usuario |
+| `metrics_summary` | `:79-86` | 01 | with data |
+| `routes_summary` / `routes_catalog` | `:108-117`, `:466` | 01, 07 | 50 of 1484 actions, `auth_required` unknown |
+| `flows_summary`, `flows_catalog`, `flow_steps_graph` | `:119-125`, `:305-315` | 01, 04 | empty: only Office and, in C#, DotNetEnricher write `Flow` |
+| `domain_entities_summary` | `:128-137` | 01 | 50 types by computed `fan_in` |
+| `workflow_steps_catalog` | `:623-630` | 01, 04 | always empty |
+| `prompt_templates_catalog`, `documentation_and_prompts` | `:632-648` | 01, 04 | the repository's `.md` files |
+| `high_cyclomatic_methods` | `:140-149` | 02 | 30 methods by `javac`'s `cyclomatic`, 10 with code |
+| `bloated_classes`, `complex_classes` | `:151-159`, `:525-534` | 02, 08 | LOC by line range, `method_count` and `cyclomatic_total` computed |
+| `coupling_metrics` | `:161-169` | 02 | `fan_in`/`fan_out` of the methods written by the analyzer; for the types, computed from resolved `CALLS` and `fan_in` also from `USES_TYPE` |
+| `duplicate_summary`, `duplicate_candidates` | `:172-179`, `CompilerFactsFacets.DuplicatesAsync` | 02 | `SIMILAR_TO` pairs that cbm computes, if it brings them; unverified in the target repository |
+| `dead_code_candidates`, `dead_code_summary`, `dead_private_methods` | `:184-192`, `CompilerFactsFacets.DeadCodeAsync` | 03 | with data: `dead_code_candidate` from `JavaReachabilityWriter`, without repeating the members of a candidate type or those that override (`OVERRIDES`); not measured |
+| `unused_di_registrations` | `:195-208` | 03, 09 | empty: no `DiRegistration` |
+| `orphan_routes` / `orphan_routes_list` | `:210-219`, `:484` | 03, 07 | Struts actions without `HANDLES`, 20 |
+| `struts_actions_without_handler` | `:287-302` | 03, 07 | 30, with the reason |
+| `zero_fanin_classes` | `:234-256` | 03 | 20 of 817 in the target repository (the first 20 without a group since batch C), with `fan_in` computed from `CALLS` and `USES_TYPE`, without those Struts instantiates by reflection |
+| `unread_fields` | `:263-273` | 02, 03 | 30 of 154 private fields without `READS` in the target repository (the first 30 without a group since batch C) |
+| `unread_fields_summary`, `write_only_fields` | `:276-283`, `CompilerFactsFacets.UnreadFieldsAsync` | 02, 03 | count and private fields that are only written |
+| `zero_fanin_groups`, `unread_field_groups` | `:234`, `:263`, `DeadCodeGrouping` | 03; 02 only the fields one | groups of candidates with a common pattern, with `likely_dynamic` and their evidence; not measured on the target repository's graph |
+| `dynamic_instantiation_sites` | `:229-232`, `DynamicInstantiationScanner` | 03 | disk scan: 52 sites and 2409 named classes in the copy of the target repository |
+| `reflection_targets` | `:612-620`, `CompilerFactsFacets.ReflectionTargetsAsync` | 03 | class names from `Class.forName`/`loadClass` that `javac` resolves as constants, with `*` for each non-constant segment |
+| `route_handlers_mapping` | `:317-323` | 04 | 50 `HANDLES` from the plugin |
+| `unresolved_forwards` | `:325`, `:899` | 04, 05 | 30 from `enrichment_runs.details` |
+| `di_resolutions` | `:327-333` | 04 | resolved `IMPLEMENTS`, 50 |
+| `critical_hotspots_exceptions` | `:337-344`, `CompilerFactsFacets.CriticalHotspotsAsync` | 05 | with data: `hotspot` and `detected_issues` from the analyzer; nobody writes `throws` in Java |
+| `unvalidated_routes` | `:348-360` | 05 | empty: the plugin does not write `auth_required` |
+| `route_auth_summary` | `:362-369`, `CompilerFactsFacets.RouteAuthSummaryAsync` | 05, 07 | count of routes by authentication; in Struts all in `unknown`, because the plugin does not write `auth_required` |
+| `suspicious_jsps` | `:374-388` | 05, 06, 08 | 25 of the suspicious JSPs |
+| `detected_issues_summary`, `suspect_patterns` | `:390-401`, `CompilerFactsFacets.IssuesAsync` | 05 | with data: the analyzer's `empty-catch`, `string-identity`, `undisposed-resource`, `null-return-deref` and `obsolete-api` rules, by quota according to their weight |
+| `hardcoded_secrets` | `:597-609` | 05, 07 | disk scan |
+| `resolved_secrets` | `:612-620`, `CompilerFactsFacets.ResolvedSecretsAsync` | 05, 07 | constant credentials that `javac` resolves, with the value masked |
+| `project_components` | `:404-411` | 06 | unverified: depends on whether cbm creates `Package` or `Module` |
+| `martin_instability_metrics`, `dependency_cycles`, `layer_violations` | `:413-439` | 06 | empty in Java: only DotNetEnricher writes `instability`, `in_cycle` and `layer_violation` |
+| `architectural_communities` | `:456-463` | 06 | empty in Java: nobody writes `community_id` for Java in the repository (unverified whether cbm brings it) |
+| `type_hierarchy` | `:443-454` | 06 | 30 supertypes with resolved and heuristic edges |
+| `routes_security_matrix`, `routes_contracts` | `:467-482` | 07 | rows with `auth_required` unknown and null contracts |
+| `hotspots_ranking` | `:487-497` | 08 | with data: `hotspot` of the methods, which the analyzer writes |
+| `doc_coverage_metrics` | `:500`, `CompilerFactsFacets.DocCoverageSql` | 08 | with data: Javadoc recognized by the analyzer (`docstring_source`) |
+| `todo_markers`, `commented_code` | `:502-510` | 08 | with data: the analyzer writes them |
+| `obsolete_elements` | `:514-522` | 08 | the analyzer's `@Deprecated` (`annotations`), besides `is_obsolete` and C#'s `[Obsolete]`; in test M it came back empty because it did not yet read `annotations` |
+| `di_registrations_catalog`, `di_lifetimes_mapping`, `di_summary`, `captive_dependencies`, `extension_points_catalog`, `config_adapters_mapping` | `:537-575`, `:390-401` | 09 | empty: `DiRegistration` and `captive-dependency` come only from DotNetEnricher or the LLM fallback, which do not run in Java |
+| `creational_candidates` | `:581-595` | 09 | 60 by name, sorted by `fan_in` |
+| `provided_documentation` | `ProvidedDocumentationFacet` | 01-09 | whatever the user has uploaded |
 
-La consecuencia práctica es que, en el caso Java, 02, 03, 06 (solo jerarquía) y 08 reciben datos propios; 01, 04 y 07
-reciben rutas y forwards del plugin; 05 recibe los hallazgos de las cinco reglas del analizador, los hotspots y los
-secretos resueltos, pero ninguna faceta cubre el SQL concatenado; y 09 depende casi por completo de lo que el modelo
-decida leer, porque sus facetas de DI son de .NET.
+The practical consequence is that, in the Java case, 02, 03, 06 (hierarchy only) and 08 receive their own data; 01, 04 and 07
+receive routes and forwards from the plugin; 05 receives the findings of the analyzer's five rules, the hotspots and the
+resolved secrets, but no facet covers concatenated SQL; and 09 depends almost entirely on what the model
+decides to read, because its DI facets are .NET ones.
 
-## 2.2 01 Análisis funcional (`FunctionalAuditor`, `report_funcional`)
+## 2.2 01 Functional analysis (`FunctionalAuditor`, `report_funcional`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `metrics_summary`, `routes_summary`, `flows_summary`, `domain_entities_summary`, `workflow_steps_catalog`, `prompt_templates_catalog` |
-| Tools | las siete del auditor; el prompt pide `graph_domain` (`view: routes`) y `graph_neighbors` sobre la ruta y su clase (`report_funcional_prompt.md:52`); en modo B, cada subsistema elegido lo investiga un paso con esas mismas tools (apartado 1.6.1) |
-| Sistema | reconstruir el negocio a partir de nombres de tablas, campos, consultas y módulos, agrupar capacidades y dibujar uno o dos Mermaid (mapa de capacidades, ER o flujo de datos) |
-| Prompt | misión funcional, casos de uso y procesos, qué hace cada componente y a quién sirve |
-| Fuente por conclusión | dominio y capacidades: nombres del grafo estructural (cbm) y documentos (D), es decir, inferencia; puntos de entrada: rutas del plugin (R); casos de uso concretos: `graph_neighbors` sobre `HANDLES` y `FORWARDS_TO` (R) y lectura de código (C) si el modelo la hace |
-| Regla de fiabilidad | la general: el grafo para la estructura; no se le pide leer código para cada afirmación |
-| Puntos ciegos | sin `Flow` ni `WorkflowStep` en Java; 50 rutas y 50 entidades de miles; sus facetas no incluyen JSP, que solo ve con tools; el dominio deducido de nombres es una inferencia que el informe no distingue de un hecho |
+| Facets | `metrics_summary`, `routes_summary`, `flows_summary`, `domain_entities_summary`, `workflow_steps_catalog`, `prompt_templates_catalog` |
+| Tools | the seven of the auditor; the prompt asks for `graph_domain` (`view: routes`) and `graph_neighbors` on the route and its class (`report_funcional_prompt.md:52`); in mode B, each chosen subsystem is investigated in one step with those same tools (section 1.6.1) |
+| System | reconstruct the business from table, field, query and module names, group capabilities and draw one or two Mermaid diagrams (capability map, ER or data flow) |
+| Prompt | functional mission, use cases and processes, what each component does and whom it serves |
+| Source per conclusion | domain and capabilities: names from the structural graph (cbm) and documents (D), that is, inference; entry points: plugin routes (R); concrete use cases: `graph_neighbors` over `HANDLES` and `FORWARDS_TO` (R) and code reading (C) if the model does it |
+| Reliability rule | the general one: the graph for structure; it is not asked to read code for every claim |
+| Blind spots | no `Flow` or `WorkflowStep` in Java; 50 routes and 50 entities out of thousands; its facets do not include JSPs, which it only sees with tools; the domain deduced from names is an inference that the report does not distinguish from a fact |
 
 ## 2.3 02 Code smells (`CodeSmellsAuditor`, `report_codesmells`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `high_cyclomatic_methods` (con código), `bloated_classes`, `coupling_metrics`, `duplicate_summary`, `duplicate_candidates`, `unread_fields`, `unread_fields_summary`, `write_only_fields`, `unread_field_groups` |
-| Tools | las siete; el prompt solo nombra `graph_neighbors` en el protocolo de cobertura por subsistemas (`report_codesmells_prompt.md:103`) |
-| Sistema | criterio anti-dogma: tamaño no es mala calidad, distinguir motor cohesivo de God Class real y complejidad esencial de accidental, prohibido proponer micro-interfaces 1:1, matriz de riesgo operativo, evolutivo y ROI, soluciones en tres niveles |
-| Prompt | juzgar cada componente pre-extraído leyendo su código, agrupar en «motores especializados» y «smells confirmados», radar Mermaid y plan de remediación priorizado |
-| Fuente por conclusión | dónde mirar: métricas de `javac` y cálculos sobre aristas resueltas (F, R); veredicto de smell, cohesión o esencialidad: código (C), del `code_snippet` o de `view_file` |
-| Regla de fiabilidad | el veredicto exige leer el código y citar las líneas (`_graph_rules.md:5`); un grupo grande de campos sin leer suele ser de campos escritos o leídos por reflexión o serialización y hay que comprobarlo antes de tratarlo como estado inútil (`report_codesmells_prompt.md:47`) |
-| Puntos ciegos | solo ve los 30 métodos más complejos, 25 clases más grandes y 30 más acopladas; la duplicación solo llega si cbm dejó aristas `SIMILAR_TO`, y los smells sin métrica asociada (`catch` vacío, SQL concatenado) no le llegan como faceta y dependen de lo que lea; el fragmento corta a 70 líneas; la LOC por rango de líneas cuenta comentarios y blancos; el `fan_in` no cuenta las llamadas desde JSP, y el de un método tampoco sus usos por referencia de tipo, que solo suman en el de su clase |
+| Facets | `high_cyclomatic_methods` (with code), `bloated_classes`, `coupling_metrics`, `duplicate_summary`, `duplicate_candidates`, `unread_fields`, `unread_fields_summary`, `write_only_fields`, `unread_field_groups` |
+| Tools | the seven; the prompt only names `graph_neighbors` in the coverage protocol by subsystem (`report_codesmells_prompt.md:103`) |
+| System | anti-dogma criterion: size is not poor quality, distinguish a cohesive engine from a real God Class and essential from accidental complexity, 1:1 micro-interfaces are forbidden, operational, evolutionary and ROI risk matrix, solutions at three levels |
+| Prompt | judge each pre-extracted component by reading its code, group into «motores especializados» and «smells confirmados», Mermaid radar and prioritized remediation plan |
+| Source per conclusion | where to look: `javac` metrics and calculations over resolved edges (F, R); verdict on smell, cohesion or essentiality: code (C), from the `code_snippet` or from `view_file` |
+| Reliability rule | the verdict requires reading the code and citing the lines (`_graph_rules.md:5`); a large group of unread fields is usually fields that are written or read by reflection or serialization, and this must be checked before treating it as useless state (`report_codesmells_prompt.md:47`) |
+| Blind spots | it only sees the 30 most complex methods, 25 largest classes and 30 most coupled ones; duplication only arrives if cbm left `SIMILAR_TO` edges, and smells without an associated metric (empty `catch`, concatenated SQL) do not reach it as a facet and depend on what it reads; the snippet is cut at 70 lines; LOC by line range counts comments and blank lines; `fan_in` does not count calls from JSPs, and a method's does not count its uses by type reference either, which only add up in its class's |
 
-## 2.4 03 Código muerto (`DeadCodeAuditor`, `report_codigomuerto`)
+## 2.4 03 Dead code (`DeadCodeAuditor`, `report_codigomuerto`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `dead_code_summary`, `dead_code_candidates`, `dead_private_methods`, `unused_di_registrations`, `orphan_routes`, `struts_actions_without_handler`, `zero_fanin_classes`, `unread_fields`, `unread_fields_summary`, `write_only_fields`, `zero_fanin_groups`, `unread_field_groups`, `dynamic_instantiation_sites`, `reflection_targets` |
-| Tools | las siete; el prompt exige `graph_neighbors` con `direction: in`, comprobar `HANDLES`, los `page_imports` de las JSP y la configuración antes de declarar muerto un candidato (`report_codigomuerto_prompt.md:99`) |
-| Sistema | huérfanos, residuales (`_tmp`, `_bak`, `_old`…) y duplicados, por nivel de confianza |
-| Prompt | clasificar por confianza; lo que no se pueda descartar queda como candidato sin confirmar; un grupo con patrón común se verifica buscando la factoría con `grep_search` por su sufijo, prefijo o paquete y leyéndola, y si la instanciación dinámica es plausible va como «dudoso por instanciación dinámica», con la evidencia, y no como código muerto; un candidato con `named_in_configuration` no está muerto (`report_codigomuerto_prompt.md:100`, `report_codigomuerto_system.md:10`) |
-| Fuente por conclusión | candidato: `dead_code_candidate` de la alcanzabilidad de `JavaReachabilityWriter` (F sobre R), `fan_in` calculado de `CALLS` y `USES_TYPE` resueltas (F sobre R), acciones sin `HANDLES` (R) y campos privados sin `READS` (F sobre R); descarte: `graph_neighbors` entrante (R), `graph_search` sobre `Jsp` (R) y lectura de configuración (C) |
-| Regla de fiabilidad | «nadie lo llama» no prueba nada sin cruzar con `HANDLES`, JSP y configuración (`_graph_rules.md:6`), y un grupo grande con patrón común es señal de uso dinámico que hay que verificar (`_graph_rules.md:8`) |
-| Puntos ciegos | reflexión (`Class.forName`, factorías por configuración), XML de Struts más allá del atributo `type`, llamadas desde scriptlets (fuera del grafo, D9), DWR, EJB y `web.xml`; una clase usada solo a través de su interfaz no recibe `CALLS` en sus métodos, porque la llamada apunta al método de la interfaz, y solo su `new` (con constructor escrito o implícito) o su uso como tipo le dan `fan_in`. En el repositorio objetivo eso deja 400 de los 817 tipos con `fan_in` 0 en DAO `*Oracle*Impl` que una factoría instancia por `Class.forName` con el nombre compuesto (`src/geo/DAO/utilidades/UtilidadesDAO.java:202-206` de la copia): son falsos positivos. Desde la tanda C la faceta los resume en un grupo por su patrón y `dynamic_instantiation_sites` encuentra los `Class.forName` de esa factoría, que compone el nombre como `nombrePaquete + "." + nombreModulo + nombreClases + "Impl"` (`:202`, `:481`): el sufijo entero del grupo no aparece, y lo que lo marca `likely_dynamic` es la regla de la pieza fija, porque `"Impl"` es el final de tokens de su sufijo. No se ha comprobado sobre el grafo enriquecido del repositorio objetivo qué grupo sale exactamente, ni, sin LLM, si el auditor verifica la factoría como pide la regla. Un campo que un framework, la serialización o la reflexión leen por nombre no tiene `READS`; `unused_di_registrations` está vacía en Java. `JavaReachabilityWriter` conserva como dudosos (`low`) los tipos que un sitio de instanciación dinámica puede nombrar y no lee `META-INF/services` ni `.properties` (`JavaReachabilityWriter.cs:59-62`); su resultado sobre el repositorio objetivo no se ha medido |
+| Facets | `dead_code_summary`, `dead_code_candidates`, `dead_private_methods`, `unused_di_registrations`, `orphan_routes`, `struts_actions_without_handler`, `zero_fanin_classes`, `unread_fields`, `unread_fields_summary`, `write_only_fields`, `zero_fanin_groups`, `unread_field_groups`, `dynamic_instantiation_sites`, `reflection_targets` |
+| Tools | the seven; the prompt requires `graph_neighbors` with `direction: in`, checking `HANDLES`, the JSPs' `page_imports` and the configuration before declaring a candidate dead (`report_codigomuerto_prompt.md:99`) |
+| System | orphans, leftovers (`_tmp`, `_bak`, `_old`…) and duplicates, by confidence level |
+| Prompt | classify by confidence; whatever cannot be ruled out stays as an unconfirmed candidate; a group with a common pattern is verified by searching for the factory with `grep_search` by its suffix, prefix or package and reading it, and if dynamic instantiation is plausible it goes as «dudoso por instanciación dinámica», with the evidence, and not as dead code; a candidate with `named_in_configuration` is not dead (`report_codigomuerto_prompt.md:100`, `report_codigomuerto_system.md:10`) |
+| Source per conclusion | candidate: `dead_code_candidate` from `JavaReachabilityWriter`'s reachability (F over R), `fan_in` computed from resolved `CALLS` and `USES_TYPE` (F over R), actions without `HANDLES` (R) and private fields without `READS` (F over R); discard: incoming `graph_neighbors` (R), `graph_search` over `Jsp` (R) and configuration reading (C) |
+| Reliability rule | «nobody calls it» proves nothing without cross-checking `HANDLES`, JSPs and configuration (`_graph_rules.md:6`), and a large group with a common pattern is a sign of dynamic use that must be verified (`_graph_rules.md:8`) |
+| Blind spots | reflection (`Class.forName`, factories configured by configuration), Struts XML beyond the `type` attribute, calls from scriptlets (outside the graph, D9), DWR, EJB and `web.xml`; a class used only through its interface does not receive `CALLS` on its methods, because the call points to the interface's method, and only its `new` (with written or implicit constructor) or its use as a type gives it `fan_in`. In the target repository this leaves 400 of the 817 types with `fan_in` 0 in DAO `*Oracle*Impl` that a factory instantiates through `Class.forName` with the compound name (`src/geo/DAO/utilidades/UtilidadesDAO.java:202-206` of the copy): they are false positives. Since batch C the facet summarizes them in a group by their pattern, and `dynamic_instantiation_sites` finds the `Class.forName` calls of that factory, which composes the name as `nombrePaquete + "." + nombreModulo + nombreClases + "Impl"` (`:202`, `:481`): the whole suffix of the group does not appear, and what marks it `likely_dynamic` is the fixed-piece rule, because `"Impl"` is the end of the tokens of its suffix. It has not been checked on the enriched graph of the target repository which group exactly comes out, nor, without LLM, whether the auditor verifies the factory as the rule asks. A field that a framework, serialization or reflection reads by name has no `READS`; `unused_di_registrations` is empty in Java. `JavaReachabilityWriter` keeps as doubtful (`low`) the types that a dynamic instantiation site may name and does not read `META-INF/services` or `.properties` (`JavaReachabilityWriter.cs:59-62`); its result on the target repository has not been measured |
 
-## 2.5 04 Flujos end-to-end (`FlowsAuditor`, `report_flujos`)
+## 2.5 04 End-to-end flows (`FlowsAuditor`, `report_flujos`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `flows_catalog`, `flow_steps_graph`, `route_handlers_mapping`, `unresolved_forwards`, `di_resolutions`, `workflow_steps_catalog`, `documentation_and_prompts` |
-| Tools | las siete, con su tope propio en `CodebaseAnalysis:Auditors:MaxToolIterationsByRole:FlowsAuditor` (100 en el JSON del sample, el mismo que el resto; sin la clave, el general, 12 en el código: `CORE/appsettings.analysis.json:22-27`, `CORE/Models/AnalysisPipelineInput.cs:33`); el prompt da el recorrido: `SUBMITS_TO` desde la pantalla, `HANDLES` a la clase, `FORWARDS_TO` a las pantallas y `CALLS` desde el método de entrada, usando las resueltas como camino y confirmando las heurísticas en el código (`report_flujos_prompt.md:59`); en modo B lo hace por subsistema |
-| Sistema | mapear flujos desde el punto de entrada hasta la persistencia o la salida |
-| Prompt | camino crítico, datos en cada paso y decisiones, `sequenceDiagram` y `flowchart` |
-| Fuente por conclusión | camino: grafo resuelto (R); qué hace cada paso y qué datos viajan: código (C); forwards rotos: `enrichment_runs` (F) |
-| Regla de fiabilidad | aristas resueltas como camino, heurísticas confirmadas en el código |
-| Puntos ciegos | no hay nodos `Flow` para Java (es trabajo pendiente); las llamadas desde scriptlets no están; los forwards globales no son aristas; los includes y formularios dinámicos no se resuelven; el acceso a BD de los DAO no es un nodo en el grafo de cbm (con la preparación por subsistema, el inventario deja nodos `Table` y aristas `QUERIES`/`MODIFIES` del SQL escrito en cadenas, que esta plantilla no recibe como faceta); el tope de iteraciones limita la profundidad de cada flujo |
+| Facets | `flows_catalog`, `flow_steps_graph`, `route_handlers_mapping`, `unresolved_forwards`, `di_resolutions`, `workflow_steps_catalog`, `documentation_and_prompts` |
+| Tools | the seven, with its own cap in `CodebaseAnalysis:Auditors:MaxToolIterationsByRole:FlowsAuditor` (100 in the sample JSON, the same as the rest; without the key, the general one, 12 in the code: `CORE/appsettings.analysis.json:22-27`, `CORE/Models/AnalysisPipelineInput.cs:33`); the prompt gives the path: `SUBMITS_TO` from the screen, `HANDLES` to the class, `FORWARDS_TO` to the screens and `CALLS` from the entry method, using the resolved ones as the path and confirming the heuristics in the code (`report_flujos_prompt.md:59`); in mode B it does so per subsystem |
+| System | map flows from the entry point to persistence or output |
+| Prompt | critical path, data at each step and decisions, `sequenceDiagram` and `flowchart` |
+| Source per conclusion | path: resolved graph (R); what each step does and which data travels: code (C); broken forwards: `enrichment_runs` (F) |
+| Reliability rule | resolved edges as the path, heuristics confirmed in the code |
+| Blind spots | there are no `Flow` nodes for Java (it is pending work); calls from scriptlets are not included; global forwards are not edges; includes and dynamic forms are not resolved; DAO database access is not a node in the cbm graph (with subsystem preparation, the inventory leaves `Table` nodes and `QUERIES`/`MODIFIES` edges for the SQL written in strings, which this template does not receive as a facet); the iteration cap limits the depth of each flow |
 
-## 2.6 05 Errores y bugs (`SecurityBugAuditor`, `report_errores`)
+## 2.6 05 Errors and bugs (`SecurityBugAuditor`, `report_errores`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `critical_hotspots_exceptions` (con código), `detected_issues_summary`, `unvalidated_routes`, `route_auth_summary`, `suspicious_jsps`, `unresolved_forwards`, `suspect_patterns`, `hardcoded_secrets`, `resolved_secrets` |
-| Tools | las siete; el prompt no nombra `graph_neighbors`; en modo B investiga por subsistema |
-| Sistema | defectos lógicos, de seguridad y de estabilidad con criticidad P0-P3 |
-| Prompt | riesgos por lenguaje (en Java: asincronía, carreras, `catch` genéricos, fugas de conexiones), evaluar cada secreto leyendo la línea, rúbrica P0-P3 literal, matriz `ID \| Severidad \| Tipo \| Evidencia` y `critical=<n>` que el pipeline recalcula |
-| Fuente por conclusión | localización: facetas (F), hallazgos de las reglas del analizador (F) y JSP sospechosas (R, plugin); defecto y severidad: código (C); secreto: escaneo de disco o constante resuelta por `javac` (F) confirmado leyendo la línea (C) |
-| Regla de fiabilidad | el veredicto exige leer el código; la severidad sigue la rúbrica, y ante la duda baja salvo que la evidencia muestre la vía de explotación |
-| Puntos ciegos | en Java llega vacía `unvalidated_routes`; `suspect_patterns` y `critical_hotspots_exceptions` traen solo las cinco reglas del analizador (`catch` vacío, `==` entre `String`, `AutoCloseable` sin cerrar, desreferencia de un retorno que puede ser null y API obsoleta; `CORE/Enrichment/Java/JavaAnalyzer.java:56-57`), por cupo; ninguna faceta señala SQL concatenado ni `catch` genéricos que no estén vacíos; el escaneo de disco reconoce los secretos solo por nombre de identificador y solo en ficheros que el grafo referencia; una JSP marcada por SQL o DAO no dice si el SQL es vulnerable |
+| Facets | `critical_hotspots_exceptions` (with code), `detected_issues_summary`, `unvalidated_routes`, `route_auth_summary`, `suspicious_jsps`, `unresolved_forwards`, `suspect_patterns`, `hardcoded_secrets`, `resolved_secrets` |
+| Tools | the seven; the prompt does not name `graph_neighbors`; in mode B it investigates per subsystem |
+| System | logic, security and stability defects with P0-P3 criticality |
+| Prompt | language-specific risks (in Java: asynchrony, races, generic `catch`, connection leaks), evaluate each secret by reading the line, literal P0-P3 rubric, matrix `ID \| Severidad \| Tipo \| Evidencia` and `critical=<n>` which the pipeline recalculates |
+| Source per conclusion | location: facets (F), findings from the analyzer's rules (F) and suspicious JSPs (R, plugin); defect and severity: code (C); secret: disk scan or a constant resolved by `javac` (F) confirmed by reading the line (C) |
+| Reliability rule | the verdict requires reading the code; severity follows the rubric, and in case of doubt it goes down unless the evidence shows the exploitation path |
+| Blind spots | in Java `unvalidated_routes` comes back empty; `suspect_patterns` and `critical_hotspots_exceptions` carry only the analyzer's five rules (empty `catch`, `==` between `String`, unclosed `AutoCloseable`, dereference of a return that may be null, and obsolete API; `CORE/Enrichment/Java/JavaAnalyzer.java:56-57`), by quota; no facet flags concatenated SQL or generic `catch` blocks that are not empty; the disk scan recognizes secrets only by identifier name and only in files the graph references; a JSP flagged for SQL or DAO access does not say whether the SQL is vulnerable |
 
-## 2.7 06 Arquitectura y acoplamiento (`ArchitectureAuditor`, `report_arquitectura`)
+## 2.7 06 Architecture and coupling (`ArchitectureAuditor`, `report_arquitectura`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `project_components`, `martin_instability_metrics`, `dependency_cycles`, `layer_violations`, `architectural_communities`, `type_hierarchy`, `suspicious_jsps` |
-| Tools | las siete; el prompt pide reconstruir las capas con la jerarquía y `graph_neighbors` sobre clases base, puntos de entrada y pantallas, y dice que una JSP sospechosa es violación de capas solo si su código lo confirma (`report_arquitectura_prompt.md:60`); en modo B investiga por subsistema |
-| Sistema | fronteras modulares, núcleo desacoplado de la infraestructura, métricas de Martin, ciclos y violaciones, soluciones en tres niveles |
-| Prompt | topología actual y recomendada en Mermaid, hoja de ruta en tres niveles |
-| Fuente por conclusión | jerarquía: grafo resuelto (R), con su recuento de heurísticas; dependencias entre capas: `graph_neighbors` (R); violación de capas: código (C); Martin, ciclos y comunidades: facetas (F), vacías en Java |
-| Regla de fiabilidad | la general; la violación de capas en JSP exige código |
-| Puntos ciegos | en Java no hay inestabilidad, ciclos ni violaciones precalculadas; no hay agregación de dependencias por paquete entre sus facetas, así que la topología se reconstruye muestreando vecinos (con la preparación por subsistema, el grafo lleva además nodos `Subsystem` con `DEPENDS_ON` entre ellos, que se consultan con `graph_domain`, `view: subsystems`); las dependencias desde scriptlets no están |
+| Facets | `project_components`, `martin_instability_metrics`, `dependency_cycles`, `layer_violations`, `architectural_communities`, `type_hierarchy`, `suspicious_jsps` |
+| Tools | the seven; the prompt asks to reconstruct the layers with the hierarchy and `graph_neighbors` over base classes, entry points and screens, and states that a suspicious JSP is a layer violation only if its code confirms it (`report_arquitectura_prompt.md:60`); in mode B it investigates per subsystem |
+| System | modular boundaries, core decoupled from infrastructure, Martin metrics, cycles and violations, solutions at three levels |
+| Prompt | current and recommended topology in Mermaid, roadmap at three levels |
+| Source per conclusion | hierarchy: resolved graph (R), with its heuristic count; dependencies between layers: `graph_neighbors` (R); layer violation: code (C); Martin, cycles and communities: facets (F), empty in Java |
+| Reliability rule | the general one; a layer violation in a JSP requires code |
+| Blind spots | in Java there is no precomputed instability, cycles or violations; there is no aggregation of dependencies by package among its facets, so the topology is reconstructed by sampling neighbors (with subsystem preparation, the graph also has `Subsystem` nodes with `DEPENDS_ON` between them, which are queried with `graph_domain`, `view: subsystems`); dependencies from scriptlets are not included |
 
-## 2.8 07 Inventario de APIs y seguridad (`ApiSecurityAuditor`, `report_apis`)
+## 2.8 07 API inventory and security (`ApiSecurityAuditor`, `report_apis`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `routes_catalog`, `routes_security_matrix`, `routes_contracts`, `route_auth_summary`, `orphan_routes_list`, `struts_actions_without_handler`, `hardcoded_secrets`, `resolved_secrets` |
-| Tools | las siete; el prompt pide comprobar una autenticación `desconocido` en la clase que atiende la ruta o en la configuración del framework y, si no se puede, declararla no evaluable (`report_apis_prompt.md:74`) |
-| Sistema | inventario de la superficie expuesta, riesgos de transporte y acceso a datos, contratos futuros bajo Zero Trust |
-| Prompt | adaptar la superficie al tipo de aplicación, secretos reales a la matriz de seguridad, Mermaid de superficie |
-| Fuente por conclusión | superficie: rutas del plugin (R); autenticación y autorización: código y configuración (C); secretos: escaneo (F) y línea (C) |
-| Regla de fiabilidad | lo desconocido se declara no evaluable, nunca «sin protección» |
-| Puntos ciegos | `web.xml`, filtros de servlet, DWR y EJB remotos no están en el grafo; ve 50 rutas de 1484; `graph_domain` da «❔ Desconocida» en toda ruta Struts, porque el plugin no escribe `auth_required` (`CORE/Tools/GraphDomainTool.cs:150-156`); los contratos de las acciones Struts llegan nulos |
+| Facets | `routes_catalog`, `routes_security_matrix`, `routes_contracts`, `route_auth_summary`, `orphan_routes_list`, `struts_actions_without_handler`, `hardcoded_secrets`, `resolved_secrets` |
+| Tools | the seven; the prompt asks to check an authentication `desconocido` in the class that serves the route or in the framework configuration and, if that cannot be done, to declare it not evaluable (`report_apis_prompt.md:74`) |
+| System | inventory of the exposed surface, transport and data access risks, future contracts under Zero Trust |
+| Prompt | adapt the surface to the type of application, real secrets to the security matrix, surface Mermaid |
+| Source per conclusion | surface: plugin routes (R); authentication and authorization: code and configuration (C); secrets: scan (F) and line (C) |
+| Reliability rule | what is unknown is declared not evaluable, never «sin protección» |
+| Blind spots | `web.xml`, servlet filters, DWR and remote EJBs are not in the graph; it sees 50 of 1484 routes; `graph_domain` gives «❔ Desconocida» on every Struts route, because the plugin does not write `auth_required` (`CORE/Tools/GraphDomainTool.cs:150-156`); the contracts of the Struts actions come back null |
 
-## 2.9 08 Deuda técnica y hotspots (`TechnicalDebtAuditor`, `report_deuda`)
+## 2.9 08 Technical debt and hotspots (`TechnicalDebtAuditor`, `report_deuda`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `hotspots_ranking` (con código), `doc_coverage_metrics`, `todo_markers`, `commented_code`, `obsolete_elements`, `complex_classes`, `suspicious_jsps` |
-| Tools | las siete; el prompt pide medir el radio de impacto de cada hotspot con `graph_neighbors` antes de estimar esfuerzo (`report_deuda_prompt.md:70`) |
-| Sistema | índice de salud, deuda esencial frente a accidental, ponderación pragmática de hotspots (la plantilla dice `hotspot = round(CC·ln(1+fan_in), 2)`, `report_deuda_system.md:15`, como calculan los enriquecedores, `JavaGraphWriter.cs:1627`; en Office la ingesta usa un indicador propio, `IngestOfficeArtifactsStep.cs:804`), tres niveles y matriz esfuerzo/impacto en días-hombre |
-| Prompt | clasificar cada hotspot como núcleo cohesivo o deuda accidental, plan por sprints, dos Mermaid `flowchart` (matriz esfuerzo/impacto con un `subgraph` por cuadrante y hoja de ruta por sprints) |
-| Fuente por conclusión | concentración: métricas agregadas (F sobre R); radio de impacto: `graph_neighbors` (R); naturaleza de la deuda: código (C); esfuerzo en d/h: juicio del modelo sin dato de soporte |
-| Regla de fiabilidad | el veredicto exige leer el código; una JSP sospechosa es deuda solo si su código confirma el motivo |
-| Puntos ciegos | en Java el `hotspot` es solo de métodos (el analizador no lo escribe en los tipos), así que las clases salen de `complex_classes`; no hay historial de cambios (churn) en ninguna faceta |
+| Facets | `hotspots_ranking` (with code), `doc_coverage_metrics`, `todo_markers`, `commented_code`, `obsolete_elements`, `complex_classes`, `suspicious_jsps` |
+| Tools | the seven; the prompt asks to measure the impact radius of each hotspot with `graph_neighbors` before estimating effort (`report_deuda_prompt.md:70`) |
+| System | health index, essential versus accidental debt, pragmatic weighting of hotspots (the template says `hotspot = round(CC·ln(1+fan_in), 2)`, `report_deuda_system.md:15`, as the enrichers compute it, `JavaGraphWriter.cs:1627`; in Office the ingestion uses its own indicator, `IngestOfficeArtifactsStep.cs:804`), three levels and an effort/impact matrix in person-days |
+| Prompt | classify each hotspot as a cohesive core or accidental debt, sprint-based plan, two Mermaid `flowchart` diagrams (effort/impact matrix with one `subgraph` per quadrant and sprint roadmap) |
+| Source per conclusion | concentration: aggregated metrics (F over R); impact radius: `graph_neighbors` (R); nature of the debt: code (C); effort in d/h: model judgement with no supporting data |
+| Reliability rule | the verdict requires reading the code; a suspicious JSP is debt only if its code confirms the reason |
+| Blind spots | in Java `hotspot` is only for methods (the analyzer does not write it on types), so classes come from `complex_classes`; there is no change history (churn) in any facet |
 
-## 2.10 09 Inyección de dependencias y extensiones (`DiAuditor`, `report_di`)
+## 2.10 09 Dependency injection and extensions (`DiAuditor`, `report_di`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Facetas | `di_summary`, `di_registrations_catalog`, `di_lifetimes_mapping`, `unused_di_registrations`, `captive_dependencies`, `extension_points_catalog`, `config_adapters_mapping`, `creational_candidates` |
-| Tools | las siete; el prompt no nombra `graph_neighbors` |
-| Sistema | con contenedor formal, registros, ciclos de vida y dependencias cautivas; sin él, factorías, gestión de conexiones, acoplamiento en la UI y liberación de recursos, sin penalizar la ausencia de contenedor |
-| Prompt | ajuste al lenguaje, tabla semáforo y plan de acción |
-| Fuente por conclusión | candidatos: coincidencia por nombre (F); veredicto sobre el patrón creacional o el ciclo de vida: código (C) |
-| Regla de fiabilidad | la general; la plantilla pide confirmar cada candidato, porque el nombre no garantiza la función |
-| Puntos ciegos | en Java/Struts las facetas de DI llegan vacías y no se leen descriptores de Spring, EJB ni `web.xml`; las factorías por reflexión no dejan rastro en el grafo; la búsqueda por nombre (`Create*`, `*Connection*`, `*Client*`…) mete ruido y ordena por `fan_in` |
+| Facets | `di_summary`, `di_registrations_catalog`, `di_lifetimes_mapping`, `unused_di_registrations`, `captive_dependencies`, `extension_points_catalog`, `config_adapters_mapping`, `creational_candidates` |
+| Tools | the seven; the prompt does not name `graph_neighbors` |
+| System | with a formal container, registrations, lifecycles and captive dependencies; without one, factories, connection management, UI coupling and resource release, without penalizing the absence of a container |
+| Prompt | adjustment to the language, traffic-light table and action plan |
+| Source per conclusion | candidates: name matching (F); verdict on the creational pattern or the lifecycle: code (C) |
+| Reliability rule | the general one; the template asks to confirm each candidate, because the name does not guarantee the function |
+| Blind spots | in Java/Struts the DI facets come back empty and Spring, EJB or `web.xml` descriptors are not read; reflection-based factories leave no trace in the graph; the name search (`Create*`, `*Connection*`, `*Client*`…) adds noise and sorts by `fan_in` |
 
-## 2.11 Síntesis ejecutiva (`ExecutiveSynthesizer`, `report_sintesis`)
+## 2.11 Executive synthesis (`ExecutiveSynthesizer`, `report_sintesis`)
 
-| Aspecto | Contenido |
+| Aspect | Content |
 |---|---|
-| Entradas | por informe: semáforo, `critical`, fragmento de resumen y hasta 30 encabezados; métricas globales; con la preparación por subsistema, un resumen de cobertura por informe (`coverage_summary`); informes de ejecuciones anteriores marcados como tales |
-| Tools | ninguna |
-| Sistema | resumen ejecutivo contextualizado al ecosistema, sin confundir tamaño con mala calidad, sin copiar los informes, radar por área y top 5 de acciones en tres niveles |
-| Prompt | fidelidad a los informes de origen: no recalificar un semáforo sin justificarlo, incluir los de ejecuciones anteriores y tomar los P0/P1 del informe de errores |
-| Fuente por conclusión | solo los informes (lo que digan de sí mismos); ni grafo ni código |
-| Regla de fiabilidad | fidelidad a los informes; no incluye `_graph_rules.md` |
-| Puntos ciegos | no ve el detalle de los hallazgos, solo títulos y resumen, así que sus correlaciones son entre índices; mezcla informes de ejecuciones distintas cuando la actual es parcial; no puede comprobar nada |
+| Inputs | per report: traffic light, `critical`, summary excerpt and up to 30 headings; global metrics; with subsystem preparation, a coverage summary per report (`coverage_summary`); reports from earlier runs marked as such |
+| Tools | none |
+| System | executive summary contextualized to the ecosystem, without confusing size with poor quality, without copying the reports, radar by area and top 5 actions at three levels |
+| Prompt | fidelity to the source reports: do not re-rate a traffic light without justification, include those from earlier runs, and take the P0/P1 items from the errors report |
+| Source per conclusion | only the reports (what they say about themselves); neither graph nor code |
+| Reliability rule | fidelity to the reports; does not include `_graph_rules.md` |
+| Blind spots | it does not see the detail of the findings, only titles and summary, so its correlations are between indexes; it mixes reports from different runs when the current one is partial; it cannot check anything |
 
-## 2.12 Agrupación: evidencia compartida y tipo de juicio
+## 2.12 Grouping: shared evidence and type of judgement
 
-![Mapa informe → fuentes de evidencia → tipo de juicio, con modo A o B por informe; las fusiones siguen sin implementar](../assets/images/informes-evidencia-y-juicio.png)
+![Map from report → evidence sources → type of judgement, with mode A or B per report; mergers are still not implemented](../assets/images/informes-evidencia-y-juicio.png)
 
 <!-- Source: docs/assets/diagrams/informes-evidencia-y-juicio.excalidraw -->
 
-El criterio fijado por el usuario es agrupar solo lo que comparte evidencia y tipo de juicio, porque con tareas
-distintas el LLM pierde el foco. Aplicado a la parte 2, los nueve informes se ordenan en cinco tipos de juicio:
+The criterion set by the user is to group only what shares evidence and type of judgement, because with
+different tasks the LLM loses focus. Applied to part 2, the nine reports are sorted into five types of judgement:
 
-| Tipo de juicio | Informes | Evidencia que comparten |
+| Type of judgement | Reports | Shared evidence |
 |---|---|---|
-| Mantenibilidad: dónde duele y si merece la pena tocarlo | 02, 08 | métricas de complejidad, tamaño y acoplamiento (F sobre R) y lectura del código señalado (C); los dos aplican el mismo criterio anti-dogma y los mismos tres niveles |
-| Estructura y composición | 06, 09 | los dos juzgan cómo se ensamblan las piezas sobre la jerarquía y los vecinos (R); en Java comparten menos datos de lo que parece, porque 09 no tiene facetas de DI y vive de leer código |
-| Reconstrucción descriptiva del comportamiento | 01, 04 | rutas, `HANDLES`, forwards (R) y documentos (D); los dos describen, no dictaminan defectos |
-| Alcanzabilidad | 03 | `fan_in` calculado, `HANDLES` y JSP (F, R), con una regla de descarte propia |
-| Defecto y exposición | 05, 07 | comparten secretos y rutas, pero 05 dictamina defectos con rúbrica de severidad sobre código y 07 inventaría superficie y control de acceso |
+| Maintainability: where it hurts and whether it is worth touching | 02, 08 | complexity, size and coupling metrics (F over R) and reading of the flagged code (C); both apply the same anti-dogma criterion and the same three levels |
+| Structure and composition | 06, 09 | both judge how the pieces are assembled over the hierarchy and the neighbors (R); in Java they share less data than it seems, because 09 has no DI facets and lives off reading code |
+| Descriptive reconstruction of behaviour | 01, 04 | routes, `HANDLES`, forwards (R) and documents (D); both describe, they do not rule on defects |
+| Reachability | 03 | computed `fan_in`, `HANDLES` and JSPs (F, R), with its own discard rule |
+| Defect and exposure | 05, 07 | they share secrets and routes, but 05 rules on defects with a severity rubric over code and 07 inventories surface and access control |
 
-De ahí salen las tres propuestas del 2026-09-29. La (a) sigue **pendiente del OK del usuario** y sin implementar
-(`ReportType` conserva los nueve informes, `CORE/Models/AnalysisPipelineInput.cs:9-20`); de la (b) hay ya una parte en el
-código, y la (c) se ha abordado con otras piezas:
+Three proposals came out of this on 2026-09-29. (a) is still **pending the user's OK** and not implemented
+(`ReportType` keeps the nine reports, `CORE/Models/AnalysisPipelineInput.cs:9-20`); part of (b) is already in the
+code, and (c) has been addressed with other pieces:
 
-- **(a) Fusión de informes:** 02 Code smells con 08 Deuda técnica, y 06 Arquitectura con 09 DI, de 9 a 7 auditores. La
-  fusión 01+04 se decide después de ver informes reales. Se mantienen solos 03, 05 y 07, porque cada uno tiene tarea y
-  criterio propios: la regla de descarte de 03, la rúbrica P0-P3 y el recálculo de `critical` de 05 y el inventario de
-  superficie de 07. Cambia el contrato de `ReportType`, los nombres de fichero y la UI.
-- **(b) Detectores deterministas en `JavaAnalyzer`:** unas diez reglas tipo PMD (`catch` vacío o genérico, SQL
-  concatenado, recursos JDBC sin cerrar, `==` entre `String`, métodos largos, muchos parámetros, anidamiento) que lleguen
-  como facetas y que el LLM tríe leyendo el código. Están implementadas cinco reglas (`empty-catch`, `string-identity`,
-  `undisposed-resource`, `null-return-deref` y `obsolete-api`, `CORE/Enrichment/Java/JavaAnalyzer.java:56-57`), que llegan
-  a 05 por `detected_issues_summary`, `suspect_patterns` y `critical_hotspots_exceptions`; faltan el SQL concatenado, los
-  métodos largos, los muchos parámetros y el anidamiento.
-- **(c) Medir antes de compartir exploración:** tokens por auditor y cuánto código repiten entre ellos, antes de plantear
-  una exploración compartida por grupo con redacciones separadas, caché de prompts o un tope de concurrencia
-  (`CodebaseAnalysis:Reports:MaxParallelAuditors` ya existe, con 0 por defecto). Los huecos del apartado 1.14 son
-  justo esa medición. Desde entonces el consumo por paso se registra en `reports/_run_meta.json` (apartado 1.13), el
-  protocolo de notas (`CodebaseAnalysis:NoteProtocol`, activo por defecto) sustituye cada resultado de tool por la nota
-  del modelo, y existe una pasada compartida que lee el código una vez por lote, desactivada por defecto
-  (`CodebaseAnalysis:SharedPass:Enabled = false`, `CORE/appsettings.analysis.json:76-77`) y cuyo registro los informes
-  no consumen todavía (`CORE/Steps/SharedPassStep.cs:24`).
+- **(a) Merging reports:** 02 Code smells with 08 Technical debt, and 06 Architecture with 09 DI, from 9 to 7 auditors. The
+  01+04 merge is to be decided after seeing real reports. 03, 05 and 07 stay on their own, because each has its own task and
+  criteria: the discard rule of 03, the P0-P3 rubric and the recalculation of `critical` of 05, and the inventory of
+  surface of 07. It changes the contract of `ReportType`, the file names and the UI.
+- **(b) Deterministic detectors in `JavaAnalyzer`:** about ten PMD-style rules (empty or generic `catch`, SQL
+  concatenated, unclosed JDBC resources, `==` between `String`, long methods, many parameters, nesting) that arrive
+  as facets and that the LLM sifts by reading the code. Five rules are implemented (`empty-catch`, `string-identity`,
+  `undisposed-resource`, `null-return-deref` and `obsolete-api`, `CORE/Enrichment/Java/JavaAnalyzer.java:56-57`), which reach
+  05 through `detected_issues_summary`, `suspect_patterns` and `critical_hotspots_exceptions`; still missing are concatenated SQL, the
+  long methods, many parameters and nesting.
+- **(c) Measure before sharing exploration:** tokens per auditor and how much code they repeat among themselves, before proposing
+  a shared exploration per group with separate write-ups, a prompt cache or a concurrency cap
+  (`CodebaseAnalysis:Reports:MaxParallelAuditors` already exists, with 0 by default). The gaps in section 1.14 are
+  exactly that measurement. Since then consumption per step is recorded in `reports/_run_meta.json` (section 1.13), the
+  note protocol (`CodebaseAnalysis:NoteProtocol`, active by default) replaces each tool result with the model's note,
+  and a shared pass exists that reads the code once per batch, disabled by default
+  (`CodebaseAnalysis:SharedPass:Enabled = false`, `CORE/appsettings.analysis.json:76-77`), and whose record the reports
+  do not yet consume (`CORE/Steps/SharedPassStep.cs:24`).
 
-## 2.13 Contradicciones entre documentos y código
+## 2.13 Contradictions between documents and code
 
-No queda ninguna abierta. La que había enfrentaba al código con un documento de diseño del analizador Java que ya no
-está en el repositorio: el QN de los tipos no lo emite el analizador, lo construye .NET a partir de `chain` y la ruta
+None remains open. The one there was pitted the code against a design document for the Java analyzer that is no longer
+in the repository: the QN of the types is not emitted by the analyzer, .NET builds it from `chain` and the path
 (`CORE/Enrichment/Java/JavaGraphWriter.cs:924-932`).
 
-Corregidas el 2026-09-29, tras la prueba M:
+Corrected on 2026-09-29, after test M:
 
-- **`view_code_item` en el `ClaimAuditor`:** `WEB/README.md` §4 decía que aportaba «el fichero entero»; ahora dice que
-  solo aporta el tramo `Location` de cada nodo, que es lo que hace el código (`CORE/Chat/ClaimAuditor.cs:411-413`).
-- **Inactividad del chat:** `WEB/README.md` §3 daba 120 s a `StreamingInactivityTimeoutSeconds` del chat; ahora da los
-  300 que fija el JSON del sample para `ChatAssistant` (`CORE/appsettings.analysis.json:445`) y los 120 sin la clave.
-- **`graph_domain` y H-2:** pintaba «🔓 No» sin `auth_required`; ahora lo desconocido sale «❔ Desconocida»
+- **`view_code_item` in the `ClaimAuditor`:** `WEB/README.md` §4 said it provided «el fichero entero»; it now says that
+  it only provides the `Location` span of each node, which is what the code does (`CORE/Chat/ClaimAuditor.cs:429-436`).
+- **Chat inactivity:** `WEB/README.md` §3 gave 120 s to the chat's `StreamingInactivityTimeoutSeconds`; it now gives the
+  300 set by the sample JSON for `ChatAssistant` (`CORE/appsettings.analysis.json:445`) and the 120 without the key.
+- **`graph_domain` and H-2:** it showed «🔓 No» without `auth_required`; now the unknown case shows «❔ Desconocida»
   (`CORE/Tools/GraphDomainTool.cs:150-156`).
-- **`suspicious_jsps`:** las tres plantillas que la reciben la titulaban «con Código de Negocio, SQL o Sesión»; ahora
-  nombran el acceso a datos y el código de negocio en scriptlets y dicen que `session_access` no marca la pantalla, como
+- **`suspicious_jsps`:** the three templates that receive it titled it «con Código de Negocio, SQL o Sesión»; now
+  they name data access and business code in scriptlets and state that `session_access` does not flag the screen, as
   `JspScanner.cs:340-351`.
-- **`graph_neighbors` y Office:** etiquetaba «heurística cbm» toda arista sin `enriched_by`, también las `CALLS` de la
-  ingesta de Office (`OfficeTools/Steps/IngestOfficeArtifactsStep.cs:581`, sin propiedades); ahora las reconoce por el
-  `origin` de su nodo de origen y las etiqueta «ingesta Office», con su propio recuento en la cabecera
+- **`graph_neighbors` and Office:** it labelled every edge without `enriched_by` as «heurística cbm», including the `CALLS` from the
+  Office ingestion (`OfficeTools/Steps/IngestOfficeArtifactsStep.cs:581`, no properties); it now recognizes them by the
+  `origin` of their source node and labels them «ingesta Office», with its own count in the header
   (`CORE/Tools/GraphNeighborsTool.cs:71-73`, `:466-467`).
-- **`obsolete_elements`:** buscaba `is_obsolete` o `attributes`, y el analizador escribe `annotations`; ahora lee también
-  `annotations`, y un `@Deprecated` llega al informe 08 (`CORE/Steps/SqlFacetExtractorStep.cs:514-522`).
-- **Diagrama de cuadrante:** `report_deuda_prompt.md` pedía una «Matriz Cuadrante» que `_mermaid_guidelines.md` prohíbe
-  como `quadrantChart`; ahora la pide como `flowchart` con un `subgraph` por cuadrante.
-- **`_common_rules.md` dos veces:** lo incluían la plantilla de sistema y la de prompt de cada auditor y de la síntesis;
-  ahora solo la de prompt, y un test comprueba que el texto renderizado lo trae una vez
+- **`obsolete_elements`:** it looked for `is_obsolete` or `attributes`, and the analyzer writes `annotations`; it now also reads
+  `annotations`, and a `@Deprecated` reaches report 08 (`CORE/Steps/SqlFacetExtractorStep.cs:514-522`).
+- **Quadrant diagram:** `report_deuda_prompt.md` asked for a «Matriz Cuadrante» that `_mermaid_guidelines.md` prohibits
+  as `quadrantChart`; it now asks for a `flowchart` with one `subgraph` per quadrant.
+- **`_common_rules.md` twice:** both the system template and the prompt template of each auditor and of the synthesis included it;
+  now only the prompt template does, and a test checks that the rendered text carries it once
   (`Samples/CodebaseAnalysis.Core.Tests/DocumentTests.cs`, `Each_auditor_receives_the_common_rules_once`).
-- **Aviso de deriva de cbm (H-9):** atribuía a un cambio de versión de cbm los tipos sin casar de ficheros que cbm no
-  había indexado; ahora separa las dos causas (apartado 1.4).
+- **cbm drift warning (H-9):** it attributed to a cbm version change the unmatched types from files that cbm had not
+  indexed; it now separates the two causes (section 1.4).
 
 ## TL;DR
 
-El análisis indexa con cbm, corrige el grafo con `javac` y el plugin Struts, calcula facetas por SQL y lanza nueve
-auditores que deben usar el grafo para la estructura y leer el código para cada veredicto; la preparación por subsistema
-está activa por defecto y la pasada compartida, apagada. En Java el 09 sigue arrancando casi sin datos propios (las facetas de
-DI son de .NET); el 05 recibe ya los hallazgos de las cinco reglas del analizador y los secretos resueltos. La prueba M midió
-todo lo que no exige LLM (cbm, Java, facetas y el tamaño de los prompts) con la versión 2 de la escritura Java; los auditores
-no llegaron a correr porque Azure no tenía deployments, y la fusión 02+08 y 06+09, el resto de detectores deterministas y la
-medición de tokens siguen esperando tu OK y esa repetición. Desde las
-referencias de tipos y campos, el grafo Java dice también dónde se usa cada clase y cada campo, y eso llega al chat, a
-los auditores y a las facetas de código muerto; su falso positivo más grande son los DAO que se instancian por reflexión, que desde la tanda C llegan al 03 agrupados, cruzados con los sitios de instanciación dinámica y con la regla de verificar la factoría con `grep_search` antes de darlos por muertos.
+The analysis indexes with cbm, corrects the graph with `javac` and the Struts plugin, computes facets by SQL and launches nine
+auditors that must use the graph for structure and read the code for each verdict; subsystem preparation
+is active by default and the shared pass is off. In Java, 09 still starts with almost no data of its own (the facets of
+DI are .NET ones); 05 already receives the findings of the analyzer's five rules and the resolved secrets. Test M measured
+everything that does not require an LLM (cbm, Java, facets and prompt sizes) with version 2 of the Java writing; the auditors
+did not get to run because Azure had no deployments, and the 02+08 and 06+09 merges, the rest of the deterministic detectors and the
+token measurement are still waiting for your OK and that repetition. Since the
+type and field references, the Java graph also says where each class and each field is used, and that reaches the chat, the
+auditors and the dead-code facets; its largest false positive is the DAOs instantiated by reflection, which since batch C reach 03 grouped, cross-referenced with the dynamic instantiation sites and with the rule of verifying the factory with `grep_search` before treating them as dead.

@@ -9,17 +9,28 @@
 ## Reference the framework
 
 The framework is **not published to NuGet** — no project in this repository sets
-`PackageId`, `IsPackable` or `GeneratePackageOnBuild`. Reference it as a project:
+`PackageId` or `GeneratePackageOnBuild`, and `IsPackable` only appears as `false` (test projects and samples; the
+`CodebaseAnalysis.Designer` sample plugin is packed as a plugin `.nupkg` by its own `pack-plugin.ps1`, not as a framework
+package). Reference it as a project:
 
 ```bash
-dotnet add reference ../AITaskAgent/Framework/AITaskAgent.csproj
+dotnet add reference ../AITaskAgent/AITaskAgent.Extensions.Llm/AITaskAgent.Extensions.Llm.csproj
 ```
 
 Or in your `.csproj`:
 
 ```xml
-<ProjectReference Include="..\AITaskAgent\Framework\AITaskAgent.csproj" />
+<ProjectReference Include="..\AITaskAgent\AITaskAgent.Extensions.Llm\AITaskAgent.Extensions.Llm.csproj" />
 ```
+
+The framework is split into projects (see [Architecture v2](../ARCHITECTURE-v2.md)). `AITaskAgent.Extensions.Llm` brings
+`AITaskAgent.Core` and `AITaskAgent.Abstractions` with it and is what any application with LLM steps references; a pipeline
+without LLM steps can reference `AITaskAgent.Core` alone and use `AddAITaskAgentCore()` / `UseAITaskAgentCore()`. Add
+`AITaskAgent.Yaml` for declarative pipelines, `AITaskAgent.Extensions.Script` for JavaScript steps (it brings
+`AITaskAgent.Extensions.Script.Worker`, the process that runs them) and `AITaskAgent.Extensions.CSharp` for `CSharpStep`
+(references Core). `AITaskAgent.NugetLoader` (NuGet resolver and plugin loader) references `AITaskAgent.Abstractions` only. The tools
+(`FileTools`, `OfficeTools`, `McpIntegration`) and the providers (`OpenAILLmService`, `GeminiLlmService`, `OllamaLlmService`) are separate projects
+that reference the LLM extension.
 
 For the full walkthrough from an empty folder, see
 [Starting a New Project](new-project.md).
@@ -59,12 +70,13 @@ await host.RunAsync();
 > `AvailableTools.Instance`. Without it, the first call to `PipelineContextFactory.Create()`
 > throws `InvalidOperationException: PipelineContextFactory is not initialized.`
 
-`AddAITaskAgent()` registers, among others:
+`AddAITaskAgent()` (core plus LLM extension) registers, among others:
 
 | Service | Lifetime | Notes |
 |---------|----------|-------|
 | `IPipeline` → `Pipeline` | Singleton | Built from `PipelineOptions` |
-| `PipelineContextFactory` | Singleton | Also sets the static instance used by `PipelineContextFactory.Create()` |
+| `PipelineContextFactory` | Singleton | Replaced by `LlmPipelineContextFactory` (so the default context is an `LlmPipelineContext`); also sets the static instance used by `PipelineContextFactory.Create()` |
+| `IStepRegistry` | Singleton (instance) | Core steps plus those the extensions register (`LlmStep`, ...) |
 | `IEventChannel` → `EventChannel` | Singleton | Log level from `Observability.EventLogLevel` |
 | `IPipelineContextStorage` → `InMemoryPipelineContextStorage` | Singleton | |
 | `ITemplateRendered` → `TinyTemplateRendered` | Singleton | |

@@ -96,7 +96,7 @@ var typed = new ParallelStep<StepResult<string>>("FetchAll", new FetchUserStep()
 ```
 
 **Key behaviors:**
-- Each branch runs on `context.CloneForBranch()`: a **cloned** `ConversationContext` and its own
+- Each branch runs on `context.CloneForBranch()`: (in an `LlmPipelineContext`) a **cloned** `ConversationContext` and its own
   step path, so nested results are keyed independently. That path keeps the parent's path and adds
   the parallel step's name and the branch name: a branch `FetchUserStep` of `FetchAll` caches its
   step under `{parent}/FetchAll/FetchUserStep/FetchUserStep` (for example
@@ -107,8 +107,12 @@ var typed = new ParallelStep<StepResult<string>>("FetchAll", new FetchUserStep()
 - All branches pass through the middleware chain (observability, timeout, retry)
 - Concurrency is capped by `MaxDegreeOfParallelism` (init-only; `0`, the default, means
   `Environment.ProcessorCount`)
-- A failing branch does not cancel the others: every error message is joined into
-  `ParallelResult.Error`, so the parallel step fails if any branch failed
+- A failing branch does not cancel the others. With `FailFast = true` (the default) every error
+  message is joined into `ParallelResult.Error`, so the parallel step fails if any branch failed.
+  With `FailFast = false` the step returns no aggregate error, even if every branch failed: each
+  failed branch keeps its own error in its entry of `ParallelResult.Value` (`HasError` / `Error`) and
+  in its `BranchCompletedEvent` (`Success = false`, `ErrorMessage`), and whoever reads the result
+  decides what to do with it
 - Results are keyed by each branch step's `Name`
 
 **Accessing results:**
@@ -174,7 +178,10 @@ var breakStep = new BreakStep("StopWhenApproved");
 
 It returns a `BreakStepResult` carrying `input.Value`. `LoopStep` unwraps it into an ordinary
 result, so a `BreakStep` never accidentally breaks an outer loop. Route to it conditionally — for
-example from a `SwitchStep` that inspects the critic's verdict.
+example from a `SwitchStep` that inspects the critic's verdict — or give it a condition: `When` (`when:` in YAML) is a
+template expression over `input` and `context` (`input.done`), and the loop exits only if it is truthy; otherwise the
+step hands its input on unchanged and the loop continues. Without `When` it always exits, and an empty or blank `When`
+is rejected when it is set (in YAML, when the pipeline is built). See [YAML pipelines](yaml-pipelines.md).
 
 ### SwitchStep
 
@@ -194,8 +201,39 @@ var router = new SwitchStep<AnalysisResult>(
 The selector returns `(IStep target, IStepResult value)`. The target is appended to
 `value.NextSteps` and a `StepRoutingEvent` is emitted. Returning `null` for either element throws.
 
+In a YAML pipeline the same routing is declared with `type: SwitchStep`, an `on` expression and `cases`/`default` that
+contain child steps (the class is `DeclarativeSwitchStep`; the generic `SwitchStep<TIn>` above is the code-first form).
+
 For LLM-driven routing over string keys, use `RouterStep` — see
 [Intention Routing](intention-routing.md).
+
+### SuspendStep
+
+Suspends the pipeline to ask for more information. The first time it runs it returns an
+`AwaitingInputResult` (`SuspendInfo`, the rendered `Message` and `DataToReview`) and the pipeline stops;
+executing the pipeline again with the same context and the response as input resumes it, and the step
+returns the response as its result. See [Human in the loop](human-in-the-loop.md) and
+[`SuspendStep` in YAML](yaml-pipelines.md#suspendstep-requesting-more-information).
+
+### ExecStep
+
+Runs an external executable or batch file (`.exe`, `.bat`, `.cmd`) and returns the text of its standard
+output. It is not a shell: `Executable` is a literal and each item of `Args` is rendered on its own and
+passed as exactly one argument. See [`ExecStep` in YAML](yaml-pipelines.md#execstep-running-an-external-executable).
+
+### ScriptStep
+
+Lives in the `AITaskAgent.Extensions.Script` assembly, not in Core. Runs JavaScript (the body of
+`function (input, context)`) without an LLM and returns its value as JSON. The scripts run in a worker
+process, one per pipeline run. See [`ScriptStep` in YAML](yaml-pipelines.md#scriptstep-javascript-declarable)
+and `AITaskAgent.Extensions.Script/README.md`.
+
+### CSharpStep
+
+Lives in the `AITaskAgent.Extensions.CSharp` assembly. Runs C# declared in the pipeline (YAML
+`type: CSharpStep`): its `Code` is the body of `static async Task<IStepResult> Step(StepCall call)`, which
+the host compiles with the other `CSharpStep`s of a package into one unit. The code runs in the host
+process, not isolated, with the host's permissions.
 
 ## Step Configuration
 
@@ -266,10 +304,38 @@ IReadOnlyList<IStepValidator> current = step.Validators;
 and stops at the first failure. Steps that implement `IStep` directly (`SwitchStep`, `RouterStep`)
 have no validator list.
 
-`IStepValidator` is deliberately decoupled from Core so validators can ship from external modules,
-and its `Id` is what a [YAML pipeline](yaml-pipelines.md) references. Each failure emits a
+`IStepValidator` is deliberately decoupled from Core so validators can ship from external modules.
+Besides it, `StepBase` has `AddResultValidator` / `ResultValidators` (`IResultValidator`): validators of
+the result itself, which run as part of `IStepResult.ValidateAsync`, in the structural slot of the
+retry loop. In YAML both are attached with the step keys `validators:` (`IStepValidator`) and
+`resultValidators:` (`IResultValidator`, or `schema:<name>` for a registered schema), next to
+`outputSchema`; see [Hooks and Validators on Any Step](yaml-pipelines.md#hooks-and-validators-on-any-step).
+Each failure emits a
 `StepValidationEvent` (`ValidationType` = `"structural"` or `"semantic"`) and retries with the
 error message as feedback.
+
+### Display text
+
+Every `StepBase` step has `DisplayStart` and `DisplayEnd` (string templates, null by default) that fill
+`StepStartedEvent.Display` and `StepCompletedEvent.Display` with the text the step wants shown. They use the
+template engine over `step`, `input`, `context` and `data` (and `output`, `success`, `error`, `durationMs` at the
+end); see [Display text](event-system.md#display-text) for the model, examples and limits.
+
+```csharp
+step.DisplayStart = "Reading {{ input.fileName }}";
+step.DisplayEnd   = "{{ output.rows }} rows in {{ durationMs }} ms";
+```
+
+### Hooks
+
+`StepBase.Hooks` (a `StepHooks`, set once when the step is built) holds the code the host attaches to a
+step's extension points: `PostProcess`, `OnFinalize`, `EnrichActivityBefore` / `EnrichActivityAfter`,
+`EnrichStarted` and `EnrichCompleted`. A step type declares its own hooks class with
+`[HooksType(typeof(...))]`; LLM steps use `LlmStepHooks` (see [LLM Steps](llm-steps.md#hooks)). In C# the
+slots that wrap built-in behaviour (`PostProcess`, and `BuildUserMessage` or `ParseResponse` in LLM
+steps) are `HookAround` delegates that receive `next`, the built-in behaviour. The forms without `next`
+exist in the declarative layers (JavaScript and YAML); see
+[Hooks and Validators on Any Step](yaml-pipelines.md#hooks-and-validators-on-any-step).
 
 ### Observability enrichment
 

@@ -6,12 +6,18 @@ A provider is an implementation of `ILlmService`. It is a **protocol adapter**: 
 `LlmRequest` into an HTTP call and the answer back into an `LlmResult`. It holds no configuration
 of its own — connection details arrive on every request — and it does not price the call.
 
-Two implementations ship with the repository and are the best reference material:
+Three projects ship with the repository, with these `ILlmService.Name` values (the `ServiceType` of a provider):
 
-- [`OpenAILlmService`](../../OpenAILLmService/OpenAILlmService.cs) — raw HTTP against any
-  OpenAI-compatible chat-completions endpoint (OpenAI, OpenRouter, Groq, NVIDIA, Ollama, LM Studio).
-- [`GeminiLlmService`](../../GeminiLlmService/GeminiLlmService.cs) — the Google GenAI SDK, with
+- [`OpenAILlmService`](../../OpenAILLmService/OpenAILlmService.cs) (`openai`) — raw HTTP against any
+  OpenAI-compatible chat-completions endpoint (OpenAI, OpenRouter, Groq, NVIDIA, LM Studio). The same project has the variants
+  `AzureOpenAILlmService` (`azure-openai`), `OpenRouterLlmService` (`openrouter`) and the Responses API ones,
+  `OpenAIResponsesLlmService` (`openai-responses`) and `AzureOpenAIResponsesLlmService` (`azure-openai-responses`), which inherit
+  its transport and only replace the wire format.
+- [`OllamaLlmService`](../../OllamaLlmService/OllamaLlmService.cs) (`ollama`) — Ollama's own API.
+- [`GeminiLlmService`](../../GeminiLlmService/GeminiLlmService.cs) (`gemini`) — the Google GenAI SDK, with
   rate limiting, retry policy, file and cache managers.
+
+They are the best reference material.
 
 ## ILlmService Interface
 
@@ -58,8 +64,9 @@ public class OpenAILlmService : ILlmService, IDisposable
 
 ### Cost is not your job
 
-`LlmResult.CostUsd` has an assembly-internal setter. A service reports token counts; it never sees
-the model catalogue, so it cannot price them. `BaseLlmStep` fills the value in after the call:
+`LlmResult.CostUsd` has an assembly-internal setter. A service normally reports token counts and does not price them, because it
+never sees the model catalogue. `LlmResult.Success(...)` does accept a `costUsd`, but `BaseLlmStep` only prices the call when the
+result carries none (`result.CostUsd is null`), so leaving it out is the usual path:
 
 ```csharp
 // private helper in BaseLlmStep: priced by the model the service reports, then by the requested one
@@ -332,4 +339,4 @@ There is no keyed registration and no `ILlmServiceFactory`: selection happens th
 
 Binding fails at startup — deliberately, and loudly — when `ServiceType` matches no registered
 service, when `BaseUrl` is missing, when a role names an unknown provider, when a role omits
-`Model`, or when `DefaultRole` is not among the configured roles.
+`Model`, or when `DefaultRole` is not among the configured roles (checked only when at least one role is configured).

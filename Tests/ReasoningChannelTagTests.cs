@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -175,7 +176,7 @@ public sealed class ReasoningChannelTagTests
     private static Task<IStepResult> RunAsync(IStep step) =>
         step.ExecuteAsync(
             new LlmStringStepResult(new EmptyStep("Seed")) { Content = "analiza el proyecto" },
-            new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+            new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
     [Fact]
     public async Task Tag_written_in_the_reasoning_channel_is_executed()

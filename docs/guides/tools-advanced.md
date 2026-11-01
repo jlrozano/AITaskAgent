@@ -329,9 +329,11 @@ model nothing; cutting on repetition ends the loop as soon as progress stops.
 
 **Log messages:**
 ```
-Step {StepName} repeated the same tool calls ({Count} consecutive)
-Step {StepName} stopped: tool calls [{Tools}] repeated {Count} times without progress
+Debug:   Step {StepName} repeated the same tool calls ({Count} consecutive)
+Warning: Step {StepName} stopped: tool calls [{Tools}] repeated {Count} times without progress
 ```
+
+The `Debug` line is logged when the calls repeat but the loop is not cut yet; the `Warning` one when it stops.
 
 Declare `IsReadOnly => true` on any tool that only observes state — it directly buys the model
 more room to explore.
@@ -369,7 +371,7 @@ If the requested tool is not in the step's `Tools` collection:
 // → No ToolCompletedEvent: the tool never ran
 ```
 
-The lookup is by exact `Name` (case-sensitive). If the name matches a registered **tag handler**
+The lookup is by `Name`, ignoring case. If the name matches a registered **tag handler**
 instead, the message restates that tag's instructions (or, if the tag already ran in the same
 response, tells the model the action is done).
 
@@ -471,7 +473,7 @@ public class DatabaseQueryTool : LlmTool
         var args = JsonSerializer.Deserialize<QueryArgs>(argumentsJson);
         return baseEvent with
         {
-            AdditionalData = new Dictionary<string, object?>
+            AdditionalData = new Dictionary<string, object>
             {
                 ["query"] = args.Query,
                 ["limit"] = args.Limit

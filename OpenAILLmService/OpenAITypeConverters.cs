@@ -22,7 +22,7 @@ internal static class OpenAITypeConverters
         {
             "system" => new JObject { ["role"] = "system", ["content"] = message.Content },
 
-            "user" => new JObject { ["role"] = "user", ["content"] = message.Content },
+            "user" => new JObject { ["role"] = "user", ["content"] = AttachmentWire.ChatUserContent(message) },
 
             "assistant" when message.ToolCalls?.Count > 0 => new JObject
             {

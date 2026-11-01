@@ -49,7 +49,7 @@ public IntentionAnalyzerStep(
 | `options` | **Required and non-empty**; throws `ArgumentException` if empty |
 | `promptTemplateName` | Template text, or a template name when `templateProvider` is supplied. Defaults to `{{ input }}` |
 | `systemPromptTemplateName` | Appended after `role.SystemPrompt`. Defaults to `"Analyze and clarify the user's intention."` |
-| `tools` | Tool names resolved through `AvailableTools.Instance` |
+| `tools` | Tool names resolved through `AvailableTools.Instance` (an unknown name is silently dropped) |
 
 ### The option catalogue is always injected
 

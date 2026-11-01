@@ -2,6 +2,10 @@
 
 `AITaskAgent.LLM.*`
 
+> From v2 this code lives in the `AITaskAgent.Extensions.Llm` assembly, which depends on `AITaskAgent.Core` and is
+> registered with `LlmExtension` (`AddAITaskAgentLlm()`, or `AddAITaskAgent()` for core plus LLM). Namespaces did not change.
+> The conversation is no longer part of the base `PipelineContext`: it lives in `LlmPipelineContext` (below).
+
 ## Configuration model: provider × role
 
 There is no `LlmProviderConfig`, no `LlmProvidersConfig` and no `ILlmProviderResolver`. LLM
@@ -34,7 +38,7 @@ public class FallbackProviderSettings
 }
 ```
 
-**Source:** [LlmEnvironment.cs](../../Framework/LLM/Configuration/LlmEnvironment.cs)
+**Source:** [LlmEnvironment.cs](../../AITaskAgent.Extensions.Llm/Configuration/LlmEnvironment.cs)
 
 ### LlmProvider
 
@@ -68,7 +72,7 @@ prompt tokens are clamped to the prompt tokens and billed at `CachedInputPricePe
 `Service` is resolved at binding time by matching the JSON `ServiceType` (defaulting to the
 provider key) against the `Name` of each registered `ILlmService`.
 
-**Source:** [LlmProvider.cs](../../Framework/LLM/Configuration/LlmProvider.cs)
+**Source:** [LlmProvider.cs](../../AITaskAgent.Extensions.Llm/Configuration/LlmProvider.cs)
 
 ### LlmRole
 
@@ -95,7 +99,7 @@ conversation to its initial bookmark on each switch. It only switches when the e
 `OriginalException` is an `LlmProviderException`, and refuses a fallback whose `Model` or
 `Provider.Service` did not resolve.
 
-**Source:** [LlmRole.cs](../../Framework/LLM/Configuration/LlmRole.cs)
+**Source:** [LlmRole.cs](../../AITaskAgent.Extensions.Llm/Configuration/LlmRole.cs)
 
 ### LlmInferenceSettings
 
@@ -146,7 +150,7 @@ Configuration mirrors that split:
 }
 ```
 
-**Source:** [LlmInferenceSettings.cs](../../Framework/LLM/Configuration/LlmInferenceSettings.cs)
+**Source:** [LlmInferenceSettings.cs](../../AITaskAgent.Extensions.Llm/Configuration/LlmInferenceSettings.cs)
 
 ---
 
@@ -165,8 +169,8 @@ public abstract partial class BaseLlmStep(
     string? systemPrompt = null) : StepBase(name, inputType, outputType), IFallbackable
 {
     public int MaxToolIterations { get; init; } = 5;
-    public IList<ITool> Tools { get; set; }
-    public List<ITagHandler> TagHandlers { get; init; } = [];
+    public virtual IList<ITool> Tools { get; set; }
+    public virtual List<ITagHandler> TagHandlers { get; init; } = [];
     public string? SystemPrompt { get; set; }
     public string? Prompt { get; set; }
 
@@ -196,7 +200,10 @@ public class BaseLlmStep<TIn, TOut>(
 ```
 
 `ParseLlmResponseAsync` receives the `LlmResult`, not a bare response. `SetRole` exists for steps
-built before their role is known (YAML deserialization) and rewinds the fallback chain.
+built before their role is known (`YamlLlmStep` calls it once its configuration has been populated) and rewinds the fallback chain.
+
+`BaseLlmStep` declares `RequiredContext => typeof(LlmPipelineContext)`: running it with a base `PipelineContext` fails
+before the first step runs. `GetConversationContext` reads the conversation through `context.AsLlmContext(Name)`.
 
 ```csharp
 var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>("Chat", role, userPrompt)
@@ -205,7 +212,7 @@ var step = new BaseLlmStep<LlmStringStepResult, LlmStringStepResult>("Chat", rol
 };
 ```
 
-**Source:** [BaseLlmStep.cs](../../Framework/LLM/Steps/BaseLlmStep.cs)
+**Source:** [BaseLlmStep.cs](../../AITaskAgent.Extensions.Llm/Steps/BaseLlmStep.cs)
 
 ---
 
@@ -242,7 +249,7 @@ public sealed record LlmRequest : LlmInferenceSettings
 There is no `Profile` property. Connection data is copied onto the request by the step, so an
 `ILlmService` is stateless with respect to configuration.
 
-**Source:** [LlmRequest.cs](../../Framework/LLM/Models/LlmRequest.cs)
+**Source:** [LlmRequest.cs](../../AITaskAgent.Extensions.Llm/Models/LlmRequest.cs)
 
 ### LlmResult
 
@@ -284,7 +291,7 @@ public sealed class LlmResult
 }
 ```
 
-**Source:** [LlmResult.cs](../../Framework/LLM/Models/LlmResult.cs)
+**Source:** [LlmResult.cs](../../AITaskAgent.Extensions.Llm/Models/LlmResult.cs)
 
 ### LlmResponse
 
@@ -303,7 +310,7 @@ public sealed record LlmResponse
 }
 ```
 
-**Source:** [LlmResponse.cs](../../Framework/LLM/Models/LlmResponse.cs)
+**Source:** [LlmResponse.cs](../../AITaskAgent.Extensions.Llm/Models/LlmResponse.cs)
 
 ### LlmStreamChunk
 
@@ -381,13 +388,14 @@ public interface ILlmStepResult<T> : ILlmStepResult, IStepResult<T> { }
 | `LlmStepResult<T>` | `T` | Typed variant |
 | `LlmStringStepResult` | `string` | Adds `Content` and `ToolCalls`; valid when either is present |
 | `LlmIntentionResult` | `Intention` | Produced by `IntentionAnalyzerStep`, consumed by `RouterStep` |
+| `LlmJsonStepResult` | `JToken` | `LlmStepResult<JToken>` plus a `JsonSchema`; validates with `JsonStepResult.Validate`. Produced by `YamlLlmStep` when it has an `outputSchema` |
 
 ---
 
 ## Tool Base Class
 
 ```csharp
-public abstract class LlmTool : ITool
+public abstract class LlmTool : ITool, IDisplayable
 {
     public const string ParametersDataKey = "parameters";   // keys used in the tool events' AdditionalData
     public const string ResultDataKey = "result";
@@ -396,6 +404,10 @@ public abstract class LlmTool : ITool
     public abstract string Description { get; }
     public virtual string? UsageGuidelines => null;
     public virtual bool IsReadOnly => false;
+
+    // IDisplayable: templates of the text shown in ToolStartedEvent.Display / ToolCompletedEvent.Display
+    public virtual string? DisplayStart { get; set; }
+    public virtual string? DisplayEnd { get; set; }
 
     protected abstract BinaryData ParametersSchema { get; }
     public virtual ToolDefinition GetDefinition();
@@ -417,9 +429,10 @@ public abstract class LlmTool : ITool
 }
 ```
 
-`LlmTool` implements `ITool` only — it is not an `IEnrichable`/`IEnrichableStep`.
+`LlmTool` implements `ITool` and `IDisplayable` — it is not an `IEnrichable`/`IEnrichableStep`. `DisplayStart` / `DisplayEnd` are the templates of
+`ToolStartedEvent.Display` / `ToolCompletedEvent.Display`; see [Display text](observability-namespace.md#display-text).
 
-**Source:** [LlmTool.cs](../../Framework/LLM/Tools/Base/LlmTool.cs)
+**Source:** [LlmTool.cs](../../AITaskAgent.Extensions.Llm/Tools/Base/LlmTool.cs)
 
 ### Registry
 
@@ -443,6 +456,45 @@ case-insensitive, and `GetAllTools(module)` filters by the assembly name declari
 
 ---
 
+## LlmPipelineContext
+
+The context LLM steps require. It extends the base `PipelineContext` with the conversation.
+
+```csharp
+// namespace AITaskAgent.LLM.Conversation.Context
+public record LlmPipelineContext : PipelineContext
+{
+    public LlmPipelineContext(IEventChannel? eventChannel = null);
+    public LlmPipelineContext(IEventChannel? eventChannel, IServiceProvider serviceProvider);
+
+    public ConversationContext Conversation { get; init; }
+    public override LlmPipelineContext CloneForBranch();   // clones the conversation
+
+    public static LlmPipelineContext From(PipelineContext context, string? requester = null);
+}
+
+public static class LlmPipelineContextExtensions
+{
+    public static LlmPipelineContext AsLlmContext(this PipelineContext context, string? requester = null);
+}
+
+public class LlmPipelineContextFactory : PipelineContextFactory
+{
+    public static LlmPipelineContext Create(
+        ConversationContext? conversation = null,
+        IEnumerable<Func<IProgressEvent, CancellationToken, Task>>? subscribers = null);
+}
+```
+
+`AddAITaskAgent()` / `AddAITaskAgentLlm()` register `LlmPipelineContextFactory` as the `PipelineContextFactory`, so the context a pipeline gets by
+default is already an `LlmPipelineContext`. `AsLlmContext` (and `From`) throw `InvalidOperationException` with a message that names the
+requesting step and the actual context type when the context is not an LLM one. A parallel branch gets a clone with its own conversation, so
+concurrent branches never write into each other.
+
+**Source:** [LlmPipelineContext.cs](../../AITaskAgent.Extensions.Llm/Conversation/Context/LlmPipelineContext.cs)
+
+---
+
 ## ConversationContext
 
 ```csharp
@@ -459,6 +511,7 @@ public sealed class ConversationContext(
     public DateTime LastActivityAt { get; set; }
 
     public ConversationContext AddUserMessage(string content);
+    public ConversationContext AddUserMessage(string content, IReadOnlyList<MessageAttachment>? attachments = null);
     public ConversationContext AddAssistantMessage(string content);
     public ConversationContext AddSystemMessage(string content);
     public ConversationContext AddToolMessage(string toolCallId, string content);
@@ -478,7 +531,7 @@ public sealed class ConversationContext(
 }
 ```
 
-**Source:** [ConversationContext.cs](../../Framework/LLM/Conversation/Context/ConversationContext.cs)
+**Source:** [ConversationContext.cs](../../AITaskAgent.Extensions.Llm/Conversation/Context/ConversationContext.cs)
 
 ---
 
@@ -491,7 +544,7 @@ public sealed class ConversationContext(
 | `StatelessTemplateLlmStep<TIn, TOut>` | Same, with an isolated conversation per invocation |
 | `IntentionAnalyzerStep<TIn>` | Classifies input into one of a list of `IntentionOption` |
 | `RouterStep` | `SwitchStep<IRouterResult>` that routes by the analyzed intention |
-| `YamlLlmStep` | Declarative LLM step used by the YAML pipeline factory |
+| `YamlLlmStep` | Declarative LLM step (tag `LlmStep`) created by the step registry from YAML; implements `IJsonSchemaStep`, resolves its role from `LlmEnvironment` (`profileName`, or the default role) after its configuration is populated and fails while the pipeline is built if the role does not exist |
 
 ```csharp
 public class TemplateLlmStep<TIn, TOut>(
@@ -557,4 +610,4 @@ The model exposed to templates is `Input` (the step input's `Value`, as `{{ inpu
 `Context` (pipeline metadata merged with step variables, as `{{ context.key }}`). Keys are
 lowercased; step variables win over pipeline metadata on collision.
 
-**Source:** [PromptTemplateResolver.cs](../../Framework/LLM/Support/PromptTemplateResolver.cs)
+**Source:** [PromptTemplateResolver.cs](../../AITaskAgent.Extensions.Llm/Support/PromptTemplateResolver.cs)

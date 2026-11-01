@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -94,7 +95,7 @@ public sealed class UndefinedToolCallTests
     private static Task<IStepResult> RunAsync(IStep step) =>
         step.ExecuteAsync(
             new LlmStringStepResult(new EmptyStep("Seed")) { Content = "hazlo" },
-            new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+            new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
     [Fact]
     public async Task Calling_an_undefined_tool_that_matches_a_tag_does_not_throw()

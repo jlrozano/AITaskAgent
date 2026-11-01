@@ -335,8 +335,30 @@ IReadOnlyList<ITool> mine = tools.GetAllTools("MyApp.Tools"); // filter by decla
 `GetAllTools(moduleName)` matches the assembly name of the tool's own type, which is how tool packs
 such as `FileTools` or `McpIntegration` are selected as a group.
 
-Steps that take tool **names** (`TemplateLlmStep`, `IntentionAnalyzerStep`) resolve them through
-`AvailableTools.Instance`, so those tools must be registered before the step is constructed.
+`ITools` also has `Register(ITool tool)`, which `AvailableTools` implements.
+
+Steps that take tool **names** resolve them in two different ways:
+
+- `TemplateLlmStep` (and `IntentionAnalyzerStep`, which derives from it) reads the static
+  `AvailableTools.Instance` in its constructor (`TemplateLlmStep.cs:39`), so those tools must be registered before the
+  step is constructed.
+- `YamlLlmStep` (`type: LlmStep` with `tools:`) does not read the static registry. `ResolveTools()` looks each name up,
+  ignoring case, in the provider the step was created with: first the `ITool` services, then the `ITools` registry, then the
+  `ToolAlias` services (`YamlLlmStep.cs:198-236`). The first match wins, so a bare tool name beats an alias of the same name.
+  A name nobody provides fails with an error that lists the available ones.
+
+`ToolAlias(string Name, ITool Tool)` is a record that makes an existing tool reachable under another name. The framework only
+resolves them; the qualified `Source:name` aliases are created by the workflow designer
+(`Samples/WorkflowDesigner.Core/Engine/EngineTools.cs`), not by the framework.
+
+### From an extension
+
+An `IExtension` registers tools on its `IExtensionBuilder` with the typed helpers of
+`ExtensionBuilderToolExtensions`: `AddTool<TTool>()` (a class with a public parameterless constructor, one instance per
+engine), `AddTool(ITool)` (a shared instance), `AddToolSource(IToolSource)` and `AddToolsFromAssembly(Assembly)` (every public
+`ITool` class with a parameterless constructor and every public `IToolSource` of the assembly). An `IToolSource` is
+`IEnumerable<ITool> Create(PluginContext context)`: the host calls it once per engine with the plugin's folder and
+configuration section.
 
 ## Testing Tools
 

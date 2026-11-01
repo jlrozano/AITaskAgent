@@ -1,24 +1,40 @@
 <Solution>
   <Folder Name="/Framework/">
-    <Project Path="Framework/AITaskAgent.csproj" />
+    <Project Path="AITaskAgent.Abstractions/AITaskAgent.Abstractions.csproj" />
+    <Project Path="AITaskAgent.Core/AITaskAgent.Core.csproj" />
+    <Project Path="AITaskAgent.Extensions.CSharp/AITaskAgent.Extensions.CSharp.csproj" />
+    <Project Path="AITaskAgent.Extensions.Llm/AITaskAgent.Extensions.Llm.csproj" />
+    <Project Path="AITaskAgent.NugetLoader/AITaskAgent.NugetLoader.csproj" />
+    <Project Path="AITaskAgent.Yaml/AITaskAgent.Yaml.csproj" />
+    <Project Path="AITaskAgent.Extensions.Script/AITaskAgent.Extensions.Script.csproj" />
+    <Project Path="AITaskAgent.Extensions.Script.Worker/AITaskAgent.Extensions.Script.Worker.csproj" />
     <Project Path="FileTools/FileTools.csproj" />
     <Project Path="McpIntegration/McpIntegration.csproj" />
     <Project Path="OfficeTools/OfficeTools.csproj" />
   </Folder>
   <Folder Name="/Providers/">
     <Project Path="OpenAILLmService/OpenAILLmService.csproj" />
+    <Project Path="OllamaLlmService/OllamaLlmService.csproj" />
     <Project Path="GeminiLlmService/GeminiLlmService.csproj" />
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="Tests/AITaskAgent.Tests.csproj" />
+    <Project Path="AITaskAgent.Extensions.CSharp.Tests/AITaskAgent.Extensions.CSharp.Tests.csproj" />
+    <Project Path="AITaskAgent.NugetLoader.Tests/AITaskAgent.NugetLoader.Tests.csproj" />
+    <Project Path="AITaskAgent.Extensions.Script.Tests/AITaskAgent.Extensions.Script.Tests.csproj" />
     <Project Path="GeminiLlmService.Tests/GeminiLlmService.Tests.csproj" />
     <Project Path="OpenAILLmService.Tests/OpenAILLmService.Tests.csproj" />
+    <Project Path="OllamaLlmService.Tests/OllamaLlmService.Tests.csproj" />
     <Project Path="FileTools.Tests/FileTools.Tests.csproj" />
     <Project Path="McpIntegration.Tests/McpIntegration.Tests.csproj" />
     <Project Path="OfficeTools.Tests/OfficeTools.Tests.csproj" />
     <Project Path="Samples/CodebaseAnalysis.Core.Tests/CodebaseAnalysis.Core.Tests.csproj" />
+    <Project Path="Samples/CodebaseAnalysis.Designer.Tests/CodebaseAnalysis.Designer.Tests.csproj" />
     <Project Path="Samples/CodebaseAnalysisWeb.Tests/CodebaseAnalysisWeb.Tests.csproj" />
     <Project Path="Samples/DotNetEnricher.Tests/DotNetEnricher.Tests.csproj" />
+    <Project Path="Samples/WorkflowDesigner.Core.Tests/WorkflowDesigner.Core.Tests.csproj" />
+    <Project Path="Samples/WorkflowDesigner.Cli.Tests/WorkflowDesigner.Cli.Tests.csproj" />
+    <Project Path="Samples/WorkflowDesignerWeb.Tests/WorkflowDesignerWeb.Tests.csproj" />
   </Folder>
   <Folder Name="/Samples/">
     <Project Path="Samples/AdvancedLlmPipeline/Samples.AdvancedLlmPipeline.csproj" />
@@ -30,8 +46,13 @@
     <Project Path="Samples/TextToTemplateDemo/TextToTemplateDemo.csproj" />
     <Project Path="Samples/YamlPipelineDemo/YamlPipelineDemo.csproj" />
     <Project Path="Samples/CodebaseAnalysis.Core/CodebaseAnalysis.Core.csproj" />
+    <Project Path="Samples/CodebaseAnalysis.Designer/CodebaseAnalysis.Designer.csproj" />
     <Project Path="Samples/CodebaseAnalysisPipeline/Samples.CodebaseAnalysisPipeline.csproj" />
     <Project Path="Samples/CodebaseAnalysisWeb/CodebaseAnalysisWeb.csproj" />
     <Project Path="Samples/DotNetEnricher/DotNetEnricher.csproj" />
+    <Project Path="Samples/WorkflowDesigner.Core/WorkflowDesigner.Core.csproj" />
+    <Project Path="Samples/WorkflowDesigner.Cli/WorkflowDesigner.Cli.csproj" />
+    <Project Path="Samples/WorkflowDesignerWeb/WorkflowDesignerWeb.csproj" />
+    <Project Path="Samples/ExamplePlugin/ExamplePlugin.csproj" />
   </Folder>
 </Solution>

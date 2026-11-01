@@ -1,0 +1,134 @@
+/* Estilos mínimos del chat. Se personalizan con variables CSS (--atc-*) desde el anfitrión. */
+.atc-chat { display: flex; flex-direction: column; height: 100%; min-height: 0; font: 14px/1.45 var(--atc-font, system-ui, sans-serif); color: var(--atc-fg, inherit); }
+.atc-messages { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.atc-message { padding: 8px 10px; border-radius: 8px; background: var(--atc-bg-assistant, rgba(127, 127, 127, 0.1)); }
+.atc-message.atc-user { align-self: flex-end; background: var(--atc-bg-user, rgba(30, 110, 220, 0.15)); max-width: 85%; }
+.atc-message p { margin: 0 0 4px; }
+.atc-md > :first-child { margin-top: 0; }
+.atc-md > :last-child { margin-bottom: 0; }
+.atc-empty { padding: 12px; opacity: 0.6; }
+.atc-thinking { opacity: 0.75; font-size: 0.92em; }
+.atc-tool { font-size: 0.92em; opacity: 0.85; }
+.atc-tool-error { color: var(--atc-error, #b3261e); }
+.atc-tool-summary, .atc-tool-time, .atc-tool-code { margin-left: 6px; opacity: 0.7; }
+.atc-proposal, .atc-question { border: 1px solid var(--atc-border, rgba(127, 127, 127, 0.4)); border-radius: 6px; padding: 8px; margin: 6px 0; }
+.atc-proposal h4 { margin: 0 0 6px; }
+.atc-diff, .atc-ops { margin: 0 0 6px; padding-left: 18px; }
+.atc-diff-added strong { color: var(--atc-added, #1b7f37); }
+.atc-diff-changed strong { color: var(--atc-changed, #9a6700); }
+.atc-diff-removed strong { color: var(--atc-removed, #b3261e); }
+.atc-diff-values { margin-left: 6px; }
+.atc-actions { display: flex; gap: 6px; margin-top: 6px; }
+.atc-option { display: block; margin: 2px 0; }
+.atc-usage { font-size: 0.8em; opacity: 0.6; }
+.atc-notice { font-size: 0.85em; opacity: 0.75; font-style: italic; }
+.atc-error, .atc-warn { color: var(--atc-error, #b3261e); }
+.atc-composer { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--atc-border, rgba(127, 127, 127, 0.4)); }
+.atc-composer textarea { flex: 1; resize: none; min-height: 2.4em; font: inherit; }
+.atc-primary { font-weight: 600; }
+.atc-steps { border: 1px solid var(--atc-border, rgba(127, 127, 127, 0.4)); border-radius: 6px; margin: 4px 0; font-size: 0.92em; }
+.atc-steps-toggle { display: flex; gap: 4px; width: 100%; border: none; background: none; padding: 2px 6px; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.atc-steps.is-open .atc-steps-body { border-top: 1px solid var(--atc-border, rgba(127, 127, 127, 0.4)); padding: 2px 6px; }
+.atc-tool-icon { display: inline-block; width: 1em; text-align: center; font-weight: 700; }
+.atc-attachments { list-style: none; margin: 4px 0 0; padding: 0; font-size: 0.9em; }
+.atc-retry { margin-left: 8px; }
+
+/* Markdown (Streamdown). Hereda el color y la fuente del chat; sin Tailwind: estilos mínimos para lo que Streamdown pinta. */
+.atc-md p, .atc-md ul, .atc-md ol, .atc-md pre, .atc-md table, .atc-md blockquote { margin: 0.5em 0; }
+.atc-md ul { list-style: disc; padding-left: 1.4em; }
+.atc-md ol { list-style: decimal; padding-left: 1.4em; }
+.atc-md a { color: var(--atc-link, #1a5fb4); text-decoration: underline; }
+.atc-md blockquote { border-left: 3px solid var(--atc-border, rgba(127, 127, 127, 0.4)); padding-left: 0.8em; opacity: 0.85; }
+.atc-md pre { overflow-x: auto; padding: 8px; border-radius: 6px; background: var(--atc-bg-code, rgba(127, 127, 127, 0.15)); font-size: 0.92em; }
+.atc-md code { font-family: var(--atc-font-mono, ui-monospace, Consolas, monospace); }
+.atc-md :not(pre) > code { padding: 0 0.3em; border-radius: 4px; background: var(--atc-bg-code, rgba(127, 127, 127, 0.15)); }
+.atc-md table { border-collapse: collapse; display: block; overflow-x: auto; }
+.atc-md th, .atc-md td { border: 1px solid var(--atc-border, rgba(127, 127, 127, 0.4)); padding: 2px 8px; }
+.atc-md svg { max-width: 100%; height: auto; }
+.atc-mermaid-error { border: 1px solid var(--atc-error, #b3261e); border-radius: 6px; padding: 6px 8px; margin: 0.5em 0; }
+.atc-mermaid-error-msg { margin: 0 0 4px; color: var(--atc-error, #b3261e); font-size: 0.92em; }
+.atc-mermaid-error pre { margin: 0; }
+.atc-tool-args { margin: 0 4px; opacity: 0.75; font-size: 0.9em; }
+
+/* Agentes (paso del flujo): cabecera con sus herramientas anidadas dentro del panel de pasos. */
+.atc-agent + .atc-agent, .atc-tool + .atc-agent { margin-top: 3px; }
+.atc-agent-head { font-weight: 600; }
+.atc-agent-attempt { margin-left: 6px; padding: 0 5px; border-radius: 8px; font-weight: 400; font-size: 0.9em; background: var(--atc-bg-code, rgba(127, 127, 127, 0.15)); }
+.atc-agent-error .atc-agent-head { color: var(--atc-error, #b3261e); }
+.atc-agent-head .atc-tool-summary, .atc-agent-head .atc-tool-time, .atc-agent-head .atc-tool-code { font-weight: 400; }
+
+/* Inspector de herramienta (toolInspector): botón de icono y modal con entrada y salida. */
+.atc-tool-inspect { display: inline-flex; vertical-align: middle; align-items: center; justify-content: center; margin-left: 6px; padding: 1px 3px; border: 1px solid transparent; border-radius: 4px; background: none; color: inherit; opacity: 0.7; cursor: pointer; }
+.atc-tool-inspect:hover, .atc-tool-inspect:focus-visible { opacity: 1; border-color: var(--atc-border, rgba(127, 127, 127, 0.4)); }
+.atc-modal-backdrop {
+  /* Tema claro por defecto; oscuro por prefers-color-scheme o por data-theme="dark" en el documento (lo fija el anfitrión). */
+  --atc-modal-bg: #fff; --atc-modal-fg: #1f2328; --atc-modal-border: rgba(127, 127, 127, 0.4);
+  --atc-json-key: #0550ae; --atc-json-str: #0a7a3d; --atc-json-num: #9a4d00; --atc-json-bool: #8250df; --atc-json-null: #6e7781; --atc-json-punct: #6e7781;
+  position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, 0.45);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .atc-modal-backdrop { --atc-modal-bg: #1e2227; --atc-modal-fg: #e6edf3; --atc-json-key: #79c0ff; --atc-json-str: #7ee787; --atc-json-num: #ffa657; --atc-json-bool: #d2a8ff; --atc-json-null: #8b949e; --atc-json-punct: #8b949e; }
+}
+:root[data-theme="dark"] .atc-modal-backdrop { --atc-modal-bg: #1e2227; --atc-modal-fg: #e6edf3; --atc-json-key: #79c0ff; --atc-json-str: #7ee787; --atc-json-num: #ffa657; --atc-json-bool: #d2a8ff; --atc-json-null: #8b949e; --atc-json-punct: #8b949e; }
+.atc-modal { display: flex; flex-direction: column; width: min(720px, 100%); max-height: min(80vh, 100%); border: 1px solid var(--atc-modal-border); border-radius: 8px; background: var(--atc-modal-bg); color: var(--atc-modal-fg); font: 13px/1.45 var(--atc-font, system-ui, sans-serif); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); outline: none; }
+.atc-modal-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--atc-modal-border); }
+.atc-modal-title { flex: 1; min-width: 0; margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.atc-modal-name { margin-left: 8px; font-weight: 400; opacity: 0.7; }
+.atc-modal-close { display: inline-flex; padding: 4px; border: 1px solid transparent; border-radius: 4px; background: none; color: inherit; cursor: pointer; }
+.atc-modal-close:hover, .atc-modal-close:focus-visible { border-color: var(--atc-modal-border); }
+.atc-modal-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 12px; }
+.atc-modal-section h4 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.75; }
+.atc-modal-empty { margin: 0; opacity: 0.65; font-style: italic; }
+.atc-modal-error { margin: 0 0 6px; color: var(--atc-error, #b3261e); overflow-wrap: anywhere; }
+.atc-modal-warn { margin: 6px 0 0; padding: 4px 8px; border-radius: 4px; background: rgba(154, 103, 0, 0.15); color: var(--atc-changed, #9a6700); font-size: 12px; }
+.atc-json { position: relative; border: 1px solid var(--atc-modal-border); border-radius: 6px; padding: 6px 8px; font-family: var(--atc-font-mono, ui-monospace, Consolas, monospace); font-size: 12px; }
+.atc-json-copy { position: absolute; top: 4px; right: 4px; padding: 0 6px; border: 1px solid var(--atc-modal-border); border-radius: 4px; background: var(--atc-modal-bg); color: inherit; font: 11px system-ui, sans-serif; cursor: pointer; }
+.atc-json-tree { padding-right: 56px; }
+.atc-json-text { margin: 0; padding-right: 56px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.atc-json-row { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
+.atc-json-toggle { flex: none; width: 1.2em; padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: center; cursor: pointer; }
+span.atc-json-toggle { cursor: default; }
+.atc-json-children { margin-left: 1.2em; padding-left: 4px; border-left: 1px dotted var(--atc-modal-border); }
+.atc-json-key { color: var(--atc-json-key); }
+.atc-json-str { color: var(--atc-json-str); white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.atc-json-num { color: var(--atc-json-num); }
+.atc-json-bool { color: var(--atc-json-bool); }
+.atc-json-null { color: var(--atc-json-null); }
+.atc-json-punct, .atc-json-meta { color: var(--atc-json-punct); }
+
+/* Línea de tiempo (agentes IA, pasos y herramientas): icono de estado + icono de clase + etiqueta de clase en texto pequeño. */
+.atc-node { padding: 3px 0; }
+.atc-node + .atc-node, .atc-tool + .atc-node, .atc-node + .atc-tool { border-top: 1px dashed var(--atc-border, rgba(127, 127, 127, 0.3)); }
+.atc-node-head, .atc-node-flow > .atc-tool, .atc-steps-body > .atc-tool[data-tagged] { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.atc-node-head .atc-tool-summary, .atc-node-head .atc-tool-time, .atc-node-flow .atc-tool .atc-tool-time { margin-left: 0; }
+.atc-node-time { margin-left: auto !important; font-variant-numeric: tabular-nums; }
+.atc-node-icon, .atc-status-icon { flex: none; vertical-align: middle; }
+.atc-node-detail, .atc-node-meta, .atc-node-result { margin: 1px 0 0 22px; font-size: 0.88em; overflow-wrap: anywhere; }
+.atc-node-detail { color: var(--atc-muted, rgba(127, 127, 127, 0.95)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.atc-node-meta { opacity: 0.7; font-variant-numeric: tabular-nums; }
+.atc-node-result::before { content: "\2192\00a0"; opacity: 0.6; }
+.atc-node-result { margin-top: 3px; }
+/* Secuencia lineal del paso: razonamiento, herramientas y texto intercalados, en el orden en que llegaron. */
+.atc-node-flow { display: flex; flex-direction: column; gap: 3px; min-width: 0; margin: 3px 0 0 22px; }
+.atc-node-flow > .atc-tool { opacity: 1; }
+.atc-flow-item { min-width: 0; overflow-wrap: anywhere; }
+.atc-flow-thinking { opacity: 1; font-size: 0.86em; font-style: italic; color: var(--atc-muted, rgba(127, 127, 127, 0.95)); }
+.atc-flow-thinking > summary { cursor: pointer; font-style: normal; }
+.atc-flow-thinking > p { margin: 2px 0 0; white-space: pre-wrap; }
+.atc-flow-text .atc-md, .atc-flow-text > p { margin: 0; }
+.atc-flow-text .atc-md pre, .atc-flow-text .atc-md table { max-width: 100%; }
+.atc-status-ok { color: var(--atc-ok, #1b7f37); }
+.atc-status-error { color: var(--atc-error, #b3261e); }
+.atc-status-running { color: var(--atc-accent, #1a5fb4); }
+.atc-spin { animation: atc-spin 0.9s linear infinite; }
+@keyframes atc-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .atc-spin { animation: none; } }
+.atc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.atc-tool-link { border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: none; }
+.atc-tool-link:hover, .atc-tool-link:focus-visible { text-decoration: underline; }
+.atc-modal-summary { margin: 0 0 6px; font-size: 0.92em; }
+
+.atc-modal-dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; font-size: 0.9em; }
+.atc-modal-dl dt { opacity: 0.65; }
+.atc-modal-dl dd { margin: 0; overflow-wrap: anywhere; }
+.atc-node-chip { display: inline-block; padding: 0 8px; border-radius: 999px; border: 1px solid var(--atc-border, rgba(127, 127, 127, 0.35)); }

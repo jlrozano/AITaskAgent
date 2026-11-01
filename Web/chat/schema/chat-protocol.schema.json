@@ -1,0 +1,352 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aitaskagent.local/schemas/1/chat-protocol.schema.json",
+  "title": "ChatProtocol",
+  "description": "chat-protocol/1: eventos del servidor al cliente (SSE) y cuerpos POST del cliente al servidor para un chat con un asistente. Derivado de §8.4; el servidor envía cada evento como `event: <type>` y `data: <JSON con type, turnId y seq>`. Los objetos NO cierran propiedades: un cliente ignora las que no conoce y los eventos de `type` desconocido (compatibilidad hacia delante). Un cambio incompatible sube a chat-protocol/2.",
+  "x-protocol": "chat-protocol/1",
+  "oneOf": [{ "$ref": "#/$defs/ServerEvent" }, { "$ref": "#/$defs/ClientRequest" }],
+  "$defs": {
+    "ServerEvent": {
+      "description": "Unión discriminada por `type`. Orden garantizado en un turno: turn.start, cualquier mezcla de text.delta / thinking.delta / step.started / step.completed / tool.started / tool.completed / usage / notice (los pasos se anidan por stepId: un step.completed cierra el step.started de su stepId y las herramientas llevan el stepId del paso abierto), y un cierre: (question?, proposal?, done) o (error, done).",
+      "oneOf": [
+        { "$ref": "#/$defs/TurnStart" },
+        { "$ref": "#/$defs/TextDelta" },
+        { "$ref": "#/$defs/ThinkingDelta" },
+        { "$ref": "#/$defs/StepStarted" },
+        { "$ref": "#/$defs/StepCompleted" },
+        { "$ref": "#/$defs/ToolStarted" },
+        { "$ref": "#/$defs/ToolCompleted" },
+        { "$ref": "#/$defs/Usage" },
+        { "$ref": "#/$defs/Notice" },
+        { "$ref": "#/$defs/Question" },
+        { "$ref": "#/$defs/Proposal" },
+        { "$ref": "#/$defs/Error" },
+        { "$ref": "#/$defs/Done" }
+      ]
+    },
+    "ClientRequest": {
+      "description": "Cuerpos POST del cliente. `message` abre un turno; `answer` responde a una `question` (cierra el turno anterior: la respuesta entra como mensaje nuevo); `cancel` corta el turno en curso.",
+      "oneOf": [{ "$ref": "#/$defs/MessageRequest" }, { "$ref": "#/$defs/AnswerRequest" }, { "$ref": "#/$defs/CancelRequest" }]
+    },
+
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "seq": { "type": "integer", "minimum": 0, "description": "Crece dentro del turno." },
+    "count": { "type": "integer", "minimum": 0 },
+    "UsageCounts": {
+      "type": "object",
+      "required": ["requests", "inputTokens", "cachedInputTokens", "outputTokens", "reasoningTokens"],
+      "properties": {
+        "requests": { "$ref": "#/$defs/count" },
+        "inputTokens": { "$ref": "#/$defs/count" },
+        "cachedInputTokens": { "$ref": "#/$defs/count" },
+        "outputTokens": { "$ref": "#/$defs/count" },
+        "reasoningTokens": { "$ref": "#/$defs/count" }
+      }
+    },
+
+    "TurnStart": {
+      "description": "Antes: turn_start. Solo en el primer tramo del turno.",
+      "type": "object",
+      "required": ["type", "turnId", "seq"],
+      "properties": {
+        "type": { "const": "turn.start" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "sessionId": { "type": "string" },
+        "task": { "type": "string" },
+        "provider": { "type": "string" },
+        "model": { "type": "string", "description": "Etiqueta del modelo que responde (selector de modelo)." },
+        "baseVersion": { "type": "integer", "minimum": 0 },
+        "autoApprove": { "type": "boolean", "description": "Modo automático efectivo del turno (decide el servidor: ajuste global o `approvalMode` de la sesión)." },
+        "learningEnabled": { "type": "boolean" },
+        "approvalMode": { "enum": ["auto", "ask"], "description": "Modo de aprobación efectivo del turno (aditivo)." },
+        "modelRef": { "type": "object", "required": ["profileId", "modelId"], "properties": { "profileId": { "type": "string" }, "modelId": { "type": "string" } }, "description": "Modelo que atiende el turno (aditivo)." },
+        "attachments": { "type": "integer", "minimum": 0, "description": "Adjuntos del mensaje que recibe el modelo (aditivo)." }
+      }
+    },
+    "TextDelta": {
+      "description": "Antes: text_delta. Texto parcial del asistente (markdown), para concatenar.",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "text"],
+      "properties": {
+        "type": { "const": "text.delta" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "text": { "type": "string" }
+      }
+    },
+    "ThinkingDelta": {
+      "description": "Nuevo (aditivo): razonamiento visible del modelo, para concatenar; el cliente lo muestra plegado.",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "text"],
+      "properties": {
+        "type": { "const": "thinking.delta" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "text": { "type": "string" }
+      }
+    },
+    "ToolStarted": {
+      "description": "Antes: tool_call. Herramienta en curso (línea «Buscando en el esquema…»).",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "callId", "name"],
+      "properties": {
+        "type": { "const": "tool.started" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "callId": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "description": "Texto legible opcional; si falta, el cliente usa el nombre." },
+        "where": { "enum": ["server", "browser"] },
+        "input": {},
+        "stepId": { "$ref": "#/$defs/id", "description": "Aditivo: paso (`step.started`) abierto que lanza la herramienta, si hay uno." },
+        "display": { "type": "string", "maxLength": 500, "description": "Aditivo: Qué hace la herramienta ahora («Leyendo el elemento c12»). Texto para la persona con datos reales, renderizado por AITaskAgent con la plantilla del paso o de la herramienta y sin secretos; ausente si no hay plantilla o falla. El cliente lo prefiere a `name`/`detail`/`summary`, que quedan como respaldo." }
+      }
+    },
+    "StepStarted": {
+      "description": "Aditivo: empieza un paso del flujo (llamada al modelo, herramienta o paso propio). Un reintento del mismo paso repite el evento con el mismo `stepId` y `attempt` mayor. Puede haber pasos anidados (el que abre un paso hijo sigue abierto).",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "stepId", "name", "kind", "attempt"],
+      "properties": {
+        "type": { "const": "step.started" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "stepId": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1, "description": "Nombre legible del paso («Edición del informe»); si no hay traducción, el nombre técnico." },
+        "label": { "type": "string" },
+        "kind": { "enum": ["llm", "tool", "step"] },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "detail": { "type": "string", "description": "Aditivo: una frase que explica qué hace el paso («El modelo redacta la plantilla completa a partir del esquema y del PDF adjunto»)." },
+        "display": { "type": "string", "maxLength": 500, "description": "Aditivo: Qué hace el paso ahora («Redactando el informe a partir del esquema de la conexión y del PDF adjunto «pedido.pdf»…»). Texto para la persona con datos reales, renderizado por AITaskAgent con la plantilla del paso o de la herramienta y sin secretos; ausente si no hay plantilla o falla. El cliente lo prefiere a `name`/`detail`/`summary`, que quedan como respaldo." }
+      }
+    },
+    "StepCompleted": {
+      "description": "Aditivo: termina el paso de `stepId` (con o sin error).",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "stepId", "ok"],
+      "properties": {
+        "type": { "const": "step.completed" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "stepId": { "$ref": "#/$defs/id" },
+        "ok": { "type": "boolean" },
+        "elapsedMs": { "type": "number", "minimum": 0 },
+        "errorCode": { "type": "string" },
+        "summary": { "type": "string", "description": "Resultado concreto y breve del paso (≤ 200 caracteres); si falló, el motivo." },
+        "model": { "type": "string", "description": "Aditivo, solo `kind: llm`: modelo de la(s) llamada(s) del paso." },
+        "inputTokens": { "type": "integer", "minimum": 0, "description": "Aditivo, solo `kind: llm`: tokens de entrada sumados de las llamadas del paso (los mismos datos de `usage`)." },
+        "outputTokens": { "type": "integer", "minimum": 0, "description": "Aditivo, solo `kind: llm`: tokens de salida sumados de las llamadas del paso." },
+        "costUsd": { "type": "number", "minimum": 0, "description": "Aditivo, solo `kind: llm`: coste en USD informado por el proveedor para las llamadas del paso; ausente si no lo informó." },
+        "display": { "type": "string", "maxLength": 500, "description": "Aditivo: Cómo terminó el paso («Informe redactado por el modelo en 12,3 s»); con error, «No se pudo completar: …». Texto para la persona con datos reales, renderizado por AITaskAgent con la plantilla del paso o de la herramienta y sin secretos; ausente si no hay plantilla o falla. El cliente lo prefiere a `name`/`detail`/`summary`, que quedan como respaldo." }
+      }
+    },
+    "ToolCompleted": {
+      "description": "Antes: tool_result.",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "callId", "name", "ok"],
+      "properties": {
+        "type": { "const": "tool.completed" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "callId": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "ok": { "type": "boolean" },
+        "summary": { "type": "string" },
+        "elapsedMs": { "type": "number", "minimum": 0 },
+        "errorCode": { "type": "string" },
+        "sampleRowsSent": { "const": true },
+        "stepId": { "$ref": "#/$defs/id", "description": "Aditivo: paso (`step.started`) abierto que lanzó la herramienta, si hay uno." },
+        "output": { "description": "Aditivo: salida de la herramienta (JSON; si no lo es, una cadena). Máximo 16384 caracteres serializados: si los supera se omite el valor, se envía una cadena con el inicio truncado y `outputTruncated: true`." },
+        "outputTruncated": { "const": true },
+        "display": { "type": "string", "maxLength": 500, "description": "Aditivo: Cómo terminó la herramienta («Elemento del diseño leído»); con error, «No se pudo completar: …». Texto para la persona con datos reales, renderizado por AITaskAgent con la plantilla del paso o de la herramienta y sin secretos; ausente si no hay plantilla o falla. El cliente lo prefiere a `name`/`detail`/`summary`, que quedan como respaldo." }
+      }
+    },
+    "Usage": {
+      "description": "Antes: usage. Una por llamada al modelo; `inputTokens` incluye los de caché. `turn` es el acumulado del turno; el coste es opcional.",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "inputTokens", "outputTokens"],
+      "properties": {
+        "type": { "const": "usage" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "inputTokens": { "$ref": "#/$defs/count" },
+        "cachedInputTokens": { "$ref": "#/$defs/count" },
+        "outputTokens": { "$ref": "#/$defs/count" },
+        "reasoningTokens": { "$ref": "#/$defs/count" },
+        "turn": { "$ref": "#/$defs/UsageCounts" },
+        "estimatedCost": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string" }
+      }
+    },
+    "Notice": {
+      "description": "Antes: notice. Aviso no bloqueante (`retrying`, `sampleRows.sent`, `context.compacted`, `approval.auto`, `note.saved`, `scope.rejected`…).",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "code", "message"],
+      "properties": {
+        "type": { "const": "notice" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" }
+      }
+    },
+    "QuestionOption": {
+      "type": "object",
+      "required": ["label"],
+      "properties": { "label": { "type": "string" }, "description": { "type": "string" }, "recommended": { "type": "boolean" } }
+    },
+    "Question": {
+      "description": "Antes: question. El turno termina tras ella (`done` con reason `question`); la respuesta entra con `answer`. `kind: approval` ofrece Aprobar/Rechazar; `choice`, opciones (una o varias, `multiSelect`, hasta 4 preguntas en `questions`); `clarification`, texto libre.",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "callId", "question", "kind"],
+      "properties": {
+        "type": { "const": "question" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "callId": { "$ref": "#/$defs/id" },
+        "question": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["approval", "choice", "clarification"] },
+        "options": { "type": "array", "items": { "type": "string" } },
+        "stage": { "type": ["string", "null"], "description": "null equivale a ausente (el asistente actual emite null)." },
+        "header": { "type": "string" },
+        "multiSelect": { "type": "boolean" },
+        "questions": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "required": ["question"],
+            "properties": {
+              "question": { "type": "string" },
+              "header": { "type": "string" },
+              "multiSelect": { "type": "boolean" },
+              "options": { "type": "array", "items": { "$ref": "#/$defs/QuestionOption" } }
+            }
+          }
+        }
+      }
+    },
+    "ProposalOperation": {
+      "type": "object",
+      "required": ["tool", "label"],
+      "properties": {
+        "callId": { "type": "string" },
+        "tool": { "type": "string" },
+        "label": { "type": "string" },
+        "changed": { "type": "array", "items": { "type": "string" } },
+        "created": { "type": "array", "items": { "type": "string" } },
+        "deleted": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "ProposalChange": {
+      "description": "Nuevo (aditivo): una diferencia entre el documento base y la propuesta, para pintarla (el documento completo devuelto sustituye al base).",
+      "type": "object",
+      "required": ["kind", "target"],
+      "properties": {
+        "kind": { "enum": ["added", "changed", "removed"] },
+        "target": { "type": "string", "description": "Elemento afectado (handle, ruta o nombre legible)." },
+        "label": { "type": "string" },
+        "before": { "type": "string" },
+        "after": { "type": "string" }
+      }
+    },
+    "Proposal": {
+      "description": "Antes: proposal. Propuesta de cambio sobre el documento del anfitrión; el cliente la muestra con Aplicar/Descartar y la aplica con HostAdapter.applyProposal (una sola entrada de deshacer).",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "operations"],
+      "properties": {
+        "type": { "const": "proposal" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "proposalId": { "type": "string" },
+        "baseVersion": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 },
+        "summary": { "type": "string" },
+        "operations": { "type": "array", "items": { "$ref": "#/$defs/ProposalOperation" } },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/ProposalChange" } },
+        "document": { "description": "Documento completo propuesto, opaco para el protocolo: lo que sustituirá al base si el anfitrión lo aplica. Aditivo." },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "valid": { "type": "boolean" },
+            "errors": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "array" }] },
+            "warnings": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "array" }] },
+            "scriptErrors": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "array" }] }
+          }
+        }
+      }
+    },
+    "Error": {
+      "description": "Antes: error. Mensaje saneado; va seguido de `done` con reason `error`.",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "code", "message"],
+      "properties": {
+        "type": { "const": "error" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "Done": {
+      "description": "Antes: turn_end. Último evento del turno. `outOfScope` y cualquier motivo desconocido se tratan como fin normal.",
+      "type": "object",
+      "required": ["type", "turnId", "seq", "reason"],
+      "properties": {
+        "type": { "const": "done" },
+        "turnId": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "reason": { "type": "string", "description": "completed | question | cancelled | limit | error | outOfScope (abierto)." },
+        "usage": { "$ref": "#/$defs/UsageCounts" },
+        "steps": { "$ref": "#/$defs/count" },
+        "toolCalls": { "$ref": "#/$defs/count" },
+        "elapsedMs": { "type": "number", "minimum": 0 }
+      }
+    },
+
+    "MessageRequest": {
+      "description": "Abre un turno (antes: POST …/messages). `context` y `options` los define el anfitrión; el protocolo no los interpreta.",
+      "type": "object",
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "message" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 20000 },
+        "sessionId": { "type": "string" },
+        "task": { "type": "string" },
+        "document": { "description": "Documento vivo del anfitrión; opaco para el protocolo." },
+        "context": { "type": "object" },
+        "options": { "type": "object", "properties": { "modelRef": { "type": ["object", "null"] } } }
+      }
+    },
+    "AnswerRequest": {
+      "description": "Respuesta a una `question` (antes: MessageRequest.approval o texto). Abre un turno nuevo. `approval` usa `approved`; `choice` usa `answers` (etiquetas elegidas por pregunta); `clarification`, `text`.",
+      "type": "object",
+      "required": ["type", "callId"],
+      "properties": {
+        "type": { "const": "answer" },
+        "callId": { "$ref": "#/$defs/id" },
+        "sessionId": { "type": "string" },
+        "approved": { "type": "boolean" },
+        "answers": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+        "text": { "type": "string", "maxLength": 20000 },
+        "document": { "description": "Documento vivo del anfitrión, como en MessageRequest (la respuesta abre un turno nuevo). Aditivo." },
+        "context": { "type": "object" },
+        "options": { "type": "object" }
+      },
+      "anyOf": [{ "required": ["approved"] }, { "required": ["answers"] }, { "required": ["text"] }]
+    },
+    "CancelRequest": {
+      "description": "Antes: POST …/cancel. Cerrar la conexión SSE equivale a cancelar.",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "cancel" },
+        "sessionId": { "type": "string" },
+        "turnId": { "type": "string" }
+      }
+    }
+  }
+}

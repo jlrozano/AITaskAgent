@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AITaskAgent.Script</RootNamespace>
+    <AssemblyName>AITaskAgent.Extensions.Script</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AITaskAgent.Core\AITaskAgent.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AITaskAgent.Extensions.Script.Tests" />
+  </ItemGroup>
+
+  <!--
+    V8 does not live here any more: scripts run in AITaskAgent.Extensions.Script.Worker, one process per
+    execution. Referencing the worker is what puts it (and ClearScript's native files) next to every
+    application that references this project; nothing in this assembly calls into it.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\AITaskAgent.Extensions.Script.Worker\AITaskAgent.Extensions.Script.Worker.csproj" />
+  </ItemGroup>
+
+</Project>

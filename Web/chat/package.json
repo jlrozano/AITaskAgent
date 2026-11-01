@@ -1,0 +1,69 @@
+{
+  "name": "@aitaskagent/chat",
+  "private": true,
+  "license": "MIT",
+  "version": "0.1.0",
+  "description": "Componente de chat reutilizable (React 19) que consume chat-protocol/1 (schema/chat-protocol.schema.json) por SSE.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mermaid": {
+      "types": "./dist/types/mermaid.d.ts",
+      "import": "./dist/mermaid.js"
+    },
+    "./chat.css": "./dist/chat.css",
+    "./schema": "./schema/chat-protocol.schema.json",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "mock": "node mock-server/server.ts",
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.build.json && node scripts/finish-build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "pack:local": "npm run build && npm pack --pack-destination ../../../NpmLocal"
+  },
+  "peerDependencies": {
+    "@streamdown/mermaid": "^1.0.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "dependencies": {
+    "streamdown": "2.7.0"
+  },
+  "devDependencies": {
+    "@streamdown/mermaid": "1.0.3",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "ajv": "8.20.0",
+    "jsdom": "30.1.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
+  "peerDependenciesMeta": {
+    "@streamdown/mermaid": {
+      "optional": true
+    }
+  },
+  "files": [
+    "dist",
+    "schema",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": [
+    "./dist/chat.css"
+  ]
+}

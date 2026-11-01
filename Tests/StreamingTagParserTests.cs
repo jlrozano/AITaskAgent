@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Streaming;
 using AITaskAgent.Observability;
@@ -39,7 +40,7 @@ public sealed class StreamingTagParserTests
         var events = new List<IProgressEvent>();
         var channel = new EventChannel();
         var subscription = channel.Subscribe((ev, _) => { lock (events) events.Add(ev); return Task.CompletedTask; });
-        var context = new PipelineContext(channel);
+        var context = new LlmPipelineContext(channel);
 
         var output = new System.Text.StringBuilder();
         for (var i = 0; i < text.Length; i += chunkSize)
@@ -91,7 +92,7 @@ public sealed class StreamingTagParserTests
     {
         var handler = new RecordingHandler();
         var parser = new StreamingTagParser([handler]);
-        var context = new PipelineContext();
+        var context = new LlmPipelineContext();
 
         // Fed character by character: the text must come out as it goes in, not after the
         // scanner has buffered several words waiting for a '>' that never comes.

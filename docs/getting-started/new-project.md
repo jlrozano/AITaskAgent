@@ -6,10 +6,14 @@ this repository (.NET SDK 10.0.303) before being written down.
 
 > [!IMPORTANT]
 > The framework is **not published to NuGet**. No project in this repository sets
-> `PackageId`, `IsPackable` or `GeneratePackageOnBuild`, so `dotnet add package
+> `PackageId` or `GeneratePackageOnBuild`, and `IsPackable` only appears as `false` (tests and samples; the
+> `CodebaseAnalysis.Designer` plugin is packed by its own `pack-plugin.ps1`), so `dotnet add package
 > AITaskAgent` resolves nothing. Consume it with a `ProjectReference` to
-> `Framework/AITaskAgent.csproj` — either from inside this repository (add your
-> project to `AITaskAgent.slnx`) or from a sibling checkout.
+> the framework projects — either from inside this repository (add your
+> project to `AITaskAgent.slnx`) or from a sibling checkout. Which projects to
+> reference is explained in [Architecture v2](../ARCHITECTURE-v2.md): `AITaskAgent.Extensions.Llm`
+> for anything with LLM steps (it brings `AITaskAgent.Core` and `AITaskAgent.Abstractions`),
+> `AITaskAgent.Core` alone for pipelines without an LLM.
 
 ## 1. Create the project
 
@@ -17,8 +21,11 @@ this repository (.NET SDK 10.0.303) before being written down.
 dotnet new console -o MyAgentApp
 cd MyAgentApp
 
-# The framework itself
-dotnet add reference ../AITaskAgent/Framework/AITaskAgent.csproj
+# The framework: the LLM extension brings the core; use AITaskAgent.Core instead if you have no LLM steps
+dotnet add reference ../AITaskAgent/AITaskAgent.Extensions.Llm/AITaskAgent.Extensions.Llm.csproj
+# Optional: declarative YAML pipelines and JavaScript steps
+# dotnet add reference ../AITaskAgent/AITaskAgent.Yaml/AITaskAgent.Yaml.csproj
+# dotnet add reference ../AITaskAgent/AITaskAgent.Extensions.Script/AITaskAgent.Extensions.Script.csproj
 
 # One LLM provider per backend you intend to use (skip if you have no LLM steps)
 dotnet add reference ../AITaskAgent/OpenAILLmService/OpenAILLmService.csproj
@@ -89,8 +96,10 @@ Three things have to line up, and the framework enforces all three at startup:
 | `Provider` | `appsettings.json`, per role | must match a key under `Providers` |
 
 Current `ILlmService.Name` values: `openai` (`OpenAILLmService.OpenAILlmService`),
-`openrouter` (`OpenAILLmService.OpenRouterLlmService`), `azure-openai`
-(`OpenAILLmService.AzureOpenAILlmService`) and `gemini` (`GeminiLlmService.GeminiLlmService`).
+`openai-responses` (`OpenAILLmService.OpenAIResponsesLlmService`), `openrouter` (`OpenAILLmService.OpenRouterLlmService`),
+`azure-openai` (`OpenAILLmService.AzureOpenAILlmService`), `azure-openai-responses`
+(`OpenAILLmService.AzureOpenAIResponsesLlmService`), `gemini` (`GeminiLlmService.GeminiLlmService`) and `ollama`
+(`AITaskAgent.Ollama.OllamaLlmService`, project `OllamaLlmService`).
 
 `appsettings.json`:
 
@@ -158,9 +167,10 @@ var role = env.Roles[env.DefaultRole];
 
 ## 4. Two calls you cannot skip
 
-- **`services.AddAITaskAgent()`** — registers `IPipeline`, `PipelineContextFactory`,
-  `IEventChannel`, storages, the template renderer, cache and
-  `ConfigureLlmEnvironmentOptions`. Full table in
+- **`services.AddAITaskAgent()`** — the core (`AddAITaskAgentCore()`: `IPipeline`,
+  `PipelineContextFactory`, `IEventChannel`, the context storage, the template renderer, cache and
+  the `IStepRegistry`) plus the LLM extension (`AddAITaskAgentLlm()`: `ConfigureLlmEnvironmentOptions`,
+  conversation storage, tools and the `LlmPipelineContextFactory`). Full table in
   [Installation](installation.md#basic-setup).
 - **`provider.UseAITaskAgent()`** — forces creation of those singletons and copies
   every DI-registered `ITool` into `AvailableTools.Instance`. Omit it and the

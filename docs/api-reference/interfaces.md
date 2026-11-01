@@ -14,6 +14,7 @@ public interface IStep
     int MaxRetries => 1;
     int MiillisecondsBetweenRetries => 100;   // spelling is as in the source
     TimeSpan? Timeout => null;
+    Type? RequiredContext => null;            // null = any PipelineContext
     Type InputType { get; }
     Type OutputType { get; }
 
@@ -36,10 +37,14 @@ public interface IStep
 }
 ```
 
+`RequiredContext` is the concrete `PipelineContext` type a step needs (LLM steps return `typeof(LlmPipelineContext)`). `Pipeline.ExecuteAsync` checks it
+for the whole step tree (including every case and the default of a declarative `SwitchStep`) before running anything and throws `InvalidOperationException` with a message naming the step; steps reached later through
+`NextSteps` or a programmatic `SwitchStep<TIn>` selector are checked just before they run and yield an error result with the same message.
+
 `Resume` is the suspension hook: a step that returns a result with `SuspendInfo` set **must**
 expose a non-null `Resume`, otherwise the pipeline throws. `StepBase` returns itself.
 
-**Source:** [IStep.cs](../../Framework/Core/Abstractions/IStep.cs)
+**Source:** [IStep.cs](../../AITaskAgent.Abstractions/Abstractions/IStep.cs)
 
 ---
 
@@ -97,7 +102,7 @@ Two changes matter for consumers:
   (the step's class name), captured at construction. This is what makes results serializable.
 - **`SuspendInfo`** signals that the step paused instead of finishing.
 
-**Source:** [IStepResult.cs](../../Framework/Core/Abstractions/IStepResult.cs)
+**Source:** [IStepResult.cs](../../AITaskAgent.Abstractions/Abstractions/IStepResult.cs)
 
 ---
 
@@ -117,7 +122,7 @@ public interface IEnrichable
 }
 ```
 
-**Source:** [IEnrichable.cs](../../Framework/Core/Abstractions/IEnrichable.cs)
+**Source:** [IEnrichable.cs](../../AITaskAgent.Abstractions/Abstractions/IEnrichable.cs)
 
 ---
 
@@ -137,7 +142,7 @@ public interface IPipelineMiddleware
 }
 ```
 
-**Source:** [IPipelineMiddleware.cs](../../Framework/Core/Abstractions/IPipelineMiddleware.cs)
+**Source:** [IPipelineMiddleware.cs](../../AITaskAgent.Abstractions/Abstractions/IPipelineMiddleware.cs)
 
 ---
 
@@ -182,6 +187,11 @@ public interface IStepActivator
 {
     object Create(Type stepType, IServiceProvider? serviceProvider);
 }
+```
+
+Without a provider `DefaultStepActivator` tries the same constructors with default values only; if none can be called it throws `InvalidOperationException` instead of returning an unconstructed object.
+
+```csharp
 
 public interface IFallbackable
 {
@@ -211,6 +221,14 @@ public interface IPipelineContextStorage
 `IResume` and `IPipelineContextStorage` are covered in
 [Human in the loop](../guides/human-in-the-loop.md).
 
+`Pipeline.ExecuteAsync` is the one that uses `IPipelineContextStorage` for suspension: when a run ends suspended it saves the context
+(`SaveAsync(correlationId, context, ...)`) before emitting `PipelineCompletedEvent`; without a registered storage it only logs a warning, and if
+`SaveAsync` throws the exception propagates. When a resumed run completes without error it calls `DeleteAsync`; a run that failed keeps its
+saved context. The implementation registered by `AddAITaskAgent*` is chosen by `AITaskAgent:Storage:Context` (`memory` or `file`; see
+[Extensions](extensions.md#configuration-keys)).
+
+`IExtension`, `IExtensionBuilder` and `ExtensionInfo` are described in [Extensions](extensions.md#iextension-and-iextensionbuilder).
+
 ---
 
 ## LLM Interfaces
@@ -239,7 +257,7 @@ public interface ILlmService
 - `Name` is load-bearing: the configuration binder matches each provider's `ServiceType` against the
   `Name` of the registered `ILlmService` instances.
 
-**Source:** [ILlmService.cs](../../Framework/LLM/Abstractions/ILlmService.cs)
+**Source:** [ILlmService.cs](../../AITaskAgent.Extensions.Llm/Abstractions/ILlmService.cs)
 
 ---
 
@@ -269,7 +287,7 @@ public interface ITool
 `IsReadOnly` defaults to `false` — assume side effects unless the tool says otherwise. Declare it
 `true` on pure readers; see [Custom Tools](../extensibility/custom-tools.md).
 
-**Source:** [ITool.cs](../../Framework/LLM/Tools/Abstractions/ITool.cs)
+**Source:** [ITool.cs](../../AITaskAgent.Extensions.Llm/Tools/Abstractions/ITool.cs)
 
 ### ITools
 
@@ -288,7 +306,7 @@ public interface ITools
 Implemented by `AvailableTools`, which also exposes a process-wide `AvailableTools.Instance`.
 Lookups are case-insensitive; `moduleName` filters by the assembly name that declares the tool.
 
-**Source:** [ITools.cs](../../Framework/LLM/Tools/Abstractions/ITools.cs)
+**Source:** [ITools.cs](../../AITaskAgent.Extensions.Llm/Tools/Abstractions/ITools.cs)
 
 ---
 
@@ -341,7 +359,7 @@ There is no generic `Subscribe<TEvent>` and no `Subscribe(int capacity)`. Handle
 event as `IProgressEvent` and filter by type themselves; passing a `correlationId` restricts a
 subscription to a single pipeline execution, while `null` makes it global.
 
-**Source:** [IEventChannel.cs](../../Framework/Observability/IEventChannel.cs)
+**Source:** [IEventChannel.cs](../../AITaskAgent.Abstractions/Observability/IEventChannel.cs)
 
 ---
 
@@ -376,4 +394,4 @@ interface implementation writes only the common fields; `ProgressEventBase` rede
 that a default interface member is only reachable through the interface, so a custom event that
 implements `IProgressEvent` directly and wants its own log line must declare `WriteLog` itself.
 
-**Source:** [IProgressEvent.cs](../../Framework/Observability/IProgressEvent.cs)
+**Source:** [IProgressEvent.cs](../../AITaskAgent.Abstractions/Observability/IProgressEvent.cs)

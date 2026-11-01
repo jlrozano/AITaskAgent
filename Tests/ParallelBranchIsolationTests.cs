@@ -4,6 +4,7 @@ using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.StepResults;
 using AITaskAgent.Core.Steps;
+using AITaskAgent.LLM.Conversation.Context;
 
 namespace AITaskAgent.Tests;
 
@@ -17,10 +18,11 @@ public class ParallelBranchIsolationTests
     /// <summary>
     /// No container. The pipeline attaches itself to the context, so composite steps find the
     /// engine through it rather than through DI. An explicit context is still needed because
-    /// PipelineContextFactory.Create is a static that DI has to initialise.
+    /// PipelineContextFactory.Create is a static that DI has to initialise. LLM context, because
+    /// the conversation test needs one.
     /// </summary>
-    private static (Pipeline Pipeline, PipelineContext Context) Harness()
-        => (new Pipeline(), new PipelineContext());
+    private static (Pipeline Pipeline, LlmPipelineContext Context) Harness()
+        => (new Pipeline(), new LlmPipelineContext());
 
     /// <summary>Records the step path each branch observed while running.</summary>
     private sealed class PathRecordingStep(string name, ConcurrentDictionary<string, string> observed)
@@ -76,13 +78,16 @@ public class ParallelBranchIsolationTests
     private sealed class ConversationWritingStep(string name, ConcurrentBag<int> seen)
         : StepBase(name, typeof(IStepResult), typeof(StepResult<string>))
     {
+        public override Type? RequiredContext => typeof(LlmPipelineContext);
+
         protected override async Task<IStepResult> ExecuteAsync(
             IStepResult input, PipelineContext context, int attempt,
             IStepResult? lastStepResult, CancellationToken cancellationToken)
         {
-            context.Conversation.AddUserMessage(Name);
+            var conversation = context.AsLlmContext(Name).Conversation;
+            conversation.AddUserMessage(Name);
             await Task.Yield();
-            seen.Add(context.Conversation.History.Messages.Count);
+            seen.Add(conversation.History.Messages.Count);
             return new StepResult<string>(this, Name);
         }
     }

@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
@@ -101,7 +102,7 @@ public class RouterStepTests
             new EmptyStep("Fallback"));
         var input = new FakeRouterResult(new EmptyStep("Analyzer"), "newstory");
 
-        var result = await new Pipeline().ExecuteAsync("Test", [router], input, new PipelineContext());
+        var result = await new Pipeline().ExecuteAsync("Test", [router], input, new LlmPipelineContext());
 
         Assert.False(result.HasError, result.Error?.Message);
         Assert.Equal(1, target.Executions);

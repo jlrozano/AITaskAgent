@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Execution;
 using AITaskAgent.Core.Models;
@@ -72,7 +73,7 @@ public sealed class TemplatePlaceholderRegressionTests : IDisposable
             Value = new Intention { DetailedPrompt = "Escribe un cuento sobre vacas voladoras asesinas" }
         };
 
-        await step.ExecuteAsync(input, new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+        await step.ExecuteAsync(input, new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         var userMessage = CapturedUserMessage(capturingService);
         Assert.Equal("Escribe un cuento sobre vacas voladoras asesinas", userMessage);
@@ -97,7 +98,7 @@ public sealed class TemplatePlaceholderRegressionTests : IDisposable
         parallelResult.AddResult("Writer1", new LlmStringStepResult(new EmptyStep("Writer1")) { Content = "Draft about killer flying cows." });
         parallelResult.AddResult("Writer2", new LlmStringStepResult(new EmptyStep("Writer2")) { Content = "Otro borrador sobre vacas asesinas." });
 
-        await step.ExecuteAsync(parallelResult, new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+        await step.ExecuteAsync(parallelResult, new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         var userMessage = CapturedUserMessage(capturingService);
         Assert.Contains("Draft about killer flying cows.", userMessage);
@@ -131,7 +132,7 @@ public sealed class TemplatePlaceholderRegressionTests : IDisposable
         criticResult.Writer1 = "Primer borrador.";
         criticResult.Writer2 = "Segundo borrador.";
 
-        await step.ExecuteAsync(criticResult, new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+        await step.ExecuteAsync(criticResult, new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         var userMessage = CapturedUserMessage(capturingService);
         Assert.Contains("Primer borrador.", userMessage);

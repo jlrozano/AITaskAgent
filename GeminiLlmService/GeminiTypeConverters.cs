@@ -47,6 +47,22 @@ internal static class GeminiTypeConverters
             parts.Add(new Part { Text = message.Content });
         }
 
+        // Add attachments (images, PDFs) as inline data
+        if (message.Attachments is { Count: > 0 })
+        {
+            foreach (var attachment in message.Attachments)
+            {
+                parts.Add(new Part
+                {
+                    InlineData = new Blob
+                    {
+                        MimeType = attachment.MediaType,
+                        Data = Convert.FromBase64String(attachment.DataBase64)
+                    }
+                });
+            }
+        }
+
         // Add tool calls if present (for assistant messages)
         if (message.ToolCalls != null)
         {

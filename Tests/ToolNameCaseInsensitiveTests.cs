@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -78,7 +79,7 @@ public sealed class ToolNameCaseInsensitiveTests
 
         await step.ExecuteAsync(
             new LlmStringStepResult(new EmptyStep("Seed")) { Content = "hazlo" },
-            new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+            new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         Assert.Equal(1, tool.Calls);
     }

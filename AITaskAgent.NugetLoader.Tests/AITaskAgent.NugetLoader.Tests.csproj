@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="../AITaskAgent.NugetLoader/NuGetAudit.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
+    <PackageReference Include="xunit" Version="2.*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.*" />
+    <!-- NugetTestFeed compiles the libraries of its test packages with Roslyn. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <!-- The shared-set test needs a host assembly of Microsoft.Extensions.* in the default load context (the loader itself does not depend on it). -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AITaskAgent.NugetLoader\AITaskAgent.NugetLoader.csproj" />
+    <!-- The plugins of the loader tests derive from StepBase and are registered in the real StepRegistry: the host side of a step package. -->
+    <ProjectReference Include="..\AITaskAgent.Core\AITaskAgent.Core.csproj" />
+    <!-- Plugins with tools and tool sources (ITool, IToolSource) are compiled against the host's AITaskAgent.Extensions.Llm. -->
+    <ProjectReference Include="..\AITaskAgent.Extensions.Llm\AITaskAgent.Extensions.Llm.csproj" />
+  </ItemGroup>
+
+  <!-- A NuGet folder source built by the tests themselves (no network); the same file the designer test projects link. -->
+  <ItemGroup>
+    <Compile Include="../Samples/TestShared/NugetTestFeed.cs" Link="TestShared/NugetTestFeed.cs" />
+    <!-- Compiles the step libraries against the host's framework assemblies (AITaskAgent.Abstractions/Core). -->
+    <Compile Include="../Samples/TestShared/PluginTestFixture.cs" Link="TestShared/PluginTestFixture.cs" />
+  </ItemGroup>
+
+</Project>

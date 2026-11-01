@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -83,7 +84,7 @@ public sealed class LlmFallbackClassificationTests
             ToolCalls = [new ToolCall { Id = $"call_{n}", Name = "list_dir", Arguments = $"{{\"path\":\"dir{n}\"}}" }]
         }]));
         var step = BuildStep(service, maxToolIterations: 2);
-        var context = new PipelineContext();
+        var context = new LlmPipelineContext();
 
         var result = await RunAsync(step, context);
 
@@ -98,7 +99,7 @@ public sealed class LlmFallbackClassificationTests
     {
         var service = new ScriptedService(_ => LlmResult.Failure(new HttpRequestException("503 Service Unavailable"), true));
         var step = BuildStep(service);
-        var context = new PipelineContext();
+        var context = new LlmPipelineContext();
 
         var result = await RunAsync(step, context);
 
@@ -113,7 +114,7 @@ public sealed class LlmFallbackClassificationTests
     {
         var service = new ScriptedService(_ => throw new InvalidOperationException("stream broke"));
         var step = BuildStep(service);
-        var context = new PipelineContext();
+        var context = new LlmPipelineContext();
 
         var result = await RunAsync(step, context);
 
@@ -130,14 +131,14 @@ public sealed class LlmFallbackClassificationTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => RunAsync(step, new PipelineContext(), cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => RunAsync(step, new LlmPipelineContext(), cts.Token));
     }
 
     [Fact]
     public async Task An_error_without_a_provider_exception_does_not_switch_provider()
     {
         var step = BuildStep(new ScriptedService(_ => LlmResult.Success([new LlmResponse { Content = "ok" }])));
-        var context = new PipelineContext();
+        var context = new LlmPipelineContext();
         await RunAsync(step, context);
         var templateBug = new LlmStringStepResult(new EmptyStep("Seed"))
         {

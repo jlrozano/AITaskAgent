@@ -21,21 +21,22 @@ provider.UseAITaskAgent();
 | Service | Implementation | Lifetime |
 |---------|----------------|----------|
 | `IPipeline` | `Pipeline` | Singleton |
-| `PipelineContextFactory` | `PipelineContextFactory` | Singleton |
-| `IPipelineContextStorage` | `InMemoryPipelineContextStorage` | Singleton |
+| `PipelineContextFactory` | `PipelineContextFactory`; `AddAITaskAgent()` replaces it with `LlmPipelineContextFactory` (unless you registered your own factory) | Singleton |
+| `IPipelineContextStorage` | per `AITaskAgent:Storage:Context`; default `InMemoryPipelineContextStorage` | Singleton |
 | `IEventChannel` | `EventChannel` | Singleton |
 | `ITemplateRendered` | `TinyTemplateRendered` | Singleton |
 | `ITools` | `AvailableTools.Instance` | Singleton |
 | `ICacheService` | `MemoryCacheService` | Singleton |
-| `IConversationStorage` | `InMemoryConversationStorage` | Singleton |
+| `IConversationStorage` | per `AITaskAgent:Storage:Conversation`; default `InMemoryConversationStorage` | Singleton |
 | `ConversationContext` | factory using `Conversation.MaxTokens` | Transient |
 | `IOptions<AITaskAgentOptions>` | bound from `AITaskAgent` | Singleton |
 | `IOptions<LlmEnvironment>` | built from `AITaskAgent:LlmProviders` | Singleton |
 | `IOptions<PipelineOptions>` | derived from `AITaskAgent:Timeouts` | Singleton |
 
-`UseAITaskAgent()` resolves `IPipeline` and `PipelineContextFactory` (arming the static
-`PipelineContextFactory.Create()` entry point) and registers every DI-registered `ITool` into
-`AvailableTools.Instance`.
+`UseAITaskAgent()` (`UseAITaskAgentCore()` for the core alone) resolves `IPipeline` and `PipelineContextFactory` (arming the static
+`PipelineContextFactory.Create()` entry point, and building the context storage it depends on),
+resolves `IConversationStorage` (so a wrong storage section fails at startup) and registers every
+DI-registered `ITool` into `AvailableTools.Instance`.
 
 > [!WARNING]
 > `CircuitBreaker` and `RateLimiter` are **not** registered by `AddAITaskAgent()`. They are plain
@@ -287,23 +288,25 @@ no pricing configured. Cached prompt tokens (optional argument) are billed at
 | Property | Type | Default | Consumed by the framework |
 |----------|------|---------|---------------------------|
 | `Observability.EventLogLevel` | `LogLevel` | `Debug` | Yes — `EventChannel` |
-| `Observability.EventChannelCapacity` | `int` | `100` | No |
+| `Observability.EventChannelCapacity` | `int` | `1000` | Yes — `EventChannel` options built in `AddAITaskAgent()` and in `PipelineContextFactory` |
 | `Observability.EnableMetrics` | `bool` | `true` | No |
 | `Observability.EnableTracing` | `bool` | `true` | No |
 | `Timeouts.DefaultPipelineTimeout` | `TimeSpan` | `00:10:00` | Yes — `PipelineOptions` |
 | `Timeouts.DefaultStepTimeout` | `TimeSpan` | `00:01:00` | Yes — `PipelineOptions` |
 | `Timeouts.DefaultToolTimeout` | `TimeSpan` | `00:00:30` | No |
 | `Timeouts.StreamingActivityTimeout` | `TimeSpan` | `00:00:30` | No — `[Obsolete]`; use `LlmInferenceSettings.StreamingInactivityTimeoutSeconds` |
-| `Conversation.MaxTokens` | `int` | `8192` | Only by the transient `ConversationContext` registered in DI (`PipelineContextFactory.Create` builds its own with `new ConversationContext()`, 4000) |
-| `Conversation.UseBookmarks` | `bool` | `true` | Only if you pass a `ConversationOptions` to the `ConversationContext` constructor (the DI factory does not) |
+| `Conversation.MaxTokens` | `int` | `8192` | Yes — the transient `ConversationContext` registered in DI and the contexts `LlmPipelineContextFactory` creates take it; 4000 is only the fallback when no `AITaskAgentOptions` is available |
+| `Conversation.UseBookmarks` | `bool` | `true` | Yes — the DI factory passes `config.Conversation`; constructing a `ConversationContext` by hand without `ConversationOptions` keeps the default |
 | `Conversation.UseSlidingWindow` | `bool` | `true` | Yes — copied into every `LlmRequest` by `BaseLlmStep` |
-| `Conversation.KeepFirstNMessages` | `int` | `2` | Only if you pass a `ConversationOptions` to the `ConversationContext` constructor (the DI factory does not); otherwise 2 |
+| `Conversation.KeepFirstNMessages` | `int` | `2` | Yes — the DI factory passes `config.Conversation`; by hand without `ConversationOptions` it is 2 |
 | `Conversation.SlidingWindowMaxTokens` | `int` | `8192` | Yes — copied into every `LlmRequest` by `BaseLlmStep` |
 | `CircuitBreaker.FailureThreshold` | `int` | `5` | No |
 | `CircuitBreaker.OpenDurationSeconds` | `int` | `60` | No |
 | `RateLimit.MaxTokens` | `int` | `100` | No |
 | `RateLimit.RefillIntervalMs` | `int` | `1000` | No |
 | `RateLimit.TokensPerRefill` | `int` | `10` | No |
+| `Storage.Context.Type` / `.Directory` | `string` | `memory` / — | Yes — `IPipelineContextStorage` (see below) |
+| `Storage.Conversation.Type` / `.Directory` | `string` | `memory` / — | Yes — `IConversationStorage` (see below) |
 
 > [!WARNING]
 > The options marked "No" are bound and readable through `IOptions<AITaskAgentOptions>`, but the
@@ -323,6 +326,39 @@ no pricing configured. Cached prompt tokens (optional argument) are billed at
 All of these are classes with `init`-only properties: they are bound from configuration, not mutated at runtime.
 To change them programmatically, supply the values through a configuration source (for example
 `AddInMemoryCollection`) rather than `services.Configure<AITaskAgentOptions>(o => ...)`.
+
+### Storage (`AITaskAgent:Storage`)
+
+Chooses where suspended pipeline contexts and conversations are kept. Both default to memory, which
+is what `AddAITaskAgent()` registered before the section existed.
+
+```json
+"AITaskAgent": {
+  "Storage": {
+    "Context":      { "Type": "file", "Directory": "data/contexts" },
+    "Conversation": { "Type": "yaml", "Directory": "${APP_DATA}/conversations" }
+  }
+}
+```
+
+| Key | Values | Builds |
+|---|---|---|
+| `Context:Type` | `memory` (default), `file` | `InMemoryPipelineContextStorage`, `FilePipelineContextStorage(Directory)` |
+| `Conversation:Type` | `memory` (default), `file`, `yaml` | `InMemoryConversationStorage`, `FileConversationStorage(Directory)`, `YamlFileConversationStorage(Directory)` |
+| `*:Directory` | folder | Required by the file types, created if missing |
+
+- The type is case-insensitive. A relative `Directory` is resolved against the current directory,
+  and `${VAR}` is replaced by the environment variable as in any other value of the section.
+- An unknown type, a file type without `Directory`, or a `Directory` whose `${VAR}` is not defined
+  throw `InvalidOperationException` naming the key (`'AITaskAgent:Storage:Context:Type' is 'redis'
+  ... Valid values: memory, file.`). Both storages are built in `UseAITaskAgent()`, so it fails at startup.
+- Both are registered with `TryAddSingleton`: a storage you register yourself wins, before
+  `AddAITaskAgent()` or after it, and the section is then not read.
+- `Pipeline.ExecuteAsync` saves the context in `IPipelineContextStorage` when a run ends suspended
+  and deletes it when a resumed run completes without error; without a registered storage it only
+  logs a warning, and if `Save` fails the exception propagates.
+- What the file context storage keeps, and which values it accepts, is described in
+  [Human-in-the-Loop](human-in-the-loop.md#persisting-a-suspended-run).
 
 ### PipelineOptions
 

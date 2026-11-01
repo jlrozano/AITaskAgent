@@ -14,7 +14,7 @@ namespace AITaskAgent.Tests;
 /// without one at the raw HTTP-client level. That verification was incomplete: it looked at
 /// OpenAILlmService/GeminiLlmService directly, not at how a properly wired sample actually reaches
 /// them. Every sample that goes through the framework's real config path -
-/// AITaskAgent.Configuration.ServiceCollectionExtensions.ConfigureLlmEnvironmentOptions, reached via
+/// AITaskAgent.Configuration.LlmServiceCollectionExtensions.ConfigureLlmEnvironmentOptions, reached via
 /// AddAITaskAgent() + IOptions&lt;LlmEnvironment&gt; - throws there if BaseUrl is missing, by design
 /// ("has no BaseUrl configured"). Every sample using that path already supplies one, including for
 /// Gemini providers (the real generativelanguage.googleapis.com endpoint, even though the SDK would

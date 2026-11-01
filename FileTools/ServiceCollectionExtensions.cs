@@ -1,3 +1,4 @@
+using AITaskAgent.Configuration;
 using AITaskAgent.FileTools.Tools;
 using AITaskAgent.LLM.Tools.Abstractions;
 using Microsoft.Extensions.Configuration;
@@ -18,7 +19,12 @@ public static class ServiceCollectionExtensions
     /// executable's directory unless a root is configured elsewhere. Prefer one of the overloads
     /// that state the root explicitly.
     /// </remarks>
+    /// <remarks>Sugar for <c>services.AddExtension(new FileToolsExtension())</c>.</remarks>
     public static IServiceCollection AddFileTools(this IServiceCollection services)
+        => services.AddExtension(new FileToolsExtension());
+
+    /// <summary>The tool registrations of <see cref="FileToolsExtension"/>.</summary>
+    internal static void RegisterTools(IServiceCollection services)
     {
         services.AddTransient<ITool, ViewFileTool>();
         services.AddTransient<ITool, WriteToFileTool>();
@@ -29,8 +35,6 @@ public static class ServiceCollectionExtensions
         services.AddTransient<ITool, GrepSearchTool>();
         services.AddTransient<ITool, ViewFileOutlineTool>();
         services.AddTransient<ITool, ViewCodeItemTool>();
-
-        return services;
     }
 
     /// <summary>
@@ -86,7 +90,7 @@ public static class ServiceCollectionExtensions
         return services.AddFileTools();
     }
 
-    private static void Apply(FileToolsOptions options)
+    internal static void Apply(FileToolsOptions options)
     {
         if (!string.IsNullOrWhiteSpace(options.RootDirectory))
         {

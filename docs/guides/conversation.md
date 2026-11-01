@@ -18,11 +18,15 @@ var conversation = new ConversationContext(
 );
 ```
 
-The DI registration is **transient** and pre-configured with `Conversation.MaxTokens` from
-configuration plus the registered `ILlmService.EstimateTokenCount` as the token counter (falling
-back to `NullLlmService` when no provider is registered). It does not pass `ConversationOptions`, so
-`KeepFirstNMessages` and `UseBookmarks` keep their defaults (2 and `true`) there; to apply the
-configured values, construct the context with the `conversationOptions` argument.
+The DI registration is **transient** and pre-configured with the `AITaskAgent:Conversation` section
+(`config.Conversation`): `MaxTokens` plus `ConversationOptions`, so `KeepFirstNMessages` and
+`UseBookmarks` are respected, with the registered `ILlmService.EstimateTokenCount` as the token
+counter (falling back to `NullLlmService` when no provider is registered). The 4000 limit is only
+the fallback of `LlmPipelineContextFactory` when no `AITaskAgentOptions` is available. A context
+you construct by hand without the `conversationOptions` argument keeps the defaults (2 and `true`).
+
+To persist and reload conversations between runs, see [Conversation storage](conversation-storage.md)
+(`IConversationStorage`).
 
 ## Adding Messages
 
@@ -120,10 +124,11 @@ var clone = conversation.Clone();
 
 ## PipelineContext Integration
 
-Conversation is part of `PipelineContext`:
+Conversation is part of `LlmPipelineContext` (`AITaskAgent.LLM.Conversation.Context`), the context LLM steps require; the base
+`PipelineContext` has no conversation:
 
 ```csharp
-var context = PipelineContextFactory.Create(conversation);
+var context = LlmPipelineContextFactory.Create(conversation);
 
 // Access conversation
 context.Conversation.AddUserMessage("Query");

@@ -10,9 +10,9 @@
 >
 > | Nombre conceptual | Componente real |
 > |---|---|
-> | `AgentPipeline` | `Pipeline` / `IPipeline` (`Framework/Core/Execution/Pipeline.cs`) |
-> | `AgentStep`, `AgentStepBase` | `BaseLlmStep` y `BaseLlmStep<TIn,TOut>` (`Framework/LLM/Steps/BaseLlmStep.cs`); en la práctica `TemplateLlmStep<TIn,TOut>` |
-> | `ChatAgentStep` | No existe como clase: `TemplateLlmStep` es *stateful* (usa `context.Conversation`); `StatelessTemplateLlmStep` usa una conversación limpia por ejecución |
+> | `AgentPipeline` | `Pipeline` / `IPipeline` (`AITaskAgent.Core/Execution/Pipeline.cs`) |
+> | `AgentStep`, `AgentStepBase` | `BaseLlmStep` y `BaseLlmStep<TIn,TOut>` (`AITaskAgent.Extensions.Llm/Steps/BaseLlmStep.cs`); en la práctica `TemplateLlmStep<TIn,TOut>` |
+> | `ChatAgentStep` | No existe como clase: `TemplateLlmStep` es *stateful* (usa la conversación de `LlmPipelineContext`); `StatelessTemplateLlmStep` usa una conversación limpia por ejecución |
 > | `RouterAgentStep` | `IntentionAnalyzerStep<TIn>` (clasifica) + `RouterStep` (enruta) |
 > | `ParserStep` | No existe: el parseo JSON lo hace `BaseLlmStep.ParseLlmResponseAsync` |
 > | `PipelineStep` | No existe: la composición se hace con `GroupStep` (o `NextSteps`) |
@@ -178,7 +178,7 @@ Latencia LLM mínima: 1,000,000µs (1 segundo)
 ```
 
 **Consecuencias:**
-- API limpia sin atributos especiales en el camino programático (el registro YAML sí usa `[StepTag]`/`[YamlStepTag]`, y `SchemaCompiler` genera y compila tipos C# con Roslyn a partir de JSON Schema)
+- API limpia sin atributos especiales en el camino programático (el registro de pasos para YAML usa `[StepTag]`; los esquemas JSON se validan en ejecución, sin generar ni compilar tipos C#)
 - Debugging directo con breakpoints
 -  No apto para hot-paths de microsegundos (pero este no es nuestro caso)
 
@@ -204,16 +204,18 @@ Latencia LLM mínima: 1,000,000µs (1 segundo)
 
 **Implementación:**
 ```
-PipelineContext (sealed record)
+PipelineContext (record base, en AITaskAgent.Abstractions)
 ├─ ServiceProvider (no serializado)
 ├─ EventChannel    (no serializado)
 ├─ Runtime         (IPipelineRuntime que la ejecuta, no serializado)
 ├─ CorrelationId
 ├─ Metadata        (ConcurrentDictionary, compartido)
 ├─ StepResults     (ConcurrentDictionary, compartido; caché de resultados por ruta)
-└─ Conversation    (ConversationContext, mutable)
 
-En ParallelStep (PipelineContext.CloneForBranch):
+LlmPipelineContext : PipelineContext (AITaskAgent.Extensions.Llm)
+└─ Conversation    (ConversationContext, mutable; solo en el contexto LLM)
+
+En ParallelStep (CloneForBranch, virtual):
 ├─ ServiceProvider, EventChannel, Runtime, CorrelationId, Metadata, StepResults → Compartidos
 └─ Conversation → Clonada por rama; ruta y StepState → propios de la rama
 ```
@@ -222,6 +224,7 @@ En ParallelStep (PipelineContext.CloneForBranch):
 - Seguridad en concurrencia garantizada
 - Trazabilidad: Cada rama tiene su propia historia conversacional
 -  Requiere clonación explícita en splits paralelos (documentado)
+- Los pasos LLM declaran `RequiredContext = typeof(LlmPipelineContext)`: el pipeline lo comprueba antes de ejecutar nada (hijos de Group, Parallel, Loop y casos del switch declarativo incluidos) y vuelve a comprobarlo justo antes de cada paso añadido en ejecución, de modo que un contexto base falla con el nombre del paso y no a mitad de la ejecución
 
 ---
 
@@ -375,7 +378,7 @@ Validación Semántica (IStepValidator / Validate):
 **BaseLlmStep (Cognitivo)**
 - **Qué es:** Unidad con capacidad de razonamiento LLM
 - **Características:**
-  - Tiene System Prompt y memoria conversacional (`context.Conversation` por defecto)
+  - Tiene System Prompt y memoria conversacional (la `Conversation` del `LlmPipelineContext` por defecto)
   - Puede usar herramientas (tools) y *tags* en el texto (`TagHandlers`)
   - Se corrige mediante los reintentos de `RetryMiddleware`, con el error como feedback
   - Salida no garantizada hasta validación
@@ -395,9 +398,23 @@ Validación Semántica (IStepValidator / Validate):
 - **Uso típico:** `RouterStep` (subclase) enruta por la opción elegida por `IntentionAnalyzerStep`
 
 **ParallelStep, GroupStep, LoopStep, BreakStep (Composición)**
-- `ParallelStep`: ramas concurrentes con conversación clonada por rama; resultado `ParallelResult`
+- `ParallelStep`: ramas concurrentes con conversación clonada por rama; resultado `ParallelResult`. Con `FailFast` (por defecto `true`) una rama fallida hace fallar al step; con `FailFast = false` el step no devuelve error agregado y cada rama fallida conserva el suyo en su entrada del `ParallelResult` y en su `BranchCompletedEvent`
 - `GroupStep`: secuencia de steps en el mismo contexto (vía `NextSteps`)
-- `LoopStep`: repite sus steps hasta `MaxIterations` (50 por defecto) o hasta que uno devuelve `BreakStepResult` (`BreakStep`)
+- `LoopStep`: repite sus steps hasta `MaxIterations` (50 por defecto) o hasta que una vuelta termina en un `BreakStepResult` (`BreakStep`; con `When`, solo si la condición es verdadera)
+
+**ScriptStep, CSharpStep, SuspendStep (steps declarables de extensiones y core)**
+- `ScriptStep` (`AITaskAgent.Extensions.Script`): JavaScript declarado en el pipeline. El run compila los scripts una vez y los ejecuta en un worker por run (proceso aparte con V8; el anfitrión no carga V8), en un contexto V8 nuevo por ejecución
+- `CSharpStep` (`AITaskAgent.Extensions.CSharp`): C# declarado en el pipeline, ejecutado en el proceso anfitrión con la API completa
+- `SuspendStep` (core): suspende el run a la espera de una respuesta (ver §4.5)
+- Las extensiones se añaden implementando `IExtension.Register(IExtensionBuilder)` y llamando a `services.AddExtension(...)`
+
+**ExecStep (Ejecución de programas externos)**
+- **Qué es:** step del core, declarable en YAML como `type: ExecStep`, que ejecuta un `.exe`, `.bat` o `.cmd` sin shell y devuelve el texto de su salida estándar. Quien escribe el flujo asume el riesgo: el programa corre con los privilegios del proceso anfitrión
+- **Comando:** `executable` es literal (sin plantillas); cada elemento de `args` se renderiza por separado y llega como un único argumento (`ArgumentList`), de modo que espacios, comillas o `&` no inyectan órdenes. Un `.bat`/`.cmd` en Windows se lanza con `cmd.exe /d /s /c` y se rechaza un argumento con `"`, `%`, salto de línea o NUL
+- **Entorno y límites:** `inheritEnvironment` es `minimal` por defecto (solo `PATH`, `SystemRoot`, `TEMP` y similares, más `env`); `timeoutMs` (60 000), `okExitCodes` (`[0]`), `maxOutputChars` (1 000 000 por flujo) y `encoding` (UTF-8). El texto de `stdin` y los valores de `env` no aparecen en eventos, logs ni errores
+- **Resultado y errores:** el resultado es el stdout tal cual (no se recorta el salto de línea final). Un código de salida no aceptado, una denegación de la política, un fallo de arranque, una propiedad inválida o salida por encima del tope son `ExecStepException` (con `Kind`, `ExitCode` y los últimos 2000 caracteres de stderr) y nunca se reintentan solos; un tiempo agotado es `TimeoutException` y una cancelación `OperationCanceledException`, y en ambos casos se mata el árbol de procesos
+- **Árbol de procesos:** en Windows el proceso corre en un job object (`KILL_ON_JOB_CLOSE`) y sus descendientes mueren con él, también al terminar con normalidad; en Linux y macOS solo se usa `Process.Kill(entireProcessTree: true)`, así que un nieto huérfano sobrevive (limitación no cubierta por los tests)
+- **Política:** un anfitrión puede registrar `IExecStepPolicy` en DI para denegar un comando o confinar su directorio de trabajo; sin implementación registrada todo está permitido
 
 #### Tipos de Agentes Especializados
 
@@ -410,7 +427,7 @@ Validación Semántica (IStepValidator / Validate):
 **TemplateLlmStep (conversacional)**
 - **Propósito:** Mantener conversaciones coherentes
 - **Características:**
-  - Stateful: lee/escribe `context.Conversation`
+  - Stateful: lee/escribe la conversación del `LlmPipelineContext`
   - Gestiona bookmarks automáticamente (deja solo el par usuario/asistente final)
   - El sliding window lo aplica el servicio LLM al construir la petición (`AITaskAgent:Conversation`)
 
@@ -535,8 +552,8 @@ Sin overhead de grafo declarativo
 
 **PipelineContext**
 - Estado compartido de la ejecución
-- `sealed record` con diccionarios concurrentes (no inmutable)
-- Contiene: ServiceProvider, EventChannel, Runtime, CorrelationId, Metadata, StepResults, Conversation. El `CancellationToken` no forma parte del contexto: se pasa como parámetro.
+- `record` (no sellado) con diccionarios concurrentes (no inmutable); `LlmPipelineContext` lo extiende con la conversación
+- Contiene: ServiceProvider, EventChannel, Runtime, CorrelationId, Metadata, StepResults (y Conversation en `LlmPipelineContext`). El `CancellationToken` no forma parte del contexto: se pasa como parámetro.
 
 **NextSteps e IPipelineRuntime**
 - `IStepResult.NextSteps`: lista de steps que el pipeline ejecutará a continuación (la usan `SwitchStep`, `RouterStep` y `GroupStep`)
@@ -553,7 +570,7 @@ Sin overhead de grafo declarativo
 |----------------|---------|
 | **Observabilidad Garantizada** | Todo paso por steps pasa por el pipeline. Imposible saltarse logging/métricas |
 | **Flexibilidad Mantenida** | Steps siguen decidiendo el flujo. Routing dinámico funciona perfectamente |
-| **Simplicidad Arquitectónica** | No necesita grafo declarativo; basta con nombres de step únicos por nivel (el registro `StepManager` solo se usa para los pipelines YAML) |
+| **Simplicidad Arquitectónica** | No necesita grafo declarativo; basta con nombres de step únicos por nivel (el registro `IStepRegistry` solo se usa para los pipelines YAML) |
 | **Control Centralizado** | Timeouts, reintentos y observabilidad en middlewares; se pueden añadir middlewares propios con `PipelineMiddlewareRegistry` |
 | **Testing Mejorado** | Los resultados por ruta quedan en `context.StepResults`, lo que permite verificar qué steps se ejecutaron |
 
@@ -589,6 +606,7 @@ AITaskAgent (Step1 decide pero no ejecuta)
 - Un step se suspende devolviendo un resultado con `SuspendInfo` (por ejemplo `SuspendStepResult`). Debe implementar `IResume`; `StepBase` lo implementa con los hooks `SaveStateAsync` / `RestoreStateAsync`. Si el step no implementa `IResume`, el pipeline lanza `InvalidOperationException`.
 - El pipeline guarda el estado del step en `context.Metadata`, registra el resultado en `context.StepResults`, emite `PipelineSuspendedEvent` y devuelve el resultado suspendido (el `PipelineCompletedEvent` sale con `Success = false` y el mensaje "Suspended awaiting input").
 - Para reanudar se vuelve a llamar a `ExecuteAsync` con el **mismo** contexto (o uno recuperado con `PipelineContextFactory.CreateFromId` desde `IPipelineContextStorage`, en memoria por defecto) y la respuesta humana como entrada. Los steps ya completados se saltan reutilizando `StepResults` (*fast-forward*) y el step suspendido recibe la respuesta en `RestoreStateAsync`.
+- La persistencia es cosa del pipeline, no del anfitrión: al terminar suspendido, `Pipeline.ExecuteAsync` guarda el contexto en `IPipelineContextStorage` con su `CorrelationId` (antes de emitir `PipelineCompletedEvent`); sin storage registrado solo emite un warning, y si `SaveAsync` falla la excepción se propaga. Al completar una reanudación sin error borra ese contexto guardado; un run que falla lo conserva.
 - `LoopStep` propaga la suspensión (o el error) de un hijo sin cachear su propio resultado, para poder rehidratarse después. `ParallelStep` no la propaga: el resultado suspendido de una rama queda dentro de su `ParallelResult` (la rama se emite como `BranchCompletedEvent` con `Success = false`).
 
 ---
@@ -657,7 +675,7 @@ Los Agentes son los componentes "inteligentes" que heredan de `BaseLlmStep`. A d
 **Propósito:** Mantener coherencia en conversaciones multi-turn
 
 **Características:**
-- Stateful: Lee y escribe en `context.Conversation.History`
+- Stateful: Lee y escribe en `Conversation.History` del `LlmPipelineContext`
 - Prompts como plantillas: por defecto `{name}_prompt.md` y `{name}_system.md` vía `ITemplateProvider`, o texto literal
 - Gestiona bookmarks automáticamente para optimizar tokens
 - Sliding window (lo aplica el servicio LLM): mantiene los primeros N mensajes + los más recientes que quepan en el presupuesto
@@ -931,7 +949,7 @@ ErrorStepResult.FromMessage(step, "Error description");
 - Si falla, devuelve un error sin excepción, de modo que `RetryMiddleware` reintenta con el mensaje de error como feedback al LLM
 - Un step derivado puede sobrescribir `ParseLlmResponseAsync`
 
-**Nota:** existe `JsonResponseParser` (`Framework/Support/JSON`) con cuatro estrategias (parseo directo, bloque de código, búsqueda de JSON en el texto, limpieza y reintento), pero el framework no lo usa; está disponible para código de usuario.
+**Nota:** existe `JsonResponseParser` (`AITaskAgent.Core/Support/JSON`) con cuatro estrategias (parseo directo, bloque de código, búsqueda de JSON en el texto, limpieza y reintento), pero el framework no lo usa; está disponible para código de usuario.
 
 ### 6.3 ActionStep (El Ejecutor)
 
@@ -983,6 +1001,7 @@ La idempotencia, si se necesita, es responsabilidad de la acción.
 **Configuración:**
 - `SwitchStep<TIn>(name, Func<TIn, PipelineContext, (IStep, IStepResult)> selector)`: el selector devuelve el step destino y el resultado que se le pasa; el destino se añade a `NextSteps` y se emite un `StepRoutingEvent`
 - `RouterStep(name, Dictionary<string, IStep> routes, IStep? defaultRoute)`: enruta por `IRouterResult.SelectedOption`, sin distinguir mayúsculas
+- `DeclarativeSwitchStep` (`type: SwitchStep` en YAML): evalúa la expresión de plantilla `On` y ejecuta los pasos del caso de `Cases` cuya clave coincide (sin distinguir mayúsculas ni espacios en los extremos) o los de `Default`; sin coincidencia y sin `Default` falla. Envuelve los pasos elegidos en un `GroupStep` y reutiliza `SwitchStep<TIn>`, así que el enrutado y el `StepRoutingEvent` son los mismos
 - Falla si el selector no devuelve ruta, o si `RouterStep` no encuentra la opción y no hay `defaultRoute` (lanza `InvalidOperationException`, que `RetryMiddleware` convierte en resultado de error)
 
 **Patrón de uso típico:**
@@ -1088,7 +1107,7 @@ var merge = new DelegatedStep<ParallelResult, StepResult<UserView>>("Merge",
 **Características:**
 - `GroupStep(name, steps)` / `GroupStep<TIn>`: añade sus steps a `NextSteps` y el pipeline padre los ejecuta en orden, en el **mismo** contexto (ruta anidada `Grupo/Step`). Toma como tipo de entrada el del primer step y como salida el del último; `GroupStep<TIn>` comprueba en el constructor que el primer step acepte `TIn`
 - Contexto compartido: `PipelineContext` se propaga
-- `LoopStep(name, steps, maxIterations = 50)`: repite la secuencia; sale al devolver un hijo un `BreakStepResult` (lo produce `BreakStep`, que conserva el valor de su entrada), o al agotar las iteraciones (emite `LoopExhaustedEvent`). Cada iteración tiene ruta propia (`Loop/Iter_N`) y, con `OutputIterationToMetadata`, publica el número de iteración en `Metadata`
+- `LoopStep(name, steps, maxIterations = 50)`: repite la secuencia; sale cuando una vuelta termina en un `BreakStepResult` (lo produce `BreakStep`, que conserva el valor de su entrada; con `When` solo rompe si la expresión es verdadera y, si no, deja pasar la entrada sin cambios), o al agotar las iteraciones (emite `LoopExhaustedEvent`). Cada iteración tiene ruta propia (`Loop/Iter_N`) y, con `OutputIterationToMetadata`, publica el número de iteración en `Metadata`
 - Otra opción es llamar a `IPipeline.ExecuteAsync` desde un `DelegatedStep`/`ActionStep`, lo que crea una ejecución anidada independiente
 
 **Patrón de reutilización:**
@@ -1197,7 +1216,7 @@ Pipeline continúa con resultado válido
 
 **Nivel 2: Semántica (`IStep.ValidateAsync` / `IStepValidator`)**
 
-**Responsable:** El step (sobrescribiendo `Validate`) o validadores registrados con `AddValidator` (en los pipelines YAML, la función JS `validate` de un esquema la compila `SchemaCompiler` dentro del `ValidateAsync` del tipo de resultado, es decir, en el nivel estructural)  
+**Responsable:** El step (sobrescribiendo `Validate`) o validadores registrados con `AddValidator` (en los pipelines YAML, el `outputSchema` se valida con `JsonStepResult.Validate` dentro del `ValidateAsync` del resultado, es decir, en el nivel estructural)  
 **Cuándo:** Siempre, tras una validación estructural correcta; el primer validador que falla corta  
 **Coste:** Alto (I/O, procesamiento complejo)  
 **Acción si falla:** `StepValidationEvent` (tipo semántico), el error se añade a la conversación y el step reintenta
@@ -1364,7 +1383,7 @@ BOOKMARKS
 - `YamlFileConversationStorage` (YAML en disco)
 - Custom (implementar la interfaz para Redis, PostgreSQL, etc.)
 
-El estado de ejecución completo (`PipelineContext`, para suspender/reanudar) se guarda aparte con `IPipelineContextStorage`, cuya única implementación incluida es `InMemoryPipelineContextStorage`.
+El estado de ejecución completo (`PipelineContext`, para suspender/reanudar) se guarda aparte con `IPipelineContextStorage`, con dos implementaciones incluidas: `InMemoryPipelineContextStorage` (por defecto) y `FilePipelineContextStorage` (JSON en disco), que se elige con `AITaskAgent:Storage:Context:Type` (`memory` | `file`).
 
 ### 8.3 Optimización de Tokens
 
@@ -1454,7 +1473,7 @@ El framework distingue cuatro categorías de errores con estrategias diferentes:
 
 ### 9.2 Políticas de Retry
 
-**RetryPolicy** (`Framework/Resilience/RetryPolicy.cs`). No la aplica el pipeline: la usan los servicios LLM (`GeminiLlmService` la ejecuta; `OpenAILlmService` toma de ella `MaxAttempts`, `InitialDelay` y `MaxDelay`, con 3 / 2 s / 60 s si no se le pasa ninguna). Los reintentos de step de `RetryMiddleware` son inmediatos, sin espera entre intentos.
+**RetryPolicy** (`AITaskAgent.Core/Resilience/RetryPolicy.cs`). No la aplica el pipeline: la usan los servicios LLM (`GeminiLlmService` la ejecuta; `OpenAILlmService` toma de ella `MaxAttempts`, `InitialDelay` y `MaxDelay`, con 3 / 2 s / 60 s si no se le pasa ninguna). Los reintentos de step de `RetryMiddleware` son inmediatos, sin espera entre intentos.
 
 ```
 Configuración por defecto:
@@ -1482,7 +1501,7 @@ y TaskCanceledException, salvo que se defina ShouldRetry.
 
 **Propósito:** Evitar sobrecargar servicios que están fallando consistentemente.
 
-**Estado en el código:** la clase `CircuitBreaker` (`Framework/Resilience`) existe, pero ni el pipeline ni los servicios LLM incluidos la usan, y `CircuitBreakerOptions` (`AITaskAgent:CircuitBreaker`) se enlaza desde configuración sin que nadie la lea. Para usarla hay que envolver las llamadas a mano con `ExecuteAsync`.
+**Estado en el código:** la clase `CircuitBreaker` (`AITaskAgent.Core/Resilience`) existe, pero ni el pipeline ni los servicios LLM incluidos la usan, y `CircuitBreakerOptions` (`AITaskAgent:CircuitBreaker`) se enlaza desde configuración sin que nadie la lea. Para usarla hay que envolver las llamadas a mano con `ExecuteAsync`.
 
 **Estados:**
 ```
@@ -1525,7 +1544,7 @@ CircuitBreakerOptions
 
 **Propósito:** Controlar la tasa de llamadas a servicios externos (especialmente LLMs).
 
-**Estado en el código:** `RateLimiter` (`Framework/Resilience`) implementa un token bucket (`WaitAsync`), con valores por defecto `maxTokens = 10`, recarga cada 1 s y `tokensPerRefill = maxTokens`. Solo `GeminiLlmService` acepta uno (opcional, por constructor). `RateLimitOptions` (`AITaskAgent:RateLimit`: 100 / 1000 ms / 10) se enlaza pero no se lee. `OpenAILlmService` limita en su lugar la concurrencia por endpoint y despliegue (`MaxConcurrentRequests` en `Inference.Options`, 9 por defecto) y comparte entre llamadas la pausa de un `Retry-After`.
+**Estado en el código:** `RateLimiter` (`AITaskAgent.Core/Resilience`) implementa un token bucket (`WaitAsync`), con valores por defecto `maxTokens = 10`, recarga cada 1 s y `tokensPerRefill = maxTokens`. Solo `GeminiLlmService` acepta uno (opcional, por constructor). `RateLimitOptions` (`AITaskAgent:RateLimit`: 100 / 1000 ms / 10) se enlaza pero no se lee. `OpenAILlmService` limita en su lugar la concurrencia por endpoint y despliegue (`MaxConcurrentRequests` en `Inference.Options`, 9 por defecto) y comparte entre llamadas la pausa de un `Retry-After`.
 
 **Algoritmo: Token Bucket**
 ```
@@ -1676,6 +1695,8 @@ Las Tools son funciones que los Agentes **pueden** usar, pero no son steps del p
 │ (ITool del DI)  │   │ (nombres de tools) │
 └─────────────────┘   └────────────────────┘
 ```
+
+**Nota:** el registro estático `AvailableTools` solo lo lee `TemplateLlmStep` (`TemplateLlmStep.cs:39`). `YamlLlmStep` no lo usa: resuelve los nombres de `tools:` contra su proveedor de DI (servicios `ITool`, luego el registro `ITools`, luego los `ToolAlias`; el nombre desnudo gana al alias).
 
 **Principio de Least Privilege** (cada step recibe solo las tools que se le indican: nombres en `TemplateLlmStep`, o la lista `Tools` del step o del `LlmRole`):
 ```
@@ -2113,7 +2134,7 @@ EventChannel.SendAsync
  • Console Logger
 ```
 
-La capacidad de los suscriptores con handler es `EventChannelOptions.ChannelCapacity` (1000); `ObservabilityOptions.EventChannelCapacity` (100) existe en configuración pero no se usa. `IPipeline.ExecuteAsync` acepta además `subscribers`: si el contexto no se pasa, crea para esa ejecución un `EventChannel` local con esos handlers y lo cierra al terminar.
+La capacidad de los suscriptores con handler es `EventChannelOptions.ChannelCapacity` (1000); `ObservabilityOptions.EventChannelCapacity` (1000 por defecto) alimenta ese `ChannelCapacity` al crear el `EventChannel` del contenedor de servicios y el de `PipelineContextFactory`. `IPipeline.ExecuteAsync` acepta además `subscribers`: si el contexto no se pasa, crea para esa ejecución un `EventChannel` local con esos handlers y lo cierra al terminar.
 
 **Tipos de Eventos (IProgressEvent) que emite el framework:**
 
@@ -2129,7 +2150,9 @@ No existe `ContentDeltaEvent`: el efecto máquina de escribir sale de los `LlmRe
 ### 11.4 Proveedores de Implementación
 
 El framework es agnóstico del proveedor LLM:
-- **`OpenAILlmService`**: Integración estándar OpenAI (SDK `OpenAI`), con las variantes `AzureOpenAILlmService` y `OpenRouterLlmService`. Reintentos con `Retry-After` y límite de concurrencia por endpoint.
+- **`OpenAILlmService`** (`openai`): integración OpenAI sobre `HttpClient` directo (sin el SDK `OpenAI`), con las variantes `AzureOpenAILlmService` (`azure-openai`) y `OpenRouterLlmService` (`openrouter`). Reintentos con `Retry-After` y límite de concurrencia por endpoint.
+- **`OpenAIResponsesLlmService`** (`openai-responses`) y **`AzureOpenAIResponsesLlmService`** (`azure-openai-responses`): la Responses API de OpenAI y de Azure OpenAI; heredan el transporte de `OpenAILlmService` y solo cambian el formato de la petición.
+- **`OllamaLlmService`** (`ollama`, proyecto `OllamaLlmService`): integración con Ollama.
 - **`GeminiLlmService`**: Integración nativa Google GenAI SDK. Soporta:
   - **Context Caching**: Optimización de costos.
   - **Google Grounding**: Búsqueda en Google integrada.
@@ -2152,7 +2175,7 @@ El framework es agnóstico del proveedor LLM:
 El framework proporciona `CorrelationId` automáticamente en `PipelineContext`:
 
 ```csharp
-public sealed record PipelineContext
+public record PipelineContext
 {
     // Auto-generado si no se proporciona
     public string CorrelationId { get; init; } = Guid.NewGuid().ToString();
@@ -2173,7 +2196,7 @@ El `CorrelationId` se propaga automáticamente a:
 
 ```csharp
 // El CorrelationId se genera automáticamente
-var context = PipelineContextFactory.Create(conversation);
+var context = LlmPipelineContextFactory.Create(conversation);
 // context.CorrelationId = GUID auto-generado
 
 var result = await pipeline.ExecuteAsync("ChatPipeline", steps, input, context);
@@ -2193,7 +2216,8 @@ public async Task<IActionResult> Chat([FromBody] ChatRequest request)
     // Propagar a respuesta
     Response.Headers.Add("X-Correlation-ID", correlationId);
     
-    var context = new PipelineContext(_eventChannel, _serviceProvider)
+    // LlmPipelineContext: con pasos LLM, un PipelineContext base falla antes de ejecutar (RequiredContext)
+    var context = new LlmPipelineContext(_eventChannel, _serviceProvider)
     {
         CorrelationId = correlationId  // Usar el mismo ID
     };
@@ -2207,7 +2231,7 @@ public async Task<IActionResult> Chat([FromBody] ChatRequest request)
 
 ```csharp
 // Para conversaciones multi-turn, usar ConversationId
-var context = new PipelineContext(eventChannel, serviceProvider)
+var context = new LlmPipelineContext(eventChannel, serviceProvider)
 {
     Conversation = conversation,
     CorrelationId = conversation.ConversationId  // Mismo ID para toda la conversación
@@ -2682,7 +2706,7 @@ Nota: el mismo objeto step no debe aparecer dos veces en un mismo nivel
 
 ### 13.1 Setup Inicial
 
-**Referencia al framework:** en el repositorio los samples referencian el proyecto `Framework/AITaskAgent.csproj` (y los de proveedor y tools) por `ProjectReference`; no se ha verificado que exista un paquete NuGet publicado.
+**Referencia al framework:** en el repositorio los samples referencian por `ProjectReference` los proyectos del framework (`AITaskAgent.Extensions.Llm`, que trae `AITaskAgent.Core` y `AITaskAgent.Abstractions`; `AITaskAgent.Yaml` y `AITaskAgent.Extensions.Script` según el caso) y los de proveedor y tools; no se ha verificado que exista un paquete NuGet publicado.
 
 **Configuración en Startup:**
 ```
@@ -2690,9 +2714,9 @@ Registrar servicios:
 ├─ AddSingleton<ILlmService, OpenAILlmService>() / GeminiLlmService ...
 │     (uno por proveedor usado en AITaskAgent:LlmProviders)
 ├─ AddSingleton<ITool, MiTool>()     (tools propias)
-├─ AddAITaskAgent()                  (sin parámetros; lee IConfiguration del DI:
-│     opciones, LlmEnvironment, IPipeline, IEventChannel, PipelineContextFactory,
-│     IPipelineContextStorage, IConversationStorage, ITools, ConversationContext transient)
+├─ AddAITaskAgent()                  (core + extensión LLM, sin parámetros; lee IConfiguration del DI:
+│     opciones, LlmEnvironment, IPipeline, IEventChannel, PipelineContextFactory (LLM),
+│     IStepRegistry, IPipelineContextStorage, IConversationStorage, ITools, ConversationContext transient)
 └─ serviceProvider.UseAITaskAgent()  (crea los singletons y registra
       las ITool del DI en AvailableTools)
 ```
@@ -2841,11 +2865,12 @@ NO loguear:
 
 ### 13.4 Pipelines YAML
 
-*(Sección añadida en la revisión: la capacidad existe en `Framework/YAML` y no estaba documentada.)*
+*(Sección añadida en la revisión: la capacidad existe en `AITaskAgent.Yaml`; reescrita para el YAML v2.)*
 
-- `SchemaCompiler` compila los JSON Schema de una carpeta (`CompileFromFolderAsync`) a tipos C# en memoria que implementan `IStepResult` (NJsonSchema + Roslyn). Un esquema puede llevar una función JavaScript `validate(self, context)` (ClearScript V8) que pasa a ser la validación estructural del tipo.
-- `YamlPipelineFactory.CreateFromFolderAsync` une todos los `*.yaml` de una carpeta, deserializa los steps por su etiqueta (solo se mapean los tipos `IYamlStep` con `[YamlStepTag]`; en el framework, únicamente `!LlmStep` → `YamlLlmStep`. `ParallelStep`, `GroupStep`, `LoopStep` y `BreakStep` llevan `[StepTag]` y comentarios que los dan por serializables desde YAML, pero la fábrica no los registra), resuelve el rol de cada `YamlLlmStep` por `profileName` en `LlmEnvironment`, asigna los tipos compilados de `inputSchema`/`outputSchema`, valida y ordena las dependencias (`dependsOn`) y devuelve un `YamlPipeline` que se ejecuta sobre `IPipeline`.
-- El sample `YamlPipelineDemo` (`pipelines/main.yaml`) muestra un pipeline de tres `!LlmStep` (clasificar, extraer, resumir).
+- El YAML se parsea a `JToken` y cada paso se crea con `IStepRegistry` a partir de su `type:` (el tag `[StepTag]`) y de su configuración plana, validada por nombre y tipo contra `IStepRegistry.Describe`. Los pasos disponibles dependen de las extensiones añadidas: el core aporta `GroupStep`, `ParallelStep` (con `failFast`), `LoopStep`, `BreakStep`, `SwitchStep` (declarativo, con `cases` y `default`), `SuspendStep` y `ExecStep` (ejecuta un `.exe`/`.bat`/`.cmd` sin shell y devuelve su stdout), `AITaskAgent.Extensions.Llm` aporta `LlmStep` (`YamlLlmStep`), `AITaskAgent.Extensions.Script` aporta `ScriptStep` (JavaScript; el run compila sus scripts una vez y los ejecuta en un worker por run, en un contexto V8 nuevo por ejecución) y `AITaskAgent.Extensions.CSharp` aporta `CSharpStep` (C# en el proceso anfitrión). Cada extensión es una clase `IExtension` que se añade con `services.AddExtension(...)` (o su azúcar: `AddScriptExtension()`, `AddCSharpExtension()`). El control de flujo se declara anidado: `steps:` hijos en Group y Loop, `branches` en Parallel, `cases`/`default` en Switch.
+- `SchemaRegistry` carga los JSON Schema de una carpeta (`LoadFromFolderAsync`) y los resuelve por nombre de fichero; no se genera ningún tipo C#. El `outputSchema` de un `LlmStep` se envía al proveedor como formato de respuesta y se valida en ejecución (`JsonStepResult` / `LlmJsonStepResult`, con NJsonSchema); un fallo reintenta con las violaciones como retroalimentación.
+- `YamlPipelineFactory.CreateFromFolderAsync` une todos los `*.yaml` de una carpeta (ordenados por ruta), exige `id` único en todo el documento, resuelve el rol de cada `LlmStep` por `profileName` en `LlmEnvironment` (un rol inexistente falla al construir), valida y ordena los pasos de primer nivel por `dependsOn` y devuelve un `YamlPipeline` que se ejecuta sobre `IPipeline`. No hay compatibilidad con el formato YAML anterior (etiquetas `!LlmStep`).
+- El sample `YamlPipelineDemo` (`pipelines/main.yaml`) muestra un pipeline de tres `LlmStep` (clasificar, extraer, resumir). La gramática completa está en `docs/guides/yaml-pipelines.md`.
 
 ### 13.5 Samples del Repositorio
 
@@ -2859,7 +2884,7 @@ NO loguear:
 | `FileToolsTestApp` | Agente de consola con las tools de `FileTools` |
 | `McpIntegrationDemo` | Consumo de tools de un servidor MCP a través de `McpIntegration` |
 | `PipelineVisualizer` | Aplicación web que retransmite los eventos del `EventChannel` por SSE |
-| `YamlPipelineDemo` | Pipeline definido en YAML con esquemas compilados y razonamiento en streaming |
+| `YamlPipelineDemo` | Pipeline definido en YAML (v2) con esquemas JSON validados en ejecución y razonamiento en streaming |
 | `TextToTemplateDemo` | Sin LLM real: un step de código produce texto que un `StatelessTemplateLlmStep` incrusta en su plantilla (servicio eco) |
 | `CodebaseAnalysis.Core`, `CodebaseAnalysisPipeline`, `CodebaseAnalysisWeb` | Aplicación de análisis de repositorios (núcleo, CLI y web) que audita un repositorio sobre un grafo de conocimiento y genera informes en Markdown; cada proyecto tiene su README |
 | `DotNetEnricher` | Enriquecedor Roslyn del grafo para soluciones .NET, lanzado por el análisis |

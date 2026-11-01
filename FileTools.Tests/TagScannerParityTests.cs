@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.Steps;
@@ -113,7 +114,7 @@ public sealed class TagScannerParityTests : IDisposable
 
         var result = await step.ExecuteAsync(
             new LlmStringStepResult(new EmptyStep("Seed")) { Content = "crea un archivo" },
-            new PipelineContext(channel), attempt: 1, lastStepResult: null, CancellationToken.None);
+            new LlmPipelineContext(channel), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         // Disposing drains the subscriber loop, so every buffered event has been delivered.
         subscription.Dispose();

@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Abstractions;
 using AITaskAgent.Core.Models;
 using AITaskAgent.LLM.Abstractions;
@@ -50,7 +51,7 @@ public sealed class ApiVersionPropagationTests
 
         await ((IStep)step).ExecuteAsync(
             new LlmStringStepResult(step) { Content = "hola" },
-            new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+            new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         Assert.Equal("2024-08-01-preview", service.LastRequest?.ApiVersion);
     }
@@ -69,7 +70,7 @@ public sealed class ApiVersionPropagationTests
 
         await ((IStep)step).ExecuteAsync(
             new LlmStringStepResult(step) { Content = "hola" },
-            new PipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
+            new LlmPipelineContext(), attempt: 1, lastStepResult: null, CancellationToken.None);
 
         Assert.Null(service.LastRequest?.ApiVersion);
     }

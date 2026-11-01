@@ -12,8 +12,28 @@ AITaskAgent provides persistence for conversation history through the `IConversa
 | `FileConversationStorage` | JSON files | Simple persistence, debugging |
 | `YamlFileConversationStorage` | YAML files | Human-readable transcripts |
 
-`AddAITaskAgent()` registers `InMemoryConversationStorage` with `AddSingleton` (not `TryAdd`), so a
-registration you add **after** it wins when a single `IConversationStorage` is resolved.
+`AddAITaskAgent()` registers the one chosen by `AITaskAgent:Storage:Conversation` (`memory` by
+default) with `TryAddSingleton`, so a registration of your own wins whether you add it before
+`AddAITaskAgent()` (TryAdd keeps it) or after it (the last registration is resolved):
+
+```json
+"AITaskAgent": {
+  "Storage": {
+    "Conversation": { "Type": "yaml", "Directory": "${APP_DATA}/conversations" }
+  }
+}
+```
+
+| `Type` | Storage built | `Directory` |
+|---|---|---|
+| `memory` | `InMemoryConversationStorage` | ignored |
+| `file` | `FileConversationStorage(Directory)` | required |
+| `yaml` | `YamlFileConversationStorage(Directory)` | required |
+
+The type is case-insensitive; a relative `Directory` is resolved against the current directory and
+`${VAR}` is expanded. An unknown type, a file type without `Directory`, or a `${VAR}` that is not
+defined fail in `UseAITaskAgent()` with a message naming the key. See
+[Configuration](configuration.md#storage-aitaskagentstorage).
 
 ---
 
@@ -163,17 +183,38 @@ public sealed class ConversationalStep(string name, LlmRole role, string prompt)
         await base.FinalizeAsync(result, context, cancellationToken);
 
         var storage = context.ServiceProvider.GetRequiredService<IConversationStorage>();
-        await storage.SaveConversationAsync(context.Conversation, cancellationToken);
+        await storage.SaveConversationAsync(context.AsLlmContext(Name).Conversation, cancellationToken);
     }
 }
 ```
 
-To rehydrate a conversation before the pipeline starts, load it and hand it to the context factory:
+To rehydrate a conversation before the pipeline starts, build the context from the registered
+storage by id. `CreateForConversationAsync` loads it, or starts an empty conversation with that id
+when the storage does not have it, and the LLM steps of the run see its messages as history:
+
+```csharp
+var context = await LlmPipelineContextFactory.CreateForConversationAsync(provider, conversationId);
+context.Metadata["customer"] = "ACME";           // initial values, {{context.customer}} in prompts
+var result = await yamlPipeline.ExecuteAsync(input, context);
+
+// The framework does not save it back: do it when the run ends.
+await provider.GetRequiredService<IConversationStorage>().SaveConversationAsync(context.Conversation);
+```
+
+The same by hand, with a storage you hold yourself:
 
 ```csharp
 var existing = await storage.GetConversationAsync(conversationId);
-var context = PipelineContextFactory.Create(existing ?? new ConversationContext());
+var context = LlmPipelineContextFactory.Create(existing ?? new ConversationContext());
 ```
+
+A suspended run does not need this: a context loaded from a persistent `IPipelineContextStorage`
+already carries its conversation (see [Human-in-the-Loop](human-in-the-loop.md#persisting-a-suspended-run)).
+
+The pipeline itself persists the context of a suspended run: `Pipeline.ExecuteAsync` saves it in the
+registered `IPipelineContextStorage` when the run ends suspended and deletes it when a resumed run
+completes without error. Without a registered storage it only logs a warning, and if `Save` fails the
+exception propagates. Details in [Human-in-the-Loop](human-in-the-loop.md#persisting-a-suspended-run).
 
 `MessageHistory.CopyFrom(other)` is available when you need to merge into an existing history
 instead of replacing the context.

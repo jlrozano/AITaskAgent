@@ -88,8 +88,10 @@ When `promtTemplateString` / `systemTemplateString` are omitted they default to 
 **names** `"{name}_prompt.md"` and `role.SystemPrompt ?? "{name}_system.md"`, resolved by the
 provider. Without a `templateProvider` those defaults are rendered as inline text, so the model
 receives the literal string `"{name}_prompt.md"`: pass the template strings explicitly in that case.
-The `tools` argument is a list of tool **names**, resolved through `AvailableTools.Instance`; it
-replaces `role.Tools` (no names means no tools).
+In `TemplateLlmStep` the `tools` argument is a list of tool **names**, resolved through
+`AvailableTools.Instance` (an unknown name is silently dropped); it replaces `role.Tools` (no names
+means no tools). `YamlLlmStep` does not use the static registry: it resolves names from the service
+provider and throws `InvalidOperationException` for an unknown one (see [Tools](tools.md)).
 
 ### The template model
 
@@ -194,6 +196,16 @@ The fallback position lives in per-invocation state inside the `PipelineContext`
 instance, which is why these take the context.
 
 These reflect the *active* fallback position, not the role's primary entry.
+
+## Hooks
+
+`BaseLlmStep` is marked `[HooksType(typeof(LlmStepHooks))]`, so its `Hooks` (from `StepBase`) are an
+`LlmStepHooks`: the generic `StepHooks` plus `BuildUserMessage`, `BuildSystemMessage`,
+`ConfigureRequest`, `ParseResponse`, `SelectConversation`, `OnConversationCreated` and `OnToolLimit`. In
+C# the slots that wrap built-in behaviour (`BuildUserMessage`, `BuildSystemMessage`, `ParseResponse`)
+are `HookAround` delegates that receive `next`, the built-in behaviour; the form without `next` exists
+only in JavaScript and YAML. See
+[Hooks and Validators on Any Step](yaml-pipelines.md#hooks-and-validators-on-any-step).
 
 ## Tool Execution
 

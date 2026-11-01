@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Models;
 using AITaskAgent.Core.StepResults;
 using AITaskAgent.Core.Steps;
@@ -33,7 +34,7 @@ public sealed class PromptTemplateResolverTests
     [InlineData("   ")]
     public void Resolve_returns_empty_string_for_null_or_whitespace_prompt(string? rawPrompt)
     {
-        var result = PromptTemplateResolver.Resolve(rawPrompt, Input("x"), new PipelineContext());
+        var result = PromptTemplateResolver.Resolve(rawPrompt, Input("x"), new LlmPipelineContext());
 
         Assert.Equal("", result);
     }
@@ -43,7 +44,7 @@ public sealed class PromptTemplateResolverTests
     {
         var provider = new RecordingProvider("rendered content");
 
-        var result = PromptTemplateResolver.Resolve("outliner_prompt", Input("x"), new PipelineContext(), provider);
+        var result = PromptTemplateResolver.Resolve("outliner_prompt", Input("x"), new LlmPipelineContext(), provider);
 
         Assert.Equal("rendered content", result);
         Assert.Single(provider.Calls);
@@ -53,7 +54,7 @@ public sealed class PromptTemplateResolverTests
     [Fact]
     public void Resolve_falls_back_to_TinyTemplateRendered_when_no_provider_supplied()
     {
-        var result = PromptTemplateResolver.Resolve("Hello {{Input}}", Input("world"), new PipelineContext());
+        var result = PromptTemplateResolver.Resolve("Hello {{Input}}", Input("world"), new LlmPipelineContext());
 
         Assert.Equal("Hello world", result);
     }
@@ -64,7 +65,7 @@ public sealed class PromptTemplateResolverTests
         object? capturedModel = null;
         var provider = new RecordingProvider("ignored");
 
-        PromptTemplateResolver.Resolve("prompt", Input("payload"), new PipelineContext(), provider);
+        PromptTemplateResolver.Resolve("prompt", Input("payload"), new LlmPipelineContext(), provider);
         capturedModel = provider.Calls[0].Model;
 
         var inputProperty = capturedModel!.GetType().GetProperty("Input");
@@ -75,7 +76,7 @@ public sealed class PromptTemplateResolverTests
     [Fact]
     public void Resolve_merges_context_metadata_with_variables_and_variables_win_on_key_collision()
     {
-        var context = new PipelineContext();
+        var context = new LlmPipelineContext();
         context.SetMetadata("shared", "from-metadata");
         context.SetMetadata("onlyMetadata", "metadata-value");
         var variables = new Dictionary<string, object?>
@@ -100,7 +101,7 @@ public sealed class PromptTemplateResolverTests
         // It used to come back raw, with its {{...}} placeholders unrendered.
         var provider = new RecordingProvider(renderResult: null);
 
-        var result = PromptTemplateResolver.Resolve("Hello {{Input}}", Input("world"), new PipelineContext(), provider);
+        var result = PromptTemplateResolver.Resolve("Hello {{Input}}", Input("world"), new LlmPipelineContext(), provider);
 
         Assert.Equal("Hello world", result);
         Assert.Single(provider.Calls);
@@ -111,7 +112,7 @@ public sealed class PromptTemplateResolverTests
     {
         var provider = new RecordingProvider(renderResult: null);
 
-        var result = PromptTemplateResolver.Resolve("outliner_prompt", Input("x"), new PipelineContext(), provider);
+        var result = PromptTemplateResolver.Resolve("outliner_prompt", Input("x"), new LlmPipelineContext(), provider);
 
         Assert.Equal("outliner_prompt", result);
     }
@@ -124,7 +125,7 @@ public sealed class PromptTemplateResolverTests
         var provider = new RecordingProvider(renderResult: null);
 
         var ex = Assert.Throws<InvalidOperationException>(
-            () => PromptTemplateResolver.Resolve(rawPrompt, Input("x"), new PipelineContext(), provider));
+            () => PromptTemplateResolver.Resolve(rawPrompt, Input("x"), new LlmPipelineContext(), provider));
 
         Assert.Contains(rawPrompt.Trim(), ex.Message);
     }
@@ -133,7 +134,7 @@ public sealed class PromptTemplateResolverTests
     public void Resolve_without_provider_still_renders_md_ending_text_inline()
     {
         // Without a provider there is no lookup to fail: the text is inline by definition.
-        var result = PromptTemplateResolver.Resolve("see notes.md", Input("x"), new PipelineContext());
+        var result = PromptTemplateResolver.Resolve("see notes.md", Input("x"), new LlmPipelineContext());
 
         Assert.Equal("see notes.md", result);
     }
@@ -148,7 +149,7 @@ public sealed class PromptTemplateResolverTests
         File.WriteAllText(fullPath, "incluido");
         try
         {
-            var context = new PipelineContext();
+            var context = new LlmPipelineContext();
             context.AddPathPart("Parent");
 
             var result = PromptTemplateResolver.Resolve($"[@[{fileName}]]", Input("x"), context);

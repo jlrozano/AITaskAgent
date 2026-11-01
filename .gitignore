@@ -57,13 +57,13 @@ Samples/YamlPipelineDemo/logs/
 Thumbs.db
 Desktop.ini
 .DS_Store
-Framework/Core/ANALISIS_Abstractions.md
-Framework/Core/ANALISIS_Base.md
-Framework/Core/ANALISIS_Constants.md
-Framework/Core/ANALISIS_Execution.md
-Framework/Core/ANALISIS_StepResults.md
-Framework/Core/ANALISIS_Steps.md
-Framework/Core/RESUMEN_FINAL.md
+AITaskAgent.Core/ANALISIS_Abstractions.md
+AITaskAgent.Core/ANALISIS_Base.md
+AITaskAgent.Core/ANALISIS_Constants.md
+AITaskAgent.Core/ANALISIS_Execution.md
+AITaskAgent.Core/ANALISIS_StepResults.md
+AITaskAgent.Core/ANALISIS_Steps.md
+AITaskAgent.Core/RESUMEN_FINAL.md
 analisis_abstractions.md
 analisis_framework_core.md
 analisis_models.md
@@ -79,8 +79,30 @@ Samples/FileToolsTestApp/logs/events.jsonl
 # SPA compilada de CodebaseAnalysisWeb (npm run build en ClientApp/)
 Samples/CodebaseAnalysisWeb/wwwroot/
 
+# SPA compilada de WorkflowDesignerWeb (npm run build en ClientApp/)
+Samples/WorkflowDesignerWeb/wwwroot/
+
+# Datos de ejecución del workspace de ejemplo del diseñador: contextos y conversaciones guardados
+# (Storage de environment.json), registros de ejecuciones suspendidas e historial de sesiones
+Samples/WorkflowDesignerWeb/workspace/data/
+# Originales de un workspace plano movidos por `migrate`, y el lock de un paquete abierto (`.<nombre>.zip.lock`, RN-08)
+Samples/WorkflowDesignerWeb/workspace/legacy/
+*.zip.lock
+Samples/WorkflowDesignerWeb/workspace/runs/
+Samples/WorkflowDesignerWeb/workspace/sessions/
+
 # Salida de analizar este repositorio con CodebaseAnalysis (grafo, conocimiento, backups)
 .codebase/
 
 # Local handover notes (not shared)
 docs/RETOMAR.md
+# Development settings of the workflow designer: only points at its example workspace, no keys.
+!Samples/WorkflowDesignerWeb/appsettings.Development.json
+
+# Local only: never pushed
+logs/
+OfficeTools/
+OfficeTools.Tests/
+docs/odd-agent/
+*pbinagent-out*/
+Samples/CodebaseAnalysisWeb/ClientApp/public/brand/

@@ -86,7 +86,7 @@ Like `CircuitBreaker`, it is a standalone class: the framework configures it but
 ```csharp
 using AITaskAgent.Resilience;
 
-var rateLimiter = new RateLimiter(
+using var rateLimiter = new RateLimiter(   // IDisposable: release it when done
     maxTokens: 10,
     refillInterval: TimeSpan.FromSeconds(1),
     tokensPerRefill: 10
@@ -132,8 +132,14 @@ Built-in middleware for automatic retries with validation.
 7. Attempts exhausted → return the last attempt's result, whose `Error` carries the last failure
    message (`Validation failed after N attempts` is only logged)
 
-There is no backoff delay between attempts: the feedback loop, not waiting, is what is expected to
-fix the failure.
+Before every attempt after the first, `RetryMiddleware` waits `IStep.MiillisecondsBetweenRetries`
+(default 100 ms; the name's typo is real; a value of 0 or less disables the wait). The wait counts
+against the step timeout, because `TimeoutMiddleware` wraps retry, and a fallback switch resets the
+attempt counter to 1, so it never waits. It is a fixed pause, not an exponential backoff: the feedback
+loop is what is expected to fix the failure.
+
+A `StepHookException` thrown by a validator (structural or semantic) is fatal: the step is finalized
+and an error result is returned, with no retry.
 
 ### Configuration
 
@@ -218,7 +224,8 @@ timeout, but `Pipeline` always resolves a non-null `DefaultStepTimeout` (1 minut
 is timed.
 
 When the expiry's `OperationCanceledException` reaches it, the middleware emits a
-`StepTimeoutEvent` and returns an error result (`Step X timed out after T`):
+`StepTimeoutEvent` and returns an error result (`Step X exceeded its limit of N s`, with a `TimeoutException`
+as its `OriginalException`; an error result returned by the step after the timer fired counts too):
 
 ```csharp
 public sealed record StepTimeoutEvent : ProgressEventBase

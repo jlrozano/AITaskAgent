@@ -1,3 +1,4 @@
+using AITaskAgent.LLM.Conversation.Context;
 using AITaskAgent.Core.Models;
 using AITaskAgent.FileTools.CodeItems;
 using AITaskAgent.FileTools.Tools;
@@ -74,7 +75,7 @@ public class CodeItemLocatorTests : IDisposable
         var file = WriteJava();
         var tool = new ViewCodeItemTool([Locator()]);
 
-        var result = await tool.ExecuteAsync($$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.total()"]}""", new PipelineContext(), "test", NullLogger.Instance);
+        var result = await tool.ExecuteAsync($$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.total()"]}""", new LlmPipelineContext(), "test", NullLogger.Instance);
 
         Assert.Equal($"=== Pedido.total() ===\nLocation: {file}:2-4\n\n    int total() {{\n        return 1;\n    }}", result.ReplaceLineEndings("\n"));
     }
@@ -85,7 +86,7 @@ public class CodeItemLocatorTests : IDisposable
         var file = WriteJava();
 
         var result = await new ViewCodeItemTool([Locator()]).ExecuteAsync(
-            $$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.total"]}""", new PipelineContext(), "test", NullLogger.Instance);
+            $$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.total"]}""", new LlmPipelineContext(), "test", NullLogger.Instance);
 
         Assert.Contains("'Pedido.total' matches 2 declarations", result);
         Assert.Contains("- `Pedido.total()` (lines 2-4): int total()", result);
@@ -101,7 +102,7 @@ public class CodeItemLocatorTests : IDisposable
         var file = WriteJava();
 
         var result = await new ViewCodeItemTool([Locator()]).ExecuteAsync(
-            $$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.otro"]}""", new PipelineContext(), "test", NullLogger.Instance);
+            $$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.otro"]}""", new LlmPipelineContext(), "test", NullLogger.Instance);
 
         Assert.StartsWith("TOOL_ERROR: None of the requested node paths were found.", result);
         Assert.Contains("Pedido.total", result);
@@ -114,7 +115,7 @@ public class CodeItemLocatorTests : IDisposable
         var locator = Locator();
 
         var result = await new ViewCodeItemTool([locator]).ExecuteAsync(
-            $$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.Total"]}""", new PipelineContext(), "test", NullLogger.Instance);
+            $$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.Total"]}""", new LlmPipelineContext(), "test", NullLogger.Instance);
 
         Assert.Equal(["Pedido.cs"], locator.Asked);
         Assert.Equal($"=== Pedido.Total ===\nLocation: {file}:3-3\n\nint Total() => 1;", result.ReplaceLineEndings("\n"));
@@ -126,7 +127,7 @@ public class CodeItemLocatorTests : IDisposable
         var file = WriteFile("Pedido.cs", "class Pedido\n{\n    /// <summary>Doc.</summary>\n    int Total() => 1;\n}\n");
 
         var result = await new ViewCodeItemTool().ExecuteAsync(
-            $$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.Total", "Pedido.Falta"]}""", new PipelineContext(), "test", NullLogger.Instance);
+            $$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.Total", "Pedido.Falta"]}""", new LlmPipelineContext(), "test", NullLogger.Instance);
 
         // Roslyn's full string keeps the leading doc comment; the range is the declaration's.
         Assert.Equal($"=== Pedido.Total ===\nLocation: {file}:4-4\n\n/// <summary>Doc.</summary>\n    int Total() => 1;\n\n⚠️ Not found: Pedido.Falta",
@@ -143,7 +144,7 @@ public class CodeItemLocatorTests : IDisposable
         using var provider = services.BuildServiceProvider();
 
         var tool = provider.GetServices<ITool>().OfType<ViewCodeItemTool>().Single();
-        var result = await tool.ExecuteAsync($$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.total()"]}""", new PipelineContext(), "test", NullLogger.Instance);
+        var result = await tool.ExecuteAsync($$"""{"File": "{{Json(file)}}", "NodePaths": ["Pedido.total()"]}""", new LlmPipelineContext(), "test", NullLogger.Instance);
 
         Assert.Contains($"Location: {file}:2-4", result);
     }

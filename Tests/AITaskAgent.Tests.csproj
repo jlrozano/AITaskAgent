@@ -12,7 +12,9 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.1" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Framework\AITaskAgent.csproj" />
+    <ProjectReference Include="..\AITaskAgent.Extensions.Llm\AITaskAgent.Extensions.Llm.csproj" />
+    <ProjectReference Include="..\AITaskAgent.Yaml\AITaskAgent.Yaml.csproj" />
+    <ProjectReference Include="..\Tests.ExecHelper\ExecHelper.csproj" />
     <ProjectReference Include="..\Samples\AdvancedLlmPipeline\Samples.AdvancedLlmPipeline.csproj" />
   </ItemGroup>
 </Project>
